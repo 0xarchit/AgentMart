@@ -20,9 +20,10 @@ type Update struct {
 
 // Message contains a text message and its sender identifiers.
 type Message struct {
-	Chat Chat   `json:"chat"`
-	From User   `json:"from"`
-	Text string `json:"text"`
+	MessageID int    `json:"message_id"`
+	Chat      Chat   `json:"chat"`
+	From      User   `json:"from"`
+	Text      string `json:"text"`
 }
 
 // Chat identifies a Telegram conversation.

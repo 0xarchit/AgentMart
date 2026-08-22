@@ -67,19 +67,19 @@ func (r TopUpRequest) validate() error {
 
 // FulfillRequest contains the buyer proposal and accepted wallet amount.
 type FulfillRequest struct {
-	OrderID          string `json:"p_order_id"`
-	AccountID        string `json:"p_account_id"`
-	Quantity         int    `json:"p_quantity"`
-	BaseAmountPaise  int64  `json:"p_base_amount_paise"`
-	FinalAmountPaise int64  `json:"p_final_amount_paise"`
-	RazorpayOrderID  string `json:"p_razorpay_order_id"`
-	AuditEvent       string `json:"p_audit_event"`
-	AuditVersion     int    `json:"p_audit_version"`
+	AccountID           string `json:"p_account_id"`
+	ProductID           string `json:"p_product_id"`
+	Quantity            int    `json:"p_qty"`
+	BaseAmountPaise     int64  `json:"p_base_amount_paise"`
+	FinalAmountPaise    int64  `json:"p_final_amount_paise"`
+	RazorpayOrderID     string `json:"p_razorpay_order_id"`
+	IdempotencyKey      string `json:"p_idempotency_key"`
+	RefundWindowMinutes int    `json:"p_refund_window_minutes"`
 }
 
 func (r FulfillRequest) validate() error {
-	if strings.TrimSpace(r.OrderID) == "" || strings.TrimSpace(r.AccountID) == "" {
-		return fmt.Errorf("order id and account id are required")
+	if strings.TrimSpace(r.AccountID) == "" || strings.TrimSpace(r.ProductID) == "" {
+		return fmt.Errorf("account id and product id are required")
 	}
 	if r.Quantity <= 0 || r.BaseAmountPaise <= 0 || r.FinalAmountPaise <= 0 {
 		return fmt.Errorf("quantity and amounts must be positive")
@@ -87,8 +87,8 @@ func (r FulfillRequest) validate() error {
 	if r.FinalAmountPaise < r.BaseAmountPaise {
 		return fmt.Errorf("final amount cannot be below base amount")
 	}
-	if strings.TrimSpace(r.RazorpayOrderID) == "" || strings.TrimSpace(r.AuditEvent) == "" || r.AuditVersion <= 0 {
-		return fmt.Errorf("razorpay order, audit event, and audit version are required")
+	if strings.TrimSpace(r.RazorpayOrderID) == "" || strings.TrimSpace(r.IdempotencyKey) == "" || r.RefundWindowMinutes <= 0 {
+		return fmt.Errorf("razorpay order, idempotency key, and refund window are required")
 	}
 	return nil
 }
