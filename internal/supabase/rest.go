@@ -18,6 +18,38 @@ type Client struct {
 	http    *http.Client
 }
 
+// RPC calls a trusted Postgres function with a JSON object payload.
+func (c *Client) RPC(ctx context.Context, function string, payload any, dst any) error {
+	endpoint := c.baseURL + "/rest/v1/rpc/" + url.PathEscape(function)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode supabase rpc payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("create supabase rpc request: %w", err)
+	}
+	req.Header.Set("apikey", c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase rpc request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("supabase rpc returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+	}
+	if dst == nil || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+		return fmt.Errorf("decode supabase rpc response: %w", err)
+	}
+	return nil
+}
+
 // NewClient constructs a REST client from the project URL and trusted key.
 func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(baseURL) == "" {
