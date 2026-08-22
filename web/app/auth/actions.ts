@@ -8,7 +8,7 @@ import { redirect } from "next/navigation";
 export async function signIn(formData: FormData) {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email: String(formData.get("email")), password: String(formData.get("password")) });
-  if (error) return { error: error.message };
+  if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
   revalidatePath("/", "layout");
   redirect("/dashboard");
 }
@@ -16,7 +16,7 @@ export async function signIn(formData: FormData) {
 export async function signUp(formData: FormData) {
   const supabase = await createClient();
   const { error } = await supabase.auth.signUp({ email: String(formData.get("email")), password: String(formData.get("password")) });
-  if (error) return { error: error.message };
+  if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
   redirect("/login?registered=1");
 }
 
