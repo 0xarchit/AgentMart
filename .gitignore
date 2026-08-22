@@ -4,3 +4,5 @@ Agents
 .agents
 .claude
 skills-lock.json
+web/.next
+web/node_modules
