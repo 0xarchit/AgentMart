@@ -1,3 +1,6 @@
 AGENTS.md
 Agents
 **/*.env
+.agents
+.claude
+skills-lock.json
