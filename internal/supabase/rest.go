@@ -50,6 +50,52 @@ func (c *Client) RPC(ctx context.Context, function string, payload any, dst any)
 	return nil
 }
 
+// Insert appends one JSON row to a trusted table and optionally decodes it.
+func (c *Client) Insert(ctx context.Context, table string, payload any, dst any) error {
+	return c.mutate(ctx, http.MethodPost, table, payload, dst)
+}
+
+// Update applies a JSON patch to rows selected by a PostgREST filter.
+func (c *Client) Update(ctx context.Context, table string, filter url.Values, payload any, dst any) error {
+	endpoint := url.Values{}
+	for key, values := range filter {
+		for _, value := range values {
+			endpoint.Add(key, value)
+		}
+	}
+	return c.mutate(ctx, http.MethodPatch, table+"?"+endpoint.Encode(), payload, dst)
+}
+
+func (c *Client) mutate(ctx context.Context, method, path string, payload, dst any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode supabase mutation: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+"/rest/v1/"+path, strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("create supabase mutation: %w", err)
+	}
+	req.Header.Set("apikey", c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Prefer", "return=representation")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase mutation: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("supabase mutation returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+	}
+	if dst != nil && resp.StatusCode != http.StatusNoContent {
+		if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+			return fmt.Errorf("decode supabase mutation: %w", err)
+		}
+	}
+	return nil
+}
+
 // NewClient constructs a REST client from the project URL and trusted key.
 func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(baseURL) == "" {
