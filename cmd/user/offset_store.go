@@ -2,11 +2,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"agentmart/internal/negotiation"
 )
+
+type telegramOffsetStore interface {
+	Load(context.Context) (int, error)
+	Save(context.Context, int) error
+}
 
 type offsetStore struct {
 	path string
@@ -19,7 +27,10 @@ func newOffsetStore(path string) offsetStore {
 	return offsetStore{path: path}
 }
 
-func (s offsetStore) Load() (int, error) {
+func (s offsetStore) Load(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
 		return 0, nil
@@ -39,7 +50,10 @@ func (s offsetStore) Load() (int, error) {
 	return value.Offset, nil
 }
 
-func (s offsetStore) Save(offset int) error {
+func (s offsetStore) Save(ctx context.Context, offset int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if offset < 0 {
 		return fmt.Errorf("telegram offset must not be negative")
 	}
@@ -61,4 +75,27 @@ func (s offsetStore) Save(offset int) error {
 		return fmt.Errorf("commit telegram offset: %w", err)
 	}
 	return nil
+}
+
+type redisOffsetStore struct {
+	store *negotiation.RedisSessionStore
+}
+
+func (s redisOffsetStore) Load(ctx context.Context) (int, error) {
+	value, ok, err := s.store.GetValue(ctx, "agentmart:telegram:offset")
+	if err != nil || !ok {
+		return 0, err
+	}
+	var offset int
+	if _, err := fmt.Sscanf(value, "%d", &offset); err != nil || offset < 0 {
+		return 0, fmt.Errorf("decode telegram Redis offset")
+	}
+	return offset, nil
+}
+
+func (s redisOffsetStore) Save(ctx context.Context, offset int) error {
+	if offset < 0 {
+		return fmt.Errorf("telegram offset must not be negative")
+	}
+	return s.store.PutValue(ctx, "agentmart:telegram:offset", fmt.Sprintf("%d", offset), 0)
 }

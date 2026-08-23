@@ -17,6 +17,7 @@ import (
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
 	"agentmart/internal/linking"
+	"agentmart/internal/negotiation"
 	"agentmart/internal/razorpay"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
@@ -96,7 +97,7 @@ func main() {
 				}
 			}
 			offset = update.UpdateID + 1
-			if err := offsetStore.Save(offset); err != nil {
+			if err := offsetStore.Save(ctx, offset); err != nil {
 				logger.Error("telegram offset save failed", "error", err)
 				return
 			}

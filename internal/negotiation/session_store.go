@@ -52,6 +52,32 @@ type RedisSessionStore struct {
 	ttl     time.Duration
 }
 
+// GetValue reads a namespaced Redis string for small shared runtime state.
+func (s *RedisSessionStore) GetValue(ctx context.Context, key string) (string, bool, error) {
+	result, err := s.command(ctx, []any{"GET", key})
+	if err != nil {
+		return "", false, err
+	}
+	if string(result) == "null" || len(result) == 0 {
+		return "", false, nil
+	}
+	var value string
+	if err := json.Unmarshal(result, &value); err != nil {
+		return "", false, fmt.Errorf("decode Redis value: %w", err)
+	}
+	return value, true, nil
+}
+
+// PutValue writes a namespaced Redis string, optionally with a TTL.
+func (s *RedisSessionStore) PutValue(ctx context.Context, key, value string, ttl time.Duration) error {
+	command := []any{"SET", key, value}
+	if ttl > 0 {
+		command = append(command, "EX", int(ttl.Seconds()))
+	}
+	_, err := s.command(ctx, command)
+	return err
+}
+
 // NewRedisSessionStore creates a REST-backed session store.
 func NewRedisSessionStore(baseURL, token string, client *http.Client) (*RedisSessionStore, error) {
 	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" {

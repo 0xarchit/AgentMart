@@ -55,3 +55,24 @@ func TestRedisSessionStoreRequiresCredentials(t *testing.T) {
 		t.Fatalf("expected missing URL error, got %v", err)
 	}
 }
+
+func TestRedisSessionStoreValueDoesNotExpireWhenTTLIsZero(t *testing.T) {
+	var command []any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": "OK"})
+	}))
+	defer server.Close()
+	store, err := NewRedisSessionStore(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutValue(context.Background(), "agentmart:telegram:offset", "42", 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(command) != 3 || command[0] != "SET" || command[1] != "agentmart:telegram:offset" || command[2] != "42" {
+		t.Fatalf("command = %#v", command)
+	}
+}
