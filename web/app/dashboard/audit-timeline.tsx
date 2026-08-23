@@ -2,6 +2,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { AuditRefresh } from "@/app/dashboard/audit-refresh";
 
 export interface AuditEvent {
   id: number;
@@ -46,7 +47,7 @@ export function AuditTimeline({ events }: AuditTimelineProps) {
           <h2 className="text-lg font-semibold">Audit timeline</h2>
           <p className="mt-1 text-sm text-ink/60">Account-scoped decisions, wallet movements, and fulfillment outcomes.</p>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-ink/60">
             Action
             <select value={action} onChange={(event) => setAction(event.target.value)} className="min-w-44 border border-ink/20 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink">
@@ -58,6 +59,7 @@ export function AuditTimeline({ events }: AuditTimelineProps) {
             Order
             <input value={orderQuery} onChange={(event) => setOrderQuery(event.target.value)} placeholder="Order ID" className="border border-ink/20 px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink" />
           </label>
+          <AuditRefresh />
         </div>
       </div>
       <div className="divide-y divide-ink/10">
