@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// ErrInvalidProposal is returned when quantity or price cannot form a proposal.
+var ErrInvalidProposal = fmt.Errorf("invalid proposal")
+
 // Status describes the current negotiation state.
 type Status string
 
