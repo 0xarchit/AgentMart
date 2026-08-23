@@ -3,6 +3,7 @@ package negotiation
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,21 @@ import (
 
 	"agentmart/internal/catalog"
 )
+
+func TestNegotiationUsesCatalogReader(t *testing.T) {
+	calls := 0
+	handler := NewCatalogServer(func(_ context.Context, id string) (catalog.Product, error) {
+		calls++
+		return catalog.Product{ID: id, PricePaise: 100, Stock: 10}, nil
+	}).Handler()
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/negotiation", bytes.NewBufferString(`{"type":"propose","product_id":"product","qty":1}`))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("status = %d, catalog calls = %d", response.Code, calls)
+	}
+}
 
 func TestNegotiationHTTPFlow(t *testing.T) {
 	handler := NewServer([]catalog.Product{{ID: "product", PricePaise: 100, Stock: 10, WarrantyYears: 1}}).Handler()
