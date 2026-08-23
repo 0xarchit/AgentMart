@@ -58,6 +58,34 @@ func TestEvaluatePolicies(t *testing.T) {
 	}
 }
 
+func TestHumanApprovalCanResumeStalePrice(t *testing.T) {
+	gate, err := New(&recordingAuditor{}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	decision, err := gate.Evaluate(t.Context(), Request{
+		AccountID:          "account",
+		ProductID:          "product",
+		Quantity:           1,
+		UnitPricePaise:     100,
+		BaseAmountPaise:    100,
+		FinalAmountPaise:   100,
+		WalletBalancePaise: 200,
+		SpendLimitPaise:    200,
+		Stock:              1,
+		HumanApproved:      true,
+		PriceObservedAt:    now.Add(-2 * time.Minute),
+		Now:                now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Approved || decision.Reason != "approved" {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
 func TestEvaluateFailsClosedWhenAuditFails(t *testing.T) {
 	auditor := &recordingAuditor{err: errors.New("unavailable")}
 	gate, err := New(auditor, time.Minute)

@@ -91,7 +91,7 @@ func rejectionReason(request Request, maxPriceAge time.Duration) string {
 	if request.WalletBalancePaise < request.FinalAmountPaise {
 		return "insufficient_wallet_balance"
 	}
-	if request.Now.IsZero() || request.PriceObservedAt.IsZero() || request.Now.Sub(request.PriceObservedAt) > maxPriceAge || request.Now.Before(request.PriceObservedAt) {
+	if (request.Now.IsZero() || request.PriceObservedAt.IsZero() || request.Now.Sub(request.PriceObservedAt) > maxPriceAge || request.Now.Before(request.PriceObservedAt)) && !request.HumanApproved {
 		return "stale_price"
 	}
 	return "approved"
