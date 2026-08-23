@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +73,7 @@ func (s *RedisSessionStore) GetValue(ctx context.Context, key string) (string, b
 func (s *RedisSessionStore) PutValue(ctx context.Context, key, value string, ttl time.Duration) error {
 	command := []any{"SET", key, value}
 	if ttl > 0 {
-		command = append(command, "EX", int(ttl.Seconds()))
+		command = append(command, "EX", strconv.Itoa(int(ttl.Seconds())))
 	}
 	_, err := s.command(ctx, command)
 	return err
@@ -115,7 +116,11 @@ func (s *RedisSessionStore) command(ctx context.Context, command []any) (json.Ra
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("Redis session store returned status %d", resp.StatusCode)
+		message := strings.TrimSpace(string(responseBody))
+		if len(message) > 200 {
+			message = message[:200]
+		}
+		return nil, fmt.Errorf("Redis session store returned status %d: %s", resp.StatusCode, message)
 	}
 	var result redisResponse
 	if err := json.Unmarshal(responseBody, &result); err != nil {
@@ -153,7 +158,7 @@ func (s *RedisSessionStore) Put(ctx context.Context, id string, session Session)
 	if err != nil {
 		return err
 	}
-	_, err = s.command(ctx, []any{"SET", sessionKey(id), string(encoded), "EX", int(s.ttl.Seconds())})
+	_, err = s.command(ctx, []any{"SET", sessionKey(id), string(encoded), "EX", strconv.Itoa(int(s.ttl.Seconds()))})
 	return err
 }
 
