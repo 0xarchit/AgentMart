@@ -1,38 +1,12 @@
 // Read-only dashboard shell backed by the seeded catalog.
-type Product = {
-  id: string;
-  name: string;
-  category: string;
-  price_paise: number;
-  stock: number;
-  trust_score: number;
-};
-
-async function loadProducts(): Promise<Product[]> {
-  const baseURL = process.env.SUPABASE_URL;
-  const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
-  if (!baseURL || !publishableKey) {
-    return [];
-  }
-  const response = await fetch(`${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score&order=name.asc`, {
-    headers: {
-      apikey: publishableKey,
-      Authorization: `Bearer ${publishableKey}`,
-    },
-    next: { revalidate: 30 },
-  });
-  if (!response.ok) {
-    return [];
-  }
-  return response.json();
-}
+import { loadPublicProducts } from "@/lib/catalog";
 
 function formatRupees(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
 export default async function HomePage() {
-  const products = await loadProducts();
+  const products = await loadPublicProducts();
   return (
     <main className="min-h-screen bg-paper">
       <header className="border-b border-ink/10 bg-ink text-paper">
