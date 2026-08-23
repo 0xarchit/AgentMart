@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/markettools"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/supabase"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -69,6 +71,8 @@ func newHandler(service *catalog.Service, store negotiation.SessionStore) (http.
 		return nil, err
 	}
 	mux.Handle("POST /negotiation", negotiationServer.Handler())
+	mcpServer := markettools.NewServer(service)
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
