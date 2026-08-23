@@ -51,3 +51,11 @@ func TestBuyCommand(t *testing.T) {
 		t.Fatalf("response = %q", got)
 	}
 }
+
+func TestBuyCommandApproval(t *testing.T) {
+	purchase := fakePurchaser{result: buyer.PurchaseResult{ApprovalRequired: true, ApprovalToken: "token", AmountPaise: 60000}}
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, 10, 5, []string{"/buy", "product", "1"})
+	if got != "Human approval required for INR 600.00. Approval token: token" {
+		t.Fatalf("response = %q", got)
+	}
+}

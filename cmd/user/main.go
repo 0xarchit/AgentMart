@@ -54,7 +54,7 @@ func main() {
 		logger.Error("user payment configuration failed", "error", err)
 		return
 	}
-	purchaseService := buyer.NewPurchaseService(catalogService, store, gateService, artifactClient, wallet.NewService(db))
+	purchaseService := buyer.NewPurchaseService(catalogService, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	ctx := context.Background()
 	offset := 0
 	for {
@@ -115,6 +115,9 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 			return "Purchase could not be completed. Check the dashboard and try again.", nil
 		}
 		if !result.Fulfilled {
+			if result.ApprovalRequired {
+				return fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(result.AmountPaise)/100, result.ApprovalToken), nil
+			}
 			return "Purchase rejected: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil

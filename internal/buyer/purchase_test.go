@@ -49,6 +49,13 @@ type fakeWallet struct {
 	request wallet.FulfillRequest
 }
 
+type fakeApprovals struct{ request ApprovalRequest }
+
+func (f *fakeApprovals) Create(_ context.Context, request ApprovalRequest) (ApprovalResult, error) {
+	f.request = request
+	return ApprovalResult{Approved: true, Token: request.Token}, nil
+}
+
 func (f *fakeWallet) Fulfill(_ context.Context, request wallet.FulfillRequest) error {
 	f.calls++
 	f.request = request
@@ -94,5 +101,17 @@ func TestPurchaseStopsAfterGateRejection(t *testing.T) {
 	}
 	if result.Fulfilled || artifacts.calls != 0 || walletService.calls != 0 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPurchaseCreatesApprovalForLimitRejection(t *testing.T) {
+	approvals := &fakeApprovals{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{}, &fakeArtifacts{}, &fakeWallet{}, approvals)
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ApprovalRequired || result.ApprovalToken == "" || approvals.request.FinalAmountPaise != 100 {
+		t.Fatalf("result = %+v, request = %+v", result, approvals.request)
 	}
 }
