@@ -95,14 +95,15 @@ func (r FulfillRequest) validate() error {
 
 // RefundRequest identifies an order eligible for a wallet credit.
 type RefundRequest struct {
-	OrderID   string `json:"p_order_id"`
-	AccountID string `json:"p_account_id"`
-	Reason    string `json:"p_reason"`
+	AccountID      string `json:"p_account_id"`
+	OrderID        string `json:"p_order_id"`
+	Reason         string `json:"p_reason"`
+	IdempotencyKey string `json:"p_idempotency_key"`
 }
 
 func (r RefundRequest) validate() error {
-	if strings.TrimSpace(r.OrderID) == "" || strings.TrimSpace(r.AccountID) == "" || strings.TrimSpace(r.Reason) == "" {
-		return fmt.Errorf("order id, account id, and reason are required")
+	if strings.TrimSpace(r.OrderID) == "" || strings.TrimSpace(r.AccountID) == "" || strings.TrimSpace(r.Reason) == "" || strings.TrimSpace(r.IdempotencyKey) == "" {
+		return fmt.Errorf("order id, account id, reason, and idempotency key are required")
 	}
 	return nil
 }
