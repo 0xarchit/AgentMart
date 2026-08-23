@@ -17,6 +17,7 @@ import (
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
 	"agentmart/internal/linking"
+	"agentmart/internal/marketclient"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/razorpay"
 	"agentmart/internal/supabase"
@@ -55,7 +56,29 @@ func main() {
 		return
 	}
 	linker := linking.NewService(db)
-	catalogService := catalog.NewService(db)
+	var catalogReader interface {
+		Get(context.Context, string) (catalog.Product, error)
+	}
+	var closeCatalog func() error
+	marketEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_MCP_ENDPOINT"))
+	if marketEndpoint != "" {
+		merchantCatalog, connectErr := marketclient.New(ctx, marketEndpoint, &http.Client{Timeout: 10 * time.Second})
+		if connectErr != nil {
+			logger.Error("merchant catalog connection failed", "error", connectErr)
+			return
+		}
+		catalogReader = merchantCatalog
+		closeCatalog = merchantCatalog.Close
+	} else {
+		catalogReader = catalog.NewService(db)
+	}
+	if closeCatalog != nil {
+		defer func() {
+			if closeErr := closeCatalog(); closeErr != nil {
+				logger.Error("merchant catalog close failed", "error", closeErr)
+			}
+		}()
+	}
 	store := buyer.NewStore(db)
 	gateService, err := gate.New(store, time.Minute)
 	if err != nil {
@@ -67,7 +90,7 @@ func main() {
 		logger.Error("user payment configuration failed", "error", err)
 		return
 	}
-	purchaseService := buyer.NewPurchaseService(catalogService, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
+	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
 	pollContext := ctx
 	offset := 0
