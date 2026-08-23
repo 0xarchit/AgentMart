@@ -20,25 +20,34 @@ type fakePurchaser struct {
 	err    error
 }
 
+type fakeRefunder struct {
+	result buyer.RefundResult
+	err    error
+}
+
+func (f fakeRefunder) Refund(context.Context, buyer.RefundRequest) (buyer.RefundResult, error) {
+	return f.result, f.err
+}
+
 func (f fakePurchaser) Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error) {
 	return f.result, f.err
 }
 
 func TestResponseForCommand(t *testing.T) {
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/buy"}); got == "" {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /approve TOKEN, or /reject TOKEN." {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON." {
 		t.Fatalf("unexpected fallback response: %q", got)
 	}
 }
 
 func TestLinkCommand(t *testing.T) {
-	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 10, 1, []string{"/link", "token"})
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 10, 1, []string{"/link", "token"})
 	if got != "Telegram is now linked to your AgentMart wallet." {
 		t.Fatalf("response = %q", got)
 	}
-	got, _ = responseForCommand(t.Context(), fakeLinker{err: errors.New("expired")}, fakePurchaser{}, 10, 1, []string{"/link", "token"})
+	got, _ = responseForCommand(t.Context(), fakeLinker{err: errors.New("expired")}, fakePurchaser{}, fakeRefunder{}, 10, 1, []string{"/link", "token"})
 	if got != "That link token is invalid, expired, or already used." {
 		t.Fatalf("response = %q", got)
 	}
@@ -46,7 +55,7 @@ func TestLinkCommand(t *testing.T) {
 
 func TestBuyCommand(t *testing.T) {
 	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 45000, RazorpayOrderID: "order"}}
-	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, 10, 5, []string{"/buy", "product", "1"})
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/buy", "product", "1"})
 	if got != "Purchase fulfilled via wallet for INR 450.00. Audit order: order" {
 		t.Fatalf("response = %q", got)
 	}
@@ -54,8 +63,32 @@ func TestBuyCommand(t *testing.T) {
 
 func TestBuyCommandApproval(t *testing.T) {
 	purchase := fakePurchaser{result: buyer.PurchaseResult{ApprovalRequired: true, ApprovalToken: "token", AmountPaise: 60000}}
-	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, 10, 5, []string{"/buy", "product", "1"})
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/buy", "product", "1"})
 	if got != "Human approval required for INR 600.00. Approval token: token" {
+		t.Fatalf("response = %q", got)
+	}
+}
+
+func TestRefundCommand(t *testing.T) {
+	refund := fakeRefunder{result: buyer.RefundResult{Approved: true, OrderID: "order", AmountPaise: 1250}}
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refund, 10, 5, []string{"/refund", "order", "changed", "mind"})
+	if got != "Refund approved via wallet for INR 12.50. Order: order" {
+		t.Fatalf("response = %q", got)
+	}
+}
+
+func TestRefundCommandDuplicate(t *testing.T) {
+	refund := fakeRefunder{result: buyer.RefundResult{Duplicate: true, OrderID: "order"}}
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refund, 10, 5, []string{"/refund", "order", "changed", "mind"})
+	if got != "Refund already applied for order order." {
+		t.Fatalf("response = %q", got)
+	}
+}
+
+func TestRefundCommandRejected(t *testing.T) {
+	refund := fakeRefunder{result: buyer.RefundResult{Reason: "refund window has expired"}}
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refund, 10, 5, []string{"/refund", "order", "changed", "mind"})
+	if got != "Refund rejected: refund window has expired" {
 		t.Fatalf("response = %q", got)
 	}
 }

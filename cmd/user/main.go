@@ -29,6 +29,10 @@ type purchaser interface {
 	Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error)
 }
 
+type refunder interface {
+	Refund(context.Context, buyer.RefundRequest) (buyer.RefundResult, error)
+}
+
 type approvalResolver interface {
 	ResolveApproval(context.Context, int64, string, string) (buyer.PurchaseResult, error)
 }
@@ -59,6 +63,7 @@ func main() {
 		return
 	}
 	purchaseService := buyer.NewPurchaseService(catalogService, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
+	refundService := buyer.NewRefundService(store, wallet.NewService(db))
 	ctx := context.Background()
 	offset := 0
 	for {
@@ -75,29 +80,29 @@ func main() {
 			if update.Message == nil || strings.TrimSpace(update.Message.Text) == "" {
 				continue
 			}
-			if err := handleMessage(ctx, client, linker, purchaseService, update.Message); err != nil {
+			if err := handleMessage(ctx, client, linker, purchaseService, refundService, update.Message); err != nil {
 				logger.Error("telegram command failed", "error", err, "update_id", update.UpdateID)
 			}
 		}
 	}
 }
 
-func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, message *telegram.Message) error {
+func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, message *telegram.Message) error {
 	command := strings.Fields(strings.TrimSpace(message.Text))
 	if len(command) == 0 {
 		return nil
 	}
-	response, err := responseForCommand(ctx, linker, purchases, message.From.ID, message.MessageID, command)
+	response, err := responseForCommand(ctx, linker, purchases, refunds, message.From.ID, message.MessageID, command)
 	if err != nil {
 		return err
 	}
 	return client.SendMessage(ctx, message.Chat.ID, response)
 }
 
-func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, telegramID int64, messageID int, command []string) (string, error) {
+func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string) (string, error) {
 	switch command[0] {
 	case "/start":
-		return "Welcome to AgentMart. Use /link TOKEN to connect your dashboard or /buy to inspect a purchase.", nil
+		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
 	case "/link":
 		if len(command) != 2 {
 			return "Use /link TOKEN after generating a token in the dashboard.", nil
@@ -142,7 +147,22 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 			return "Approval result: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+	case "/refund":
+		if len(command) < 3 {
+			return "Use /refund ORDER_ID REASON.", nil
+		}
+		result, err := refunds.Refund(ctx, buyer.RefundRequest{TelegramID: telegramID, MessageID: messageID, OrderID: command[1], Reason: strings.Join(command[2:], " ")})
+		if err != nil {
+			return "Refund could not be processed. Check the order and try again.", nil
+		}
+		if result.Duplicate {
+			return fmt.Sprintf("Refund already applied for order %s.", result.OrderID), nil
+		}
+		if !result.Approved {
+			return "Refund rejected: " + result.Reason, nil
+		}
+		return fmt.Sprintf("Refund approved via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	default:
-		return "Use /start, /link TOKEN, /buy, /approve TOKEN, or /reject TOKEN.", nil
+		return "Use /start, /link TOKEN, /buy, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
 	}
 }
