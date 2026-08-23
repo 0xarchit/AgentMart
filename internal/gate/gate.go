@@ -4,6 +4,7 @@ package gate
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type Request struct {
 	ProductID          string
 	Quantity           int
 	UnitPricePaise     int64
+	BaseAmountPaise    int64
 	FinalAmountPaise   int64
 	WalletBalancePaise int64
 	SpendLimitPaise    int64
@@ -67,11 +69,17 @@ func rejectionReason(request Request, maxPriceAge time.Duration) string {
 	if request.Quantity <= 0 {
 		return "invalid_quantity"
 	}
-	if request.UnitPricePaise <= 0 || request.FinalAmountPaise <= 0 {
+	if request.UnitPricePaise <= 0 || request.BaseAmountPaise <= 0 || request.FinalAmountPaise <= 0 {
 		return "invalid_amount"
 	}
-	if request.FinalAmountPaise != request.UnitPricePaise*int64(request.Quantity) {
+	if request.UnitPricePaise > math.MaxInt64/int64(request.Quantity) {
+		return "amount_overflow"
+	}
+	if request.BaseAmountPaise != request.UnitPricePaise*int64(request.Quantity) {
 		return "amount_mismatch"
+	}
+	if request.FinalAmountPaise < request.BaseAmountPaise {
+		return "negotiated_amount_below_base"
 	}
 	if request.Stock < request.Quantity {
 		return "insufficient_stock"

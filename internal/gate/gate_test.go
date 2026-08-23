@@ -20,7 +20,7 @@ func (a *recordingAuditor) RecordGateDecision(_ context.Context, decision Decisi
 
 func TestEvaluatePolicies(t *testing.T) {
 	now := time.Now()
-	valid := Request{AccountID: "account", ProductID: "product", Quantity: 2, UnitPricePaise: 100, FinalAmountPaise: 200, WalletBalancePaise: 500, SpendLimitPaise: 500, Stock: 3, PriceObservedAt: now, Now: now}
+	valid := Request{AccountID: "account", ProductID: "product", Quantity: 2, UnitPricePaise: 100, BaseAmountPaise: 200, FinalAmountPaise: 200, WalletBalancePaise: 500, SpendLimitPaise: 500, Stock: 3, PriceObservedAt: now, Now: now}
 	tests := []struct {
 		name     string
 		change   func(*Request)
@@ -28,6 +28,8 @@ func TestEvaluatePolicies(t *testing.T) {
 		reason   string
 	}{
 		{name: "approve", change: func(*Request) {}, approved: true, reason: "approved"},
+		{name: "negotiated uplift", change: func(r *Request) { r.FinalAmountPaise = 250 }, approved: true, reason: "approved"},
+		{name: "negotiated discount", change: func(r *Request) { r.FinalAmountPaise = 199 }, reason: "negotiated_amount_below_base"},
 		{name: "stock", change: func(r *Request) { r.Stock = 1 }, reason: "insufficient_stock"},
 		{name: "limit", change: func(r *Request) { r.SpendLimitPaise = 199 }, reason: "human_approval_required"},
 		{name: "wallet", change: func(r *Request) { r.WalletBalancePaise = 199 }, reason: "insufficient_wallet_balance"},
