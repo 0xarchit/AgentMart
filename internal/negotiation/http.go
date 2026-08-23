@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
-	"sync"
 
 	"agentmart/internal/catalog"
 )
@@ -20,8 +20,7 @@ var (
 
 // Server stores demo negotiation sessions behind a small JSON API.
 type Server struct {
-	mu         sync.Mutex
-	sessions   map[string]Session
+	store      SessionStore
 	products   map[string]catalog.Product
 	getProduct func(context.Context, string) (catalog.Product, error)
 	policy     Policy
@@ -29,7 +28,15 @@ type Server struct {
 
 // NewCatalogServer constructs a negotiation API backed by an authoritative catalog reader.
 func NewCatalogServer(getProduct func(context.Context, string) (catalog.Product, error)) *Server {
-	return &Server{sessions: make(map[string]Session), getProduct: getProduct}
+	return &Server{store: newMemorySessionStore(), getProduct: getProduct}
+}
+
+// NewCatalogServerWithStore constructs a catalog-backed API with durable session storage.
+func NewCatalogServerWithStore(getProduct func(context.Context, string) (catalog.Product, error), store SessionStore) (*Server, error) {
+	if store == nil {
+		return nil, fmt.Errorf("negotiation session store is required")
+	}
+	return &Server{store: store, getProduct: getProduct}, nil
 }
 
 // NewServer constructs a negotiation API with a catalog snapshot.
@@ -38,7 +45,7 @@ func NewServer(products []catalog.Product) *Server {
 	for _, product := range products {
 		indexed[product.ID] = product
 	}
-	return &Server{sessions: make(map[string]Session), products: indexed}
+	return &Server{store: newMemorySessionStore(), products: indexed}
 }
 
 // Handler returns the negotiation JSON handler.
@@ -55,16 +62,13 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
 		var response any
 		var err error
 		switch request.Type {
 		case "propose":
 			response, err = s.propose(r.Context(), request)
 		case "accept", "decline":
-			response, err = s.resolve(request)
+			response, err = s.resolve(r.Context(), request)
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be propose, accept, or decline"})
 			return
@@ -127,7 +131,9 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 	if err != nil {
 		return nil, err
 	}
-	s.sessions[sessionID] = session
+	if err := s.store.Put(ctx, sessionID, session); err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"session_id":         sessionID,
 		"type":               "counter",
@@ -138,12 +144,14 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 	}, nil
 }
 
-func (s *Server) resolve(request negotiationRequest) (map[string]any, error) {
-	session, ok := s.sessions[request.SessionID]
+func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[string]any, error) {
+	session, ok, err := s.store.Get(ctx, request.SessionID)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, errSessionNotFound
 	}
-	var err error
 	if request.Type == "accept" {
 		err = session.Accept()
 	} else {
@@ -152,7 +160,9 @@ func (s *Server) resolve(request negotiationRequest) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.sessions[request.SessionID] = session
+	if err := s.store.Put(ctx, request.SessionID, session); err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"session_id":         request.SessionID,
 		"status":             session.Status,

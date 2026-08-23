@@ -23,7 +23,16 @@ func main() {
 		return
 	}
 	service := catalog.NewService(db)
-	handler := newHandler(service)
+	store, err := negotiation.NewRedisSessionStore(os.Getenv("UPSTASH_REDIS_REST_URL"), os.Getenv("UPSTASH_REDIS_REST_TOKEN"), nil)
+	if err != nil {
+		logger.Error("market negotiation storage configuration failed", "error", err)
+		return
+	}
+	handler, err := newHandler(service, store)
+	if err != nil {
+		logger.Error("market handler configuration failed", "error", err)
+		return
+	}
 	addr := os.Getenv("MARKET_ADDR")
 	if addr == "" {
 		addr = ":8081"
@@ -34,9 +43,13 @@ func main() {
 	}
 }
 
-func newHandler(service *catalog.Service) http.Handler {
+func newHandler(service *catalog.Service, store negotiation.SessionStore) (http.Handler, error) {
 	mux := http.NewServeMux()
-	mux.Handle("POST /negotiation", negotiation.NewCatalogServer(service.Get).Handler())
+	negotiationServer, err := negotiation.NewCatalogServerWithStore(service.Get, store)
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("POST /negotiation", negotiationServer.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -74,7 +87,7 @@ func newHandler(service *catalog.Service) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, stock)
 	})
-	return requestLogger(mux)
+	return requestLogger(mux), nil
 }
 
 func parseInt64(value string) (int64, error) {

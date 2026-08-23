@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"agentmart/internal/buyer"
@@ -38,6 +40,8 @@ type approvalResolver interface {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	client, err := telegram.NewClient(os.Getenv("TELEGRAM_BOT_TOKEN"), nil)
 	if err != nil {
@@ -66,22 +70,35 @@ func main() {
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
 	ctx := context.Background()
 	offset := 0
+	offsetStore = newOffsetStore(os.Getenv("TELEGRAM_OFFSET_FILE"))
+	offset, err = offsetStore.Load()
+	if err != nil {
+		logger.Error("telegram offset load failed", "error", err)
+		return
+	}
 	for {
 		updates, err := client.Poll(ctx, offset)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			logger.Error("telegram polling failed", "error", err)
-			time.Sleep(2 * time.Second)
 			continue
 		}
 		for _, update := range updates {
-			if update.UpdateID >= offset {
-				offset = update.UpdateID + 1
-			}
-			if update.Message == nil || strings.TrimSpace(update.Message.Text) == "" {
+			if update.UpdateID < offset {
 				continue
 			}
-			if err := handleMessage(ctx, client, linker, purchaseService, refundService, update.Message); err != nil {
-				logger.Error("telegram command failed", "error", err, "update_id", update.UpdateID)
+			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
+				if err := handleMessage(ctx, client, linker, purchaseService, refundService, update.Message); err != nil {
+					logger.Error("telegram message handling failed", "error", err)
+					continue
+				}
+			}
+			offset = update.UpdateID + 1
+			if err := offsetStore.Save(offset); err != nil {
+				logger.Error("telegram offset save failed", "error", err)
+				return
 			}
 		}
 	}
