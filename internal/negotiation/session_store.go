@@ -27,6 +27,11 @@ type memorySessionStore struct {
 	sessions map[string]Session
 }
 
+// NewMemorySessionStore constructs an in-process session store for tests and local demos.
+func NewMemorySessionStore() SessionStore {
+	return newMemorySessionStore()
+}
+
 func newMemorySessionStore() *memorySessionStore {
 	return &memorySessionStore{sessions: make(map[string]Session)}
 }
