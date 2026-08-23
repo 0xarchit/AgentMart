@@ -19,6 +19,7 @@ import (
 	"agentmart/internal/linking"
 	"agentmart/internal/marketclient"
 	"agentmart/internal/negotiation"
+	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
@@ -39,6 +40,12 @@ type refunder interface {
 
 type approvalResolver interface {
 	ResolveApproval(context.Context, int64, string, string) (buyer.PurchaseResult, error)
+}
+
+type negotiator interface {
+	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
+	Accept(context.Context, string) (negotiationclient.Resolution, error)
+	Decline(context.Context, string, string) (negotiationclient.Resolution, error)
 }
 
 func main() {
@@ -92,6 +99,16 @@ func main() {
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
+	var negotiationService negotiator
+	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
+	if negotiationEndpoint != "" {
+		merchantNegotiation, connectErr := negotiationclient.New(negotiationEndpoint, &http.Client{Timeout: 10 * time.Second})
+		if connectErr != nil {
+			logger.Error("merchant negotiation configuration failed", "error", connectErr)
+			return
+		}
+		negotiationService = merchantNegotiation
+	}
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
@@ -126,7 +143,7 @@ func main() {
 				continue
 			}
 			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, update.Message); err != nil {
+				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, negotiationService, update.Message); err != nil {
 					logger.Error("telegram message handling failed", "error", err)
 					continue
 				}
@@ -140,22 +157,26 @@ func main() {
 	}
 }
 
-func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, message *telegram.Message) error {
+func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, negotiations negotiator, message *telegram.Message) error {
 	command := strings.Fields(strings.TrimSpace(message.Text))
 	if len(command) == 0 {
 		return nil
 	}
-	response, err := responseForCommand(ctx, linker, purchases, refunds, message.From.ID, message.MessageID, command)
+	response, err := responseForCommand(ctx, linker, purchases, refunds, message.From.ID, message.MessageID, command, negotiations)
 	if err != nil {
 		return err
 	}
 	return client.SendMessage(ctx, message.Chat.ID, response)
 }
 
-func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string) (string, error) {
+func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, negotiationServices ...negotiator) (string, error) {
+	var negotiations negotiator
+	if len(negotiationServices) > 0 {
+		negotiations = negotiationServices[0]
+	}
 	switch command[0] {
 	case "/start":
-		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
+		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
 	case "/link":
 		if len(command) != 2 {
 			return "Use /link TOKEN after generating a token in the dashboard.", nil
@@ -183,6 +204,53 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 			return "Purchase rejected: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+	case "/negotiate":
+		if negotiations == nil {
+			return "Merchant negotiation is unavailable.", nil
+		}
+		if len(command) != 3 {
+			return "Use /negotiate PRODUCT_ID QUANTITY.", nil
+		}
+		quantity, err := strconv.Atoi(command[2])
+		if err != nil || quantity <= 0 {
+			return "Quantity must be a positive integer.", nil
+		}
+		proposal, err := negotiations.Propose(ctx, command[1], quantity)
+		if err != nil {
+			return "Merchant negotiation could not be started.", nil
+		}
+		return fmt.Sprintf("Merchant counter offer: INR %.2f for %d unit(s). Session: %s. Use /accept %s or /decline %s.", float64(proposal.FinalAmountPaise)/100, proposal.Quantity, proposal.SessionID, proposal.SessionID, proposal.SessionID), nil
+	case "/accept", "/decline":
+		if negotiations == nil {
+			return "Merchant negotiation is unavailable.", nil
+		}
+		if len(command) < 2 || (command[0] == "/decline" && len(command) < 3) {
+			return "Use /accept SESSION_ID or /decline SESSION_ID REASON.", nil
+		}
+		var resolution negotiationclient.Resolution
+		var err error
+		if command[0] == "/accept" {
+			resolution, err = negotiations.Accept(ctx, command[1])
+		} else {
+			resolution, err = negotiations.Decline(ctx, command[1], strings.Join(command[2:], " "))
+		}
+		if err != nil {
+			return "Merchant negotiation could not be resolved.", nil
+		}
+		if command[0] == "/decline" {
+			return "Merchant counter offer declined.", nil
+		}
+		result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:negotiation:%d:%s", telegramID, resolution.SessionID)})
+		if err != nil {
+			return "Negotiated purchase could not be completed.", nil
+		}
+		if result.ApprovalRequired {
+			return fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(result.AmountPaise)/100, result.ApprovalToken), nil
+		}
+		if !result.Fulfilled {
+			return "Negotiated purchase rejected: " + result.Reason, nil
+		}
+		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
 	case "/approve", "/reject":
 		if len(command) != 2 {
 			return "Use /approve TOKEN or /reject TOKEN.", nil
@@ -216,6 +284,6 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 		}
 		return fmt.Sprintf("Refund approved via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	default:
-		return "Use /start, /link TOKEN, /buy, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
+		return "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
 	}
 }

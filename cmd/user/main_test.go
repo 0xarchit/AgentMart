@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"agentmart/internal/buyer"
+	"agentmart/internal/negotiationclient"
 )
 
 type fakeLinker struct{ err error }
@@ -25,6 +26,20 @@ type fakeRefunder struct {
 	err    error
 }
 
+type fakeNegotiator struct{}
+
+func (fakeNegotiator) Propose(context.Context, string, int) (negotiationclient.Proposal, error) {
+	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140}, nil
+}
+
+func (fakeNegotiator) Accept(context.Context, string) (negotiationclient.Resolution, error) {
+	return negotiationclient.Resolution{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, Status: "accepted"}, nil
+}
+
+func (fakeNegotiator) Decline(context.Context, string, string) (negotiationclient.Resolution, error) {
+	return negotiationclient.Resolution{SessionID: "session", Status: "declined"}, nil
+}
+
 func (f fakeRefunder) Refund(context.Context, buyer.RefundRequest) (buyer.RefundResult, error) {
 	return f.result, f.err
 }
@@ -37,7 +52,7 @@ func TestResponseForCommand(t *testing.T) {
 	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON." {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON." {
 		t.Fatalf("unexpected fallback response: %q", got)
 	}
 }
@@ -66,6 +81,19 @@ func TestBuyCommandApproval(t *testing.T) {
 	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/buy", "product", "1"})
 	if got != "Human approval required for INR 600.00. Approval token: token" {
 		t.Fatalf("response = %q", got)
+	}
+}
+
+func TestNegotiationCommands(t *testing.T) {
+	negotiator := fakeNegotiator{}
+	proposal, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 10, 5, []string{"/negotiate", "product", "1"}, negotiator)
+	if proposal != "Merchant counter offer: INR 1.40 for 1 unit(s). Session: session. Use /accept session or /decline session." {
+		t.Fatalf("proposal = %q", proposal)
+	}
+	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
+	accepted, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/accept", "session"}, negotiator)
+	if accepted != "Negotiated purchase fulfilled via wallet for INR 1.40. Audit order: order" {
+		t.Fatalf("accepted = %q", accepted)
 	}
 }
 
