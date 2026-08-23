@@ -29,6 +29,12 @@ type artifactCreator interface {
 type walletFulfiller interface {
 	Fulfill(context.Context, wallet.FulfillRequest) error
 }
+type approvalCreator interface {
+	Create(context.Context, ApprovalRequest) (ApprovalResult, error)
+}
+type approvalResolver interface {
+	Resolve(context.Context, int64, string, string) (ApprovalResolution, error)
+}
 
 // PurchaseRequest identifies one Telegram purchase attempt.
 type PurchaseRequest struct {
@@ -38,14 +44,17 @@ type PurchaseRequest struct {
 	BaseAmountPaise  int64
 	FinalAmountPaise int64
 	IdempotencyKey   string
+	HumanApproved    bool
 }
 
 // PurchaseResult reports the stable purchase outcome.
 type PurchaseResult struct {
-	Fulfilled       bool
-	Reason          string
-	AmountPaise     int64
-	RazorpayOrderID string
+	Fulfilled        bool
+	ApprovalRequired bool
+	ApprovalToken    string
+	Reason           string
+	AmountPaise      int64
+	RazorpayOrderID  string
 }
 
 // PurchaseService executes the trusted purchase sequence.
@@ -55,12 +64,19 @@ type PurchaseService struct {
 	gate      gateEvaluator
 	artifacts artifactCreator
 	wallet    walletFulfiller
+	approvals approvalCreator
+	resolver  approvalResolver
 	now       func() time.Time
 }
 
 // NewPurchaseService constructs the straight-through buyer workflow.
-func NewPurchaseService(catalog catalogReader, accounts accountReader, gateService gateEvaluator, artifacts artifactCreator, walletService walletFulfiller) *PurchaseService {
-	return &PurchaseService{catalog: catalog, accounts: accounts, gate: gateService, artifacts: artifacts, wallet: walletService, now: time.Now}
+func NewPurchaseService(catalog catalogReader, accounts accountReader, gateService gateEvaluator, artifacts artifactCreator, walletService walletFulfiller, approvalStores ...approvalCreator) *PurchaseService {
+	var approvals approvalCreator
+	if len(approvalStores) > 0 {
+		approvals = approvalStores[0]
+	}
+	resolver, _ := approvals.(approvalResolver)
+	return &PurchaseService{catalog: catalog, accounts: accounts, gate: gateService, artifacts: artifacts, wallet: walletService, approvals: approvals, resolver: resolver, now: time.Now}
 }
 
 // Purchase evaluates and fulfills one wallet-backed order.
@@ -92,11 +108,22 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	now := s.now()
-	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, Stock: product.Stock, PriceObservedAt: now, Now: now})
+	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: now, Now: now})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
 	if !decision.Approved {
+		if decision.Reason == "human_approval_required" && s.approvals != nil {
+			approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.IdempotencyKey, decision.Reason)
+			if err != nil {
+				return PurchaseResult{}, err
+			}
+			approval, err := s.approvals.Create(ctx, approvalRequest)
+			if err != nil {
+				return PurchaseResult{}, err
+			}
+			return PurchaseResult{ApprovalRequired: true, ApprovalToken: approval.Token, Reason: decision.Reason, AmountPaise: finalAmount}, nil
+		}
 		return PurchaseResult{Reason: decision.Reason, AmountPaise: finalAmount}, nil
 	}
 	receipt := "wallet_" + request.IdempotencyKey
@@ -112,4 +139,22 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		return PurchaseResult{}, err
 	}
 	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: finalAmount, RazorpayOrderID: artifact.ID}, nil
+}
+
+// ResolveApproval applies a Telegram decision and resumes the original purchase.
+func (s *PurchaseService) ResolveApproval(ctx context.Context, telegramID int64, token string, decision string) (PurchaseResult, error) {
+	if s.resolver == nil {
+		return PurchaseResult{}, fmt.Errorf("human approval resolver is unavailable")
+	}
+	resolution, err := s.resolver.Resolve(ctx, telegramID, token, decision)
+	if err != nil {
+		return PurchaseResult{}, err
+	}
+	if !resolution.Resolved {
+		return PurchaseResult{Reason: resolution.Reason}, nil
+	}
+	if !resolution.Approved {
+		return PurchaseResult{Reason: "human approval rejected"}, nil
+	}
+	return s.Purchase(ctx, PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: resolution.IdempotencyKey, HumanApproved: true})
 }

@@ -28,7 +28,7 @@ func TestResponseForCommand(t *testing.T) {
 	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, or /buy." {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /approve TOKEN, or /reject TOKEN." {
 		t.Fatalf("unexpected fallback response: %q", got)
 	}
 }
@@ -48,6 +48,14 @@ func TestBuyCommand(t *testing.T) {
 	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 45000, RazorpayOrderID: "order"}}
 	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, 10, 5, []string{"/buy", "product", "1"})
 	if got != "Purchase fulfilled via wallet for INR 450.00. Audit order: order" {
+		t.Fatalf("response = %q", got)
+	}
+}
+
+func TestBuyCommandApproval(t *testing.T) {
+	purchase := fakePurchaser{result: buyer.PurchaseResult{ApprovalRequired: true, ApprovalToken: "token", AmountPaise: 60000}}
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, 10, 5, []string{"/buy", "product", "1"})
+	if got != "Human approval required for INR 600.00. Approval token: token" {
 		t.Fatalf("response = %q", got)
 	}
 }

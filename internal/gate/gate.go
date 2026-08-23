@@ -18,6 +18,7 @@ type Request struct {
 	FinalAmountPaise   int64
 	WalletBalancePaise int64
 	SpendLimitPaise    int64
+	HumanApproved      bool
 	Stock              int
 	PriceObservedAt    time.Time
 	Now                time.Time
@@ -84,7 +85,7 @@ func rejectionReason(request Request, maxPriceAge time.Duration) string {
 	if request.Stock < request.Quantity {
 		return "insufficient_stock"
 	}
-	if request.SpendLimitPaise <= 0 || request.FinalAmountPaise > request.SpendLimitPaise {
+	if (request.SpendLimitPaise <= 0 || request.FinalAmountPaise > request.SpendLimitPaise) && !request.HumanApproved {
 		return "human_approval_required"
 	}
 	if request.WalletBalancePaise < request.FinalAmountPaise {
