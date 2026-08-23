@@ -138,6 +138,7 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 		"session_id":         sessionID,
 		"type":               "counter",
 		"product_id":         product.ID,
+		"qty":                request.Quantity,
 		"base_amount_paise":  session.Proposal.BaseAmountPaise,
 		"final_amount_paise": counter.FinalAmountPaise,
 		"reason":             counter.Reason,
@@ -166,6 +167,8 @@ func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[s
 	return map[string]any{
 		"session_id":         request.SessionID,
 		"status":             session.Status,
+		"product_id":         session.Proposal.ProductID,
+		"qty":                session.Proposal.Quantity,
 		"uplift_paise":       session.UpliftPaise(),
 		"base_amount_paise":  session.Proposal.BaseAmountPaise,
 		"final_amount_paise": session.Counter.FinalAmountPaise,

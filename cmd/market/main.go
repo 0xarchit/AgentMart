@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/markettools"
+	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/supabase"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -33,14 +36,18 @@ func main() {
 		logger.Error("market negotiation storage configuration failed", "error", err)
 		return
 	}
-	handler, err := newHandler(service, store)
-	if err != nil {
-		logger.Error("market handler configuration failed", "error", err)
-		return
-	}
 	addr := os.Getenv("MARKET_ADDR")
 	if addr == "" {
 		addr = ":8081"
+	}
+	agentEndpoint := os.Getenv("MARKET_AGENT_CARD_URL")
+	if agentEndpoint == "" {
+		agentEndpoint = "http://localhost" + addr + "/a2a"
+	}
+	handler, err := newHandler(service, store, agentEndpoint)
+	if err != nil {
+		logger.Error("market handler configuration failed", "error", err)
+		return
 	}
 	logger.Info("market listening", "addr", addr)
 	server := &http.Server{Addr: addr, Handler: handler}
@@ -62,13 +69,20 @@ func main() {
 	}
 }
 
-func newHandler(service *catalog.Service, store negotiation.SessionStore) (http.Handler, error) {
+func newHandler(service *catalog.Service, store negotiation.SessionStore, agentEndpoint string) (http.Handler, error) {
 	mux := http.NewServeMux()
 	negotiationServer, err := negotiation.NewCatalogServerWithStore(service.Get, store)
 	if err != nil {
 		return nil, err
 	}
 	mux.Handle("POST /negotiation", negotiationServer.Handler())
+	agentHandler, err := merchantagent.NewHandler(service.Get, store, agentEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
+	mcpServer := markettools.NewServer(service)
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
