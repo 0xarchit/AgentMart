@@ -6,3 +6,4 @@ Agents
 skills-lock.json
 web/.next
 web/node_modules
+tsconfig.tsbuildinfo
