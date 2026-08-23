@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"agentmart/internal/catalog"
@@ -16,6 +19,8 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	db, err := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_SECRET_KEY"), &http.Client{Timeout: 10 * time.Second})
 	if err != nil {
@@ -38,8 +43,22 @@ func main() {
 		addr = ":8081"
 	}
 	logger.Info("market listening", "addr", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("market stopped", "error", err)
+	server := &http.Server{Addr: addr, Handler: handler}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+	select {
+	case err := <-serverErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("market server stopped", "error", err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("market server shutdown failed", "error", err)
+		}
 	}
 }
 
