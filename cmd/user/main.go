@@ -102,11 +102,16 @@ func main() {
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
-		merchantNegotiation, connectErr := negotiationclient.New(negotiationEndpoint, &http.Client{Timeout: 10 * time.Second})
+		merchantNegotiation, connectErr := negotiationclient.NewA2A(ctx, negotiationEndpoint, &http.Client{Timeout: 10 * time.Second})
 		if connectErr != nil {
 			logger.Error("merchant negotiation configuration failed", "error", connectErr)
 			return
 		}
+		defer func() {
+			if closeErr := merchantNegotiation.Close(); closeErr != nil {
+				logger.Error("merchant negotiation close failed", "error", closeErr)
+			}
+		}()
 		negotiationService = merchantNegotiation
 	}
 	pollContext := ctx
