@@ -35,6 +35,19 @@ type ApprovalResult struct {
 	Reason     string `json:"reason"`
 }
 
+// ApprovalResolution reports the decision and original purchase values.
+type ApprovalResolution struct {
+	Resolved         bool   `json:"resolved"`
+	Approved         bool   `json:"approved"`
+	Reason           string `json:"reason"`
+	AccountID        string `json:"account_id"`
+	ProductID        string `json:"product_id"`
+	Quantity         int    `json:"qty"`
+	BaseAmountPaise  int64  `json:"base_amount_paise"`
+	FinalAmountPaise int64  `json:"final_amount_paise"`
+	IdempotencyKey   string `json:"idempotency_key"`
+}
+
 // ApprovalStore persists approval requests through the trusted service client.
 type ApprovalStore struct {
 	db *supabase.Client
@@ -51,6 +64,19 @@ func (s *ApprovalStore) Create(ctx context.Context, request ApprovalRequest) (Ap
 	var result ApprovalResult
 	if err := s.db.RPC(ctx, "create_human_approval", request, &result); err != nil {
 		return ApprovalResult{}, err
+	}
+	return result, nil
+}
+
+// Resolve applies one Telegram approval decision and returns the saved purchase values.
+func (s *ApprovalStore) Resolve(ctx context.Context, telegramID int64, token string, decision string) (ApprovalResolution, error) {
+	if telegramID <= 0 || strings.TrimSpace(token) == "" || (decision != "approve" && decision != "reject") {
+		return ApprovalResolution{}, fmt.Errorf("approval token, Telegram id, and decision are required")
+	}
+	payload := map[string]any{"p_token": token, "p_telegram_id": telegramID, "p_decision": decision}
+	var result ApprovalResolution
+	if err := s.db.RPC(ctx, "resolve_human_approval", payload, &result); err != nil {
+		return ApprovalResolution{}, err
 	}
 	return result, nil
 }

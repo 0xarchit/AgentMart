@@ -56,6 +56,10 @@ func (f *fakeApprovals) Create(_ context.Context, request ApprovalRequest) (Appr
 	return ApprovalResult{Approved: true, Token: request.Token}, nil
 }
 
+func (f *fakeApprovals) Resolve(_ context.Context, _ int64, _ string, decision string) (ApprovalResolution, error) {
+	return ApprovalResolution{Resolved: true, Approved: decision == "approve", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, IdempotencyKey: "key"}, nil
+}
+
 func (f *fakeWallet) Fulfill(_ context.Context, request wallet.FulfillRequest) error {
 	f.calls++
 	f.request = request
@@ -113,5 +117,19 @@ func TestPurchaseCreatesApprovalForLimitRejection(t *testing.T) {
 	}
 	if !result.ApprovalRequired || result.ApprovalToken == "" || approvals.request.FinalAmountPaise != 100 {
 		t.Fatalf("result = %+v, request = %+v", result, approvals.request)
+	}
+}
+
+func TestResolveApprovalResumesPurchase(t *testing.T) {
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	approvals := &fakeApprovals{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService, approvals)
+	result, err := service.ResolveApproval(t.Context(), 1, "token", "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Fulfilled || result.AmountPaise != 140 || walletService.request.FinalAmountPaise != 140 {
+		t.Fatalf("result = %+v, fulfillment = %+v", result, walletService.request)
 	}
 }

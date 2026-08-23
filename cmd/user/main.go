@@ -29,6 +29,10 @@ type purchaser interface {
 	Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error)
 }
 
+type approvalResolver interface {
+	ResolveApproval(context.Context, int64, string, string) (buyer.PurchaseResult, error)
+}
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	client, err := telegram.NewClient(os.Getenv("TELEGRAM_BOT_TOKEN"), nil)
@@ -121,7 +125,24 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 			return "Purchase rejected: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+	case "/approve", "/reject":
+		if len(command) != 2 {
+			return "Use /approve TOKEN or /reject TOKEN.", nil
+		}
+		resolver, ok := purchases.(approvalResolver)
+		if !ok {
+			return "Approval resume is unavailable.", nil
+		}
+		decision := strings.TrimPrefix(command[0], "/")
+		result, err := resolver.ResolveApproval(ctx, telegramID, command[1], decision)
+		if err != nil {
+			return "Approval could not be processed.", nil
+		}
+		if !result.Fulfilled {
+			return "Approval result: " + result.Reason, nil
+		}
+		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
 	default:
-		return "Use /start, /link TOKEN, or /buy.", nil
+		return "Use /start, /link TOKEN, /buy, /approve TOKEN, or /reject TOKEN.", nil
 	}
 }

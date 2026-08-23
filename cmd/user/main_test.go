@@ -28,7 +28,7 @@ func TestResponseForCommand(t *testing.T) {
 	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, or /buy." {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /approve TOKEN, or /reject TOKEN." {
 		t.Fatalf("unexpected fallback response: %q", got)
 	}
 }
