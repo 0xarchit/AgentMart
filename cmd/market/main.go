@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/negotiation"
 	"agentmart/internal/supabase"
 )
 
@@ -35,6 +36,7 @@ func main() {
 
 func newHandler(service *catalog.Service) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("POST /negotiation", negotiation.NewCatalogServer(service.Get).Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

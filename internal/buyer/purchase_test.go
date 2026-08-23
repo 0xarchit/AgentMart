@@ -33,16 +33,27 @@ func (f fakeGate) Evaluate(_ context.Context, request gate.Request) (gate.Decisi
 	return gate.Decision{Approved: f.approved, Reason: reason, Request: request}, nil
 }
 
-type fakeArtifacts struct{ calls int }
+type fakeArtifacts struct {
+	calls       int
+	amountPaise int64
+}
 
-func (f *fakeArtifacts) CreateWalletArtifact(context.Context, int64, string, map[string]string) (razorpay.Order, error) {
+func (f *fakeArtifacts) CreateWalletArtifact(_ context.Context, amountPaise int64, _ string, _ map[string]string) (razorpay.Order, error) {
 	f.calls++
+	f.amountPaise = amountPaise
 	return razorpay.Order{ID: "order"}, nil
 }
 
-type fakeWallet struct{ calls int }
+type fakeWallet struct {
+	calls   int
+	request wallet.FulfillRequest
+}
 
-func (f *fakeWallet) Fulfill(context.Context, wallet.FulfillRequest) error { f.calls++; return nil }
+func (f *fakeWallet) Fulfill(_ context.Context, request wallet.FulfillRequest) error {
+	f.calls++
+	f.request = request
+	return nil
+}
 
 func TestPurchaseFulfillsAfterApproval(t *testing.T) {
 	artifacts := &fakeArtifacts{}
@@ -54,6 +65,22 @@ func TestPurchaseFulfillsAfterApproval(t *testing.T) {
 	}
 	if !result.Fulfilled || artifacts.calls != 1 || walletService.calls != 1 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPurchaseFulfillsAcceptedNegotiatedAmount(t *testing.T) {
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService)
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AmountPaise != 140 || artifacts.amountPaise != 140 {
+		t.Fatalf("result = %+v, artifact amount = %d", result, artifacts.amountPaise)
+	}
+	if walletService.request.BaseAmountPaise != 100 || walletService.request.FinalAmountPaise != 140 {
+		t.Fatalf("fulfillment = %+v", walletService.request)
 	}
 }
 

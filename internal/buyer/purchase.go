@@ -32,10 +32,12 @@ type walletFulfiller interface {
 
 // PurchaseRequest identifies one Telegram purchase attempt.
 type PurchaseRequest struct {
-	TelegramID     int64
-	ProductID      string
-	Quantity       int
-	IdempotencyKey string
+	TelegramID       int64
+	ProductID        string
+	Quantity         int
+	BaseAmountPaise  int64
+	FinalAmountPaise int64
+	IdempotencyKey   string
 }
 
 // PurchaseResult reports the stable purchase outcome.
@@ -78,25 +80,36 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		return PurchaseResult{}, fmt.Errorf("purchase amount overflow")
 	}
 	amount := product.PricePaise * int64(request.Quantity)
+	baseAmount := request.BaseAmountPaise
+	if baseAmount == 0 {
+		baseAmount = amount
+	}
+	finalAmount := request.FinalAmountPaise
+	if finalAmount == 0 {
+		finalAmount = amount
+	}
+	if baseAmount != amount || finalAmount < baseAmount {
+		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
+	}
 	now := s.now()
-	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, FinalAmountPaise: amount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, Stock: product.Stock, PriceObservedAt: now, Now: now})
+	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, Stock: product.Stock, PriceObservedAt: now, Now: now})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
 	if !decision.Approved {
-		return PurchaseResult{Reason: decision.Reason, AmountPaise: amount}, nil
+		return PurchaseResult{Reason: decision.Reason, AmountPaise: finalAmount}, nil
 	}
 	receipt := "wallet_" + request.IdempotencyKey
 	if len(receipt) > 40 {
 		receipt = receipt[:40]
 	}
-	artifact, err := s.artifacts.CreateWalletArtifact(ctx, amount, receipt, map[string]string{"account_id": account.ID, "product_id": product.ID, "fulfillment": "wallet"})
+	artifact, err := s.artifacts.CreateWalletArtifact(ctx, finalAmount, receipt, map[string]string{"account_id": account.ID, "product_id": product.ID, "fulfillment": "wallet"})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
-	err = s.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: amount, FinalAmountPaise: amount, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
+	err = s.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
-	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: amount, RazorpayOrderID: artifact.ID}, nil
+	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: finalAmount, RazorpayOrderID: artifact.ID}, nil
 }

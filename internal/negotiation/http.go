@@ -2,6 +2,7 @@
 package negotiation
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -19,10 +20,16 @@ var (
 
 // Server stores demo negotiation sessions behind a small JSON API.
 type Server struct {
-	mu       sync.Mutex
-	sessions map[string]Session
-	products map[string]catalog.Product
-	policy   Policy
+	mu         sync.Mutex
+	sessions   map[string]Session
+	products   map[string]catalog.Product
+	getProduct func(context.Context, string) (catalog.Product, error)
+	policy     Policy
+}
+
+// NewCatalogServer constructs a negotiation API backed by an authoritative catalog reader.
+func NewCatalogServer(getProduct func(context.Context, string) (catalog.Product, error)) *Server {
+	return &Server{sessions: make(map[string]Session), getProduct: getProduct}
 }
 
 // NewServer constructs a negotiation API with a catalog snapshot.
@@ -55,7 +62,7 @@ func (s *Server) Handler() http.Handler {
 		var err error
 		switch request.Type {
 		case "propose":
-			response, err = s.propose(request)
+			response, err = s.propose(r.Context(), request)
 		case "accept", "decline":
 			response, err = s.resolve(request)
 		default:
@@ -82,8 +89,19 @@ type negotiationRequest struct {
 	Reason    string `json:"reason"`
 }
 
-func (s *Server) propose(request negotiationRequest) (map[string]any, error) {
-	product, ok := s.products[request.ProductID]
+func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[string]any, error) {
+	var product catalog.Product
+	var ok bool
+	if s.getProduct != nil {
+		loaded, err := s.getProduct(ctx, request.ProductID)
+		if err != nil {
+			return nil, errProductNotFound
+		}
+		product = loaded
+		ok = true
+	} else {
+		product, ok = s.products[request.ProductID]
+	}
 	if !ok {
 		return nil, errProductNotFound
 	}
