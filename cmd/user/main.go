@@ -69,18 +69,30 @@ func main() {
 	}
 	purchaseService := buyer.NewPurchaseService(catalogService, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
-	ctx := context.Background()
+	pollContext := ctx
 	offset := 0
-	offsetStore = newOffsetStore(os.Getenv("TELEGRAM_OFFSET_FILE"))
-	offset, err = offsetStore.Load()
+	var checkpoints telegramOffsetStore
+	redisURL := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_URL"))
+	redisToken := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_TOKEN"))
+	if redisURL != "" && redisToken != "" {
+		redisStore, storeErr := negotiation.NewRedisSessionStore(redisURL, redisToken, &http.Client{Timeout: 10 * time.Second})
+		if storeErr != nil {
+			logger.Error("telegram offset store configuration failed", "error", storeErr)
+			return
+		}
+		checkpoints = redisOffsetStore{store: redisStore}
+	} else {
+		checkpoints = newOffsetStore(os.Getenv("TELEGRAM_OFFSET_FILE"))
+	}
+	offset, err = checkpoints.Load(pollContext)
 	if err != nil {
 		logger.Error("telegram offset load failed", "error", err)
 		return
 	}
 	for {
-		updates, err := client.Poll(ctx, offset)
+		updates, err := client.Poll(pollContext, offset)
 		if err != nil {
-			if ctx.Err() != nil {
+			if pollContext.Err() != nil {
 				return
 			}
 			logger.Error("telegram polling failed", "error", err)
@@ -91,13 +103,13 @@ func main() {
 				continue
 			}
 			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-				if err := handleMessage(ctx, client, linker, purchaseService, refundService, update.Message); err != nil {
+				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, update.Message); err != nil {
 					logger.Error("telegram message handling failed", "error", err)
 					continue
 				}
 			}
 			offset = update.UpdateID + 1
-			if err := offsetStore.Save(ctx, offset); err != nil {
+			if err := checkpoints.Save(pollContext, offset); err != nil {
 				logger.Error("telegram offset save failed", "error", err)
 				return
 			}

@@ -58,3 +58,58 @@ func TestRefundPayloadUsesAllContractFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTopUpUsesVerifiedCreditRPC(t *testing.T) {
+	request := TopUpRequest{AccountID: "account", AmountPaise: 10000, IdempotencyKey: "payment", RazorpayOrderID: "order", RazorpayPaymentID: "payment-id"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rest/v1/rpc/credit_wallet_topup" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload TopUpRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload != request {
+			t.Fatalf("payload = %+v", payload)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	db, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewService(db).TopUp(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFulfillUsesAtomicWalletRPC(t *testing.T) {
+	request := FulfillRequest{AccountID: "account", ProductID: "product", Quantity: 2, BaseAmountPaise: 200, FinalAmountPaise: 240, RazorpayOrderID: "artifact", IdempotencyKey: "purchase", RefundWindowMinutes: 60}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rest/v1/rpc/fulfill_wallet_order" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatal("missing trusted authorization header")
+		}
+		var payload FulfillRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload != request {
+			t.Fatalf("payload = %+v", payload)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	db, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewService(db).Fulfill(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+}
