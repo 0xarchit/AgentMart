@@ -21,6 +21,7 @@ import (
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
+	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
 	"agentmart/internal/wallet"
@@ -46,6 +47,15 @@ type negotiator interface {
 	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
 	Accept(context.Context, string) (negotiationclient.Resolution, error)
 	Decline(context.Context, string, string) (negotiationclient.Resolution, error)
+}
+
+type decisionMaker interface {
+	Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error)
+}
+
+type commandServices struct {
+	negotiations negotiator
+	reasoning    decisionMaker
 }
 
 func main() {
@@ -99,6 +109,11 @@ func main() {
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
+	reasoningService, err := buyerreasoning.New(ctx, buyerreasoning.FromEnv())
+	if err != nil {
+		logger.Error("user reasoning configuration failed", "error", err)
+		return
+	}
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
@@ -148,7 +163,7 @@ func main() {
 				continue
 			}
 			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, negotiationService, update.Message); err != nil {
+				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService}, update.Message); err != nil {
 					logger.Error("telegram message handling failed", "error", err)
 					continue
 				}
@@ -162,12 +177,12 @@ func main() {
 	}
 }
 
-func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, negotiations negotiator, message *telegram.Message) error {
+func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, services commandServices, message *telegram.Message) error {
 	command := strings.Fields(strings.TrimSpace(message.Text))
 	if len(command) == 0 {
 		return nil
 	}
-	response, err := responseForCommand(ctx, linker, purchases, refunds, message.From.ID, message.MessageID, command, negotiations)
+	response, err := responseForCommandWithServices(ctx, linker, purchases, refunds, message.From.ID, message.MessageID, command, services)
 	if err != nil {
 		return err
 	}
@@ -175,10 +190,18 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 }
 
 func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, negotiationServices ...negotiator) (string, error) {
-	var negotiations negotiator
+	var services commandServices
 	if len(negotiationServices) > 0 {
-		negotiations = negotiationServices[0]
+		services.negotiations = negotiationServices[0]
 	}
+	return responseForCommandWithServices(ctx, linker, purchases, refunds, telegramID, messageID, command, services)
+}
+
+func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, services commandServices) (string, error) {
+	if len(command) == 0 {
+		return "", nil
+	}
+	negotiations := services.negotiations
 	switch command[0] {
 	case "/start":
 		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
@@ -273,6 +296,8 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 			return "Approval result: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+	case "/shop":
+		return shopWithReasoning(ctx, purchases, services, telegramID, messageID, command)
 	case "/refund":
 		if len(command) < 3 {
 			return "Use /refund ORDER_ID REASON.", nil
@@ -291,4 +316,43 @@ func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purc
 	default:
 		return "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
 	}
+}
+
+func shopWithReasoning(ctx context.Context, purchases purchaser, services commandServices, telegramID int64, messageID int, command []string) (string, error) {
+	if len(command) != 4 {
+		return "Usage: /shop PRODUCT_ID QUANTITY MAX_PAISE", nil
+	}
+	if services.negotiations == nil || services.reasoning == nil {
+		return "Shopping reasoning is not configured.", nil
+	}
+	quantity, err := strconv.Atoi(command[2])
+	if err != nil || quantity <= 0 {
+		return "Quantity must be a positive integer.", nil
+	}
+	limit, err := strconv.ParseInt(command[3], 10, 64)
+	if err != nil || limit <= 0 {
+		return "Maximum spend must be a positive amount in paise.", nil
+	}
+	proposal, err := services.negotiations.Propose(ctx, command[1], quantity)
+	if err != nil {
+		return "Merchant offer unavailable.", err
+	}
+	decision, err := services.reasoning.Decide(ctx, buyerreasoning.Input{ProductID: proposal.ProductID, Quantity: proposal.Quantity, PricePaise: proposal.FinalAmountPaise, TotalPaise: proposal.FinalAmountPaise, SpendLimitPaise: limit})
+	if err != nil {
+		return "Shopping decision failed.", err
+	}
+	if decision.Action != buyerreasoning.ActionBuy {
+		return fmt.Sprintf("Human confirmation required before buying %s for INR %.2f.", proposal.ProductID, float64(proposal.FinalAmountPaise)/100), nil
+	}
+	result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: proposal.ProductID, Quantity: proposal.Quantity, BaseAmountPaise: proposal.BaseAmountPaise, FinalAmountPaise: proposal.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:shop:%d:%d", telegramID, messageID)})
+	if err != nil {
+		return "Purchase failed.", err
+	}
+	if result.ApprovalRequired {
+		return fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(result.AmountPaise)/100, result.ApprovalToken), nil
+	}
+	if !result.Fulfilled {
+		return "Purchase was not fulfilled.", nil
+	}
+	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -38,6 +39,7 @@ type Input struct {
 	PricePaise      int64  `json:"price_paise"`
 	WalletPaise     int64  `json:"wallet_paise"`
 	SpendLimitPaise int64  `json:"spend_limit_paise"`
+	TotalPaise      int64  `json:"total_paise"`
 }
 
 // Decision is a model or deterministic intent. It cannot mutate payment state.
@@ -63,7 +65,8 @@ func FromEnv() Config {
 
 // Service decides bounded intent and falls back to deterministic policy when disabled.
 type Service struct {
-	runner *runner.Runner
+	runner   *runner.Runner
+	sessions atomic.Uint64
 }
 
 // New builds a reasoning service. Empty configuration deliberately selects fallback policy.
@@ -102,7 +105,8 @@ func (s *Service) Decide(ctx context.Context, input Input) (Decision, error) {
 	}
 	content := genai.NewContentFromText(string(payload), genai.RoleUser)
 	var output string
-	for event, runErr := range s.runner.Run(ctx, "buyer", "decision", content, agent.RunConfig{}) {
+	sessionID := fmt.Sprintf("decision-%d", s.sessions.Add(1))
+	for event, runErr := range s.runner.Run(ctx, "buyer", sessionID, content, agent.RunConfig{}) {
 		if runErr != nil {
 			return Decision{}, fmt.Errorf("run reasoning decision: %w", runErr)
 		}
@@ -127,7 +131,10 @@ func deterministic(input Input) Decision {
 		decision.Action = ActionAskHuman
 		return decision
 	}
-	total := input.PricePaise * int64(input.Quantity)
+	total := input.TotalPaise
+	if total <= 0 {
+		total = input.PricePaise * int64(input.Quantity)
+	}
 	if input.SpendLimitPaise > 0 && total > input.SpendLimitPaise {
 		decision.Action = ActionAskHuman
 		return decision

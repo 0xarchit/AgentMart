@@ -8,6 +8,7 @@ import (
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/negotiationclient"
+	buyerreasoning "agentmart/internal/reasoning"
 )
 
 type fakeLinker struct{ err error }
@@ -27,6 +28,14 @@ type fakeRefunder struct {
 }
 
 type fakeNegotiator struct{}
+
+type fakeDecisionMaker struct {
+	decision buyerreasoning.Decision
+}
+
+func (f fakeDecisionMaker) Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error) {
+	return f.decision, nil
+}
 
 func (fakeNegotiator) Propose(context.Context, string, int) (negotiationclient.Proposal, error) {
 	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140}, nil
@@ -94,6 +103,18 @@ func TestNegotiationCommands(t *testing.T) {
 	accepted, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/accept", "session"}, negotiator)
 	if accepted != "Negotiated purchase fulfilled via wallet for INR 1.40. Audit order: order" {
 		t.Fatalf("accepted = %q", accepted)
+	}
+}
+
+func TestShopCommandUsesReasoningBeforePurchase(t *testing.T) {
+	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
+	services := commandServices{negotiations: fakeNegotiator{}, reasoning: fakeDecisionMaker{decision: buyerreasoning.Decision{Action: buyerreasoning.ActionBuy}}}
+	got, err := responseForCommandWithServices(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/shop", "product", "1", "200"}, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Audit order: order" {
+		t.Fatalf("response = %q", got)
 	}
 }
 
