@@ -12,7 +12,7 @@ export async function loadPublicProducts(fetcher: typeof fetch = fetch): Promise
   const baseURL = process.env.SUPABASE_URL;
   const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
   if (!baseURL || !publishableKey) {
-    throw new Error("Supabase public catalog configuration is missing");
+    return [];
   }
 
   const response = await fetcher(`${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score&order=name.asc`, {
@@ -23,7 +23,7 @@ export async function loadPublicProducts(fetcher: typeof fetch = fetch): Promise
     next: { revalidate: 30 },
   });
   if (!response.ok) {
-    throw new Error(`Catalog request failed with status ${response.status}`);
+    return [];
   }
   return response.json() as Promise<Product[]>;
 }

@@ -25,4 +25,13 @@ describe("loadPublicProducts", () => {
       }),
     );
   });
+
+  it("returns an empty catalog when public configuration is unavailable", async () => {
+    vi.stubEnv("SUPABASE_URL", "");
+    vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "");
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(loadPublicProducts(fetcher)).resolves.toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });
