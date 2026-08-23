@@ -36,11 +36,25 @@ func (s *Service) Fulfill(ctx context.Context, request FulfillRequest) error {
 }
 
 // Refund credits the wallet for an eligible fulfilled order atomically.
-func (s *Service) Refund(ctx context.Context, request RefundRequest) error {
+func (s *Service) Refund(ctx context.Context, request RefundRequest) (RefundResult, error) {
 	if err := request.validate(); err != nil {
-		return err
+		return RefundResult{}, err
 	}
-	return s.db.RPC(ctx, "refund_wallet_order", request, nil)
+	var result RefundResult
+	if err := s.db.RPC(ctx, "refund_wallet_order", request, &result); err != nil {
+		return RefundResult{}, err
+	}
+	return result, nil
+}
+
+// RefundResult reports whether a wallet refund was approved or already applied.
+type RefundResult struct {
+	Approved     bool   `json:"approved"`
+	Duplicate    bool   `json:"duplicate"`
+	OrderID      string `json:"order_id"`
+	AmountPaise  int64  `json:"amount_paise"`
+	BalancePaise int64  `json:"balance_paise"`
+	Reason       string `json:"reason"`
 }
 
 // TopUpRequest identifies a verified human wallet funding event.

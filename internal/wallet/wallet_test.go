@@ -54,7 +54,7 @@ func TestRefundPayloadUsesAllContractFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewService(db).Refund(t.Context(), request); err != nil {
+	if _, err := NewService(db).Refund(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
 }
