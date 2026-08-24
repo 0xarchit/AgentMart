@@ -61,6 +61,7 @@ func TestApprovalResumeUsesAtomicWalletFulfillment(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			_, _ = w.Write([]byte(`{"approved":true,"order_id":"order"}`))
 		default:
 			t.Errorf("unexpected Supabase path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

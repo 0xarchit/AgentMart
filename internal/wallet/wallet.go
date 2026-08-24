@@ -32,7 +32,21 @@ func (s *Service) Fulfill(ctx context.Context, request FulfillRequest) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
-	return s.db.RPC(ctx, "fulfill_wallet_order", request, nil)
+	var result FulfillResult
+	if err := s.db.RPC(ctx, "fulfill_wallet_order", request, &result); err != nil {
+		return err
+	}
+	if !result.Approved {
+		return fmt.Errorf("wallet fulfillment rejected: %s", result.Reason)
+	}
+	return nil
+}
+
+type FulfillResult struct {
+	Approved  bool   `json:"approved"`
+	Duplicate bool   `json:"duplicate"`
+	OrderID   string `json:"order_id"`
+	Reason    string `json:"reason"`
 }
 
 // Refund credits the wallet for an eligible fulfilled order atomically.

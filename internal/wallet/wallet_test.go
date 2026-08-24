@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"agentmart/internal/supabase"
@@ -46,7 +47,7 @@ func TestRefundPayloadUsesAllContractFields(t *testing.T) {
 				t.Fatalf("payload missing %s", field)
 			}
 		}
-		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte(`{"approved":true,"order_id":"order"}`))
 	}))
 	defer server.Close()
 
@@ -56,6 +57,28 @@ func TestRefundPayloadUsesAllContractFields(t *testing.T) {
 	}
 	if _, err := NewService(db).Refund(t.Context(), request); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFulfillRejectsDatabaseDecision(t *testing.T) {
+	tests := []string{"stock is insufficient", "wallet balance is insufficient"}
+	for _, reason := range tests {
+		t.Run(reason, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(FulfillResult{Approved: false, Reason: reason})
+			}))
+			defer server.Close()
+
+			db, err := supabase.NewClient(server.URL, "secret", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := FulfillRequest{AccountID: "account", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 100, RazorpayOrderID: "artifact", IdempotencyKey: "purchase", RefundWindowMinutes: 60}
+			err = NewService(db).Fulfill(t.Context(), request)
+			if err == nil || !strings.Contains(err.Error(), reason) {
+				t.Fatalf("expected rejection %q, got %v", reason, err)
+			}
+		})
 	}
 }
 
@@ -88,6 +111,8 @@ func TestTopUpUsesVerifiedCreditRPC(t *testing.T) {
 func TestFulfillUsesAtomicWalletRPC(t *testing.T) {
 	request := FulfillRequest{AccountID: "account", ProductID: "product", Quantity: 2, BaseAmountPaise: 200, FinalAmountPaise: 240, RazorpayOrderID: "artifact", IdempotencyKey: "purchase", RefundWindowMinutes: 60}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(FulfillResult{Approved: true, OrderID: "order"})
+
 		if r.Method != http.MethodPost || r.URL.Path != "/rest/v1/rpc/fulfill_wallet_order" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
