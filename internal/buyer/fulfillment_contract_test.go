@@ -103,3 +103,40 @@ func TestApprovalResumeUsesAtomicWalletFulfillment(t *testing.T) {
 		t.Fatalf("unexpected fulfillment artifact contract: %+v", fulfilled)
 	}
 }
+
+func TestPurchaseDoesNotSucceedWhenAtomicFulfillmentRejects(t *testing.T) {
+	fulfillmentCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/v1/rpc/fulfill_wallet_order" {
+			t.Errorf("unexpected Supabase path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fulfillmentCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"code":"P0001","message":"stock is insufficient"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	db, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatalf("create Supabase client: %v", err)
+	}
+
+	artifacts := &fakeArtifacts{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, wallet.NewService(db))
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, IdempotencyKey: "rejected-fulfillment"})
+	if err == nil {
+		t.Fatal("expected atomic fulfillment rejection")
+	}
+	if !fulfillmentCalled {
+		t.Fatal("expected atomic fulfillment RPC call")
+	}
+	if result.Fulfilled || result.RazorpayOrderID != "" {
+		t.Fatalf("rejected fulfillment reported success: %+v", result)
+	}
+	if artifacts.calls != 1 {
+		t.Fatalf("expected one payment artifact before atomic fulfillment, got %d", artifacts.calls)
+	}
+}
