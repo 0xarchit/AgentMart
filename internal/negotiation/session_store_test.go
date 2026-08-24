@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -47,6 +48,52 @@ func TestRedisSessionStoreRoundTripUsesTTL(t *testing.T) {
 	}
 	if len(commands) != 2 || commands[0][0] != "SET" || commands[0][3] != "EX" || commands[0][4] != float64(int(sessionTTL/time.Second)) {
 		t.Fatalf("unexpected Redis commands: %#v", commands)
+	}
+}
+
+func TestRedisSessionStoreResumesWithFreshStore(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		state = make(map[string]string)
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var command []any
+		if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch command[0] {
+		case "SET":
+			state[command[1].(string)] = command[2].(string)
+			_ = json.NewEncoder(w).Encode(map[string]string{"result": "OK"})
+		case "GET":
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": state[command[1].(string)]})
+		default:
+			http.Error(w, "unsupported command", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	first, err := NewRedisSessionStore(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Session{Proposal: Proposal{ProductID: "product", Quantity: 2, BaseAmountPaise: 200}, Status: StatusCountered}
+	if err := first.Put(t.Context(), "restart-session", want); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewRedisSessionStore(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := second.Get(t.Context(), "restart-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got != want {
+		t.Fatalf("loaded = %+v, found = %v", got, ok)
 	}
 }
 

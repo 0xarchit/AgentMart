@@ -3,11 +3,15 @@ package buyer
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
 	"agentmart/internal/razorpay"
+	"agentmart/internal/supabase"
 	"agentmart/internal/wallet"
 )
 
@@ -130,6 +134,68 @@ func TestResolveApprovalResumesPurchase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !result.Fulfilled || result.AmountPaise != 140 || walletService.request.FinalAmountPaise != 140 {
+		t.Fatalf("result = %+v, fulfillment = %+v", result, walletService.request)
+	}
+}
+
+func TestApprovalResumesWithFreshPurchaseService(t *testing.T) {
+	var pending ApprovalRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/v1/rpc/create_human_approval":
+			if err := json.NewDecoder(r.Body).Decode(&pending); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(ApprovalResult{Approved: true, Token: pending.Token})
+		case "/rest/v1/rpc/resolve_human_approval":
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request["p_token"] != pending.Token {
+				t.Fatalf("token = %v", request["p_token"])
+			}
+			_ = json.NewEncoder(w).Encode(ApprovalResolution{
+				Resolved:         true,
+				Approved:         true,
+				AccountID:        pending.AccountID,
+				ProductID:        pending.ProductID,
+				Quantity:         pending.Quantity,
+				BaseAmountPaise:  pending.BaseAmountPaise,
+				FinalAmountPaise: pending.FinalAmountPaise,
+				IdempotencyKey:   pending.IdempotencyKey,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	firstDB, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{}, &fakeArtifacts{}, &fakeWallet{}, NewApprovalStore(firstDB))
+	created, err := first.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, IdempotencyKey: "restart-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.ApprovalRequired || created.ApprovalToken == "" {
+		t.Fatalf("created = %+v", created)
+	}
+
+	secondDB, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	second := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService, NewApprovalStore(secondDB))
+	result, err := second.ResolveApproval(t.Context(), 1, created.ApprovalToken, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Fulfilled || artifacts.calls != 1 || walletService.calls != 1 || walletService.request.IdempotencyKey != "restart-key" {
 		t.Fatalf("result = %+v, fulfillment = %+v", result, walletService.request)
 	}
 }
