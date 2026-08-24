@@ -184,21 +184,11 @@ func main() {
 			logger.Error("telegram polling failed", "error", err)
 			continue
 		}
-		for _, update := range updates {
-			if update.UpdateID < offset {
-				continue
-			}
-			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, update.Message); err != nil {
-					logger.Error("telegram message handling failed", "error", err)
-					continue
-				}
-			}
-			offset = update.UpdateID + 1
-			if err := checkpoints.Save(pollContext, offset); err != nil {
-				logger.Error("telegram offset save failed", "error", err)
-				return
-			}
+		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
+			return handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, message)
+		})
+		if err != nil {
+			logger.Error("telegram update processing failed", "error", err)
 		}
 	}
 }
