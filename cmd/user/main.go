@@ -17,6 +17,7 @@ import (
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
 	"agentmart/internal/linking"
+	"agentmart/internal/marketauth"
 	"agentmart/internal/marketclient"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
@@ -94,7 +95,12 @@ func main() {
 	var closeCatalog func() error
 	marketEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_MCP_ENDPOINT"))
 	if marketEndpoint != "" {
-		merchantCatalog, connectErr := marketclient.New(ctx, marketEndpoint, &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		if clientErr != nil {
+			logger.Error("market access configuration failed", "error", clientErr)
+			return
+		}
+		merchantCatalog, connectErr := marketclient.New(ctx, marketEndpoint, marketHTTP)
 		if connectErr != nil {
 			logger.Error("merchant catalog connection failed", "error", connectErr)
 			return
@@ -132,7 +138,12 @@ func main() {
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
-		merchantNegotiation, connectErr := negotiationclient.NewA2A(ctx, negotiationEndpoint, &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		if clientErr != nil {
+			logger.Error("market access configuration failed", "error", clientErr)
+			return
+		}
+		merchantNegotiation, connectErr := negotiationclient.NewA2A(ctx, negotiationEndpoint, marketHTTP)
 		if connectErr != nil {
 			logger.Error("merchant negotiation configuration failed", "error", connectErr)
 			return

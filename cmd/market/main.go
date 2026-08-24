@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/marketauth"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
@@ -44,7 +45,7 @@ func main() {
 	if agentEndpoint == "" {
 		agentEndpoint = "http://localhost" + addr + "/a2a"
 	}
-	handler, err := newHandler(service, store, agentEndpoint)
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"))
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -69,24 +70,27 @@ func main() {
 	}
 }
 
-func newHandler(service *catalog.Service, store negotiation.SessionStore, agentEndpoint string) (http.Handler, error) {
-	mux := http.NewServeMux()
+type catalogReader interface {
+	Search(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
+	Get(context.Context, string) (catalog.Product, error)
+	CheckStock(context.Context, string, int) (catalog.StockResult, error)
+}
+
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string) (http.Handler, error) {
+	privateMux := http.NewServeMux()
 	negotiationServer, err := negotiation.NewCatalogServerWithStore(service.Get, store)
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle("POST /negotiation", negotiationServer.Handler())
+	privateMux.Handle("POST /negotiation", negotiationServer.Handler())
 	agentHandler, err := merchantagent.NewHandler(service.Get, store, agentEndpoint)
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
+	privateMux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
 	mcpServer := markettools.NewServer(service)
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	mux.HandleFunc("GET /catalog/search", func(w http.ResponseWriter, r *http.Request) {
+	privateMux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
+	privateMux.HandleFunc("GET /catalog/search", func(w http.ResponseWriter, r *http.Request) {
 		maxPrice, err := parseInt64(r.URL.Query().Get("max_price_paise"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "max_price_paise must be an integer")
@@ -99,7 +103,7 @@ func newHandler(service *catalog.Service, store negotiation.SessionStore, agentE
 		}
 		writeJSON(w, http.StatusOK, products)
 	})
-	mux.HandleFunc("GET /catalog/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+	privateMux.HandleFunc("GET /catalog/products/{id}", func(w http.ResponseWriter, r *http.Request) {
 		product, err := service.Get(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -107,7 +111,7 @@ func newHandler(service *catalog.Service, store negotiation.SessionStore, agentE
 		}
 		writeJSON(w, http.StatusOK, product)
 	})
-	mux.HandleFunc("GET /catalog/products/{id}/stock", func(w http.ResponseWriter, r *http.Request) {
+	privateMux.HandleFunc("GET /catalog/products/{id}/stock", func(w http.ResponseWriter, r *http.Request) {
 		qty, err := strconv.Atoi(r.URL.Query().Get("qty"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "qty must be an integer")
@@ -120,7 +124,16 @@ func newHandler(service *catalog.Service, store negotiation.SessionStore, agentE
 		}
 		writeJSON(w, http.StatusOK, stock)
 	})
-	return requestLogger(mux), nil
+	protected, err := marketauth.RequireBearer(sharedToken, privateMux)
+	if err != nil {
+		return nil, err
+	}
+	root := http.NewServeMux()
+	root.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	root.Handle("/", protected)
+	return requestLogger(root), nil
 }
 
 func parseInt64(value string) (int64, error) {
