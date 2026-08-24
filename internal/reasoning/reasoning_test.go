@@ -47,3 +47,17 @@ func TestDeterministicDecisionUsesExactTotal(t *testing.T) {
 		t.Fatalf("action = %q", decision.Action)
 	}
 }
+
+func TestValidateRejectsChangedPurchaseFacts(t *testing.T) {
+	_, err := validate(Input{ProductID: "product", Quantity: 1}, Decision{Action: ActionBuy, ProductID: "other", Quantity: 1, Rationale: "different"})
+	if err == nil {
+		t.Fatal("expected changed product rejection")
+	}
+}
+
+func TestValidateRequiresRationale(t *testing.T) {
+	_, err := validate(Input{ProductID: "product", Quantity: 1}, Decision{Action: ActionBuy, ProductID: "product", Quantity: 1})
+	if err == nil {
+		t.Fatal("expected missing rationale rejection")
+	}
+}

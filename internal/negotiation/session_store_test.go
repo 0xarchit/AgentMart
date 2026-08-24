@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +45,7 @@ func TestRedisSessionStoreRoundTripUsesTTL(t *testing.T) {
 	if loaded.Proposal.ProductID != "p1" || loaded.Status != StatusCountered {
 		t.Fatalf("unexpected session: %+v", loaded)
 	}
-	if len(commands) != 2 || commands[0][0] != "SET" || commands[0][3] != "EX" || commands[0][4] != strconv.Itoa(int(sessionTTL/time.Second)) {
+	if len(commands) != 2 || commands[0][0] != "SET" || commands[0][3] != "EX" || commands[0][4] != float64(int(sessionTTL/time.Second)) {
 		t.Fatalf("unexpected Redis commands: %#v", commands)
 	}
 }

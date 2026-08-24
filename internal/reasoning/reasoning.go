@@ -33,13 +33,23 @@ const (
 
 // Input contains the user request and trusted catalog facts available to reasoning.
 type Input struct {
-	Request         string `json:"request"`
-	ProductID       string `json:"product_id"`
-	Quantity        int    `json:"quantity"`
-	PricePaise      int64  `json:"price_paise"`
-	WalletPaise     int64  `json:"wallet_paise"`
-	SpendLimitPaise int64  `json:"spend_limit_paise"`
-	TotalPaise      int64  `json:"total_paise"`
+	Request          string `json:"request"`
+	ProductID        string `json:"product_id"`
+	ProductName      string `json:"product_name,omitempty"`
+	Category         string `json:"category,omitempty"`
+	Quantity         int    `json:"quantity"`
+	Stock            int    `json:"stock"`
+	WarrantyYears    int    `json:"warranty_years"`
+	TrustScore       int    `json:"trust_score"`
+	ComboWith        string `json:"combo_with,omitempty"`
+	ComboDiscountPct int    `json:"combo_discount_pct"`
+	OfferReason      string `json:"offer_reason,omitempty"`
+	BaseAmountPaise  int64  `json:"base_amount_paise"`
+	FinalAmountPaise int64  `json:"final_amount_paise"`
+	PricePaise       int64  `json:"price_paise"`
+	WalletPaise      int64  `json:"wallet_paise"`
+	SpendLimitPaise  int64  `json:"spend_limit_paise"`
+	TotalPaise       int64  `json:"total_paise"`
 }
 
 // Decision is a model or deterministic intent. It cannot mutate payment state.
@@ -82,7 +92,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		Name:        "purchase_reasoner",
 		Description: "Select a bounded purchase intent from trusted facts.",
 		Model:       model,
-		Instruction: "Return only JSON matching {\"action\":\"buy|negotiate|ask_human|decline\",\"product_id\":string,\"quantity\":integer,\"max_spend_paise\":integer,\"rationale\":string}. Never claim that money moved. Use ask_human when the request exceeds the spend limit or facts are missing.",
+		Instruction: "Return only JSON matching {\"action\":\"buy|negotiate|ask_human|decline\",\"product_id\":string,\"quantity\":integer,\"max_spend_paise\":integer,\"rationale\":string}. Use trusted catalog facts, stock, warranty, trust score, offer reason, and budget in the rationale. Never claim that money moved. Use ask_human when the request exceeds the spend limit or facts are missing.",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create reasoning agent: %w", err)
@@ -147,8 +157,14 @@ func validate(input Input, decision Decision) (Decision, error) {
 	if decision.ProductID == "" {
 		decision.ProductID = input.ProductID
 	}
-	if decision.Quantity <= 0 || decision.ProductID == "" {
-		return Decision{}, errors.New("reasoning decision requires product and positive quantity")
+	if decision.Quantity <= 0 {
+		decision.Quantity = input.Quantity
+	}
+	if decision.ProductID != input.ProductID || decision.Quantity != input.Quantity {
+		return Decision{}, errors.New("reasoning decision cannot change trusted product or quantity")
+	}
+	if strings.TrimSpace(decision.Rationale) == "" {
+		return Decision{}, errors.New("reasoning decision requires rationale")
 	}
 	switch decision.Action {
 	case ActionBuy, ActionNegotiate, ActionAskHuman, ActionDecline:

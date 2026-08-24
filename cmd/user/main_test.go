@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"agentmart/internal/buyer"
+	"agentmart/internal/catalog"
 	"agentmart/internal/negotiationclient"
 	buyerreasoning "agentmart/internal/reasoning"
 )
@@ -33,12 +34,35 @@ type fakeDecisionMaker struct {
 	decision buyerreasoning.Decision
 }
 
+type fakeReasoningAuditor struct {
+	input    buyerreasoning.Input
+	decision buyerreasoning.Decision
+}
+
+type fakeAccountFacts struct{}
+
+func (fakeAccountFacts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
+	return buyer.Account{WalletBalancePaise: 500, SpendLimitPaise: 200}, nil
+}
+
+type fakeProductFacts struct{}
+
+func (fakeProductFacts) Get(context.Context, string) (catalog.Product, error) {
+	return catalog.Product{ID: "product", Name: "Trusted Product", PricePaise: 100, Stock: 4, WarrantyYears: 3, TrustScore: 92}, nil
+}
+
+func (f *fakeReasoningAuditor) RecordReasoningDecision(_ context.Context, _ int64, input buyerreasoning.Input, decision buyerreasoning.Decision) error {
+	f.input = input
+	f.decision = decision
+	return nil
+}
+
 func (f fakeDecisionMaker) Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error) {
 	return f.decision, nil
 }
 
 func (fakeNegotiator) Propose(context.Context, string, int) (negotiationclient.Proposal, error) {
-	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140}, nil
+	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, Reason: "three-year warranty"}, nil
 }
 
 func (fakeNegotiator) Accept(context.Context, string) (negotiationclient.Resolution, error) {
@@ -96,7 +120,7 @@ func TestBuyCommandApproval(t *testing.T) {
 func TestNegotiationCommands(t *testing.T) {
 	negotiator := fakeNegotiator{}
 	proposal, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 10, 5, []string{"/negotiate", "product", "1"}, negotiator)
-	if proposal != "Merchant counter offer: INR 1.40 for 1 unit(s). Session: session. Use /accept session or /decline session." {
+	if proposal != "Merchant counter offer: INR 1.40 for 1 unit(s). Reason: three-year warranty. Session: session. Use /accept session or /decline session." {
 		t.Fatalf("proposal = %q", proposal)
 	}
 	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
@@ -108,13 +132,17 @@ func TestNegotiationCommands(t *testing.T) {
 
 func TestShopCommandUsesReasoningBeforePurchase(t *testing.T) {
 	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
-	services := commandServices{negotiations: fakeNegotiator{}, reasoning: fakeDecisionMaker{decision: buyerreasoning.Decision{Action: buyerreasoning.ActionBuy}}}
+	auditor := &fakeReasoningAuditor{}
+	services := commandServices{negotiations: fakeNegotiator{}, reasoning: fakeDecisionMaker{decision: buyerreasoning.Decision{Action: buyerreasoning.ActionBuy, Rationale: "within budget"}}, audit: auditor, accounts: fakeAccountFacts{}, catalog: fakeProductFacts{}}
 	got, err := responseForCommandWithServices(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/shop", "product", "1", "200"}, services)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Audit order: order" {
+	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Decision: within budget. Audit order: order" {
 		t.Fatalf("response = %q", got)
+	}
+	if auditor.input.BaseAmountPaise != 100 || auditor.input.FinalAmountPaise != 140 || auditor.input.PricePaise != 100 || auditor.input.TotalPaise != 140 || auditor.input.WalletPaise != 500 || auditor.input.SpendLimitPaise != 200 || auditor.input.TrustScore != 92 || auditor.decision.Rationale != "within budget" {
+		t.Fatalf("audit input = %+v, decision = %+v", auditor.input, auditor.decision)
 	}
 }
 

@@ -142,6 +142,14 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 		"base_amount_paise":  session.Proposal.BaseAmountPaise,
 		"final_amount_paise": counter.FinalAmountPaise,
 		"reason":             counter.Reason,
+		"offer_reason":       counter.Reason,
+		"name":               product.Name,
+		"category":           product.Category,
+		"stock":              product.Stock,
+		"warranty_years":     product.WarrantyYears,
+		"trust_score":        product.TrustScore,
+		"combo_with":         product.ComboWith,
+		"combo_discount_pct": product.ComboDiscountPct,
 	}, nil
 }
 

@@ -53,9 +53,24 @@ type decisionMaker interface {
 	Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error)
 }
 
+type reasoningAuditor interface {
+	RecordReasoningDecision(context.Context, int64, buyerreasoning.Input, buyerreasoning.Decision) error
+}
+
+type accountFactsReader interface {
+	AccountForTelegram(context.Context, int64) (buyer.Account, error)
+}
+
+type productFactsReader interface {
+	Get(context.Context, string) (catalog.Product, error)
+}
+
 type commandServices struct {
 	negotiations negotiator
 	reasoning    decisionMaker
+	audit        reasoningAuditor
+	accounts     accountFactsReader
+	catalog      productFactsReader
 }
 
 func main() {
@@ -163,7 +178,7 @@ func main() {
 				continue
 			}
 			if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService}, update.Message); err != nil {
+				if err := handleMessage(pollContext, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, update.Message); err != nil {
 					logger.Error("telegram message handling failed", "error", err)
 					continue
 				}
@@ -247,7 +262,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if err != nil {
 			return "Merchant negotiation could not be started.", nil
 		}
-		return fmt.Sprintf("Merchant counter offer: INR %.2f for %d unit(s). Session: %s. Use /accept %s or /decline %s.", float64(proposal.FinalAmountPaise)/100, proposal.Quantity, proposal.SessionID, proposal.SessionID, proposal.SessionID), nil
+		return fmt.Sprintf("Merchant counter offer: INR %.2f for %d unit(s). Reason: %s. Session: %s. Use /accept %s or /decline %s.", float64(proposal.FinalAmountPaise)/100, proposal.Quantity, proposal.Reason, proposal.SessionID, proposal.SessionID, proposal.SessionID), nil
 	case "/accept", "/decline":
 		if negotiations == nil {
 			return "Merchant negotiation is unavailable.", nil
@@ -322,7 +337,7 @@ func shopWithReasoning(ctx context.Context, purchases purchaser, services comman
 	if len(command) != 4 {
 		return "Usage: /shop PRODUCT_ID QUANTITY MAX_PAISE", nil
 	}
-	if services.negotiations == nil || services.reasoning == nil {
+	if services.negotiations == nil || services.reasoning == nil || services.audit == nil || services.accounts == nil || services.catalog == nil {
 		return "Shopping reasoning is not configured.", nil
 	}
 	quantity, err := strconv.Atoi(command[2])
@@ -337,12 +352,37 @@ func shopWithReasoning(ctx context.Context, purchases purchaser, services comman
 	if err != nil {
 		return "Merchant offer unavailable.", err
 	}
-	decision, err := services.reasoning.Decide(ctx, buyerreasoning.Input{ProductID: proposal.ProductID, Quantity: proposal.Quantity, PricePaise: proposal.FinalAmountPaise, TotalPaise: proposal.FinalAmountPaise, SpendLimitPaise: limit})
+	product, err := services.catalog.Get(ctx, proposal.ProductID)
+	if err != nil {
+		return "Catalog facts unavailable.", err
+	}
+	account, err := services.accounts.AccountForTelegram(ctx, telegramID)
+	if err != nil {
+		return "Shopping account unavailable.", err
+	}
+	input := buyerreasoning.Input{
+		Request: strings.Join(command[1:], " "), ProductID: proposal.ProductID,
+		ProductName: product.Name, Category: product.Category, Quantity: proposal.Quantity,
+		Stock: product.Stock, WarrantyYears: product.WarrantyYears, TrustScore: product.TrustScore,
+		ComboWith: stringValue(product.ComboWith), ComboDiscountPct: product.ComboDiscountPct,
+		OfferReason:     proposal.Reason,
+		BaseAmountPaise: proposal.BaseAmountPaise, FinalAmountPaise: proposal.FinalAmountPaise,
+		PricePaise:  product.PricePaise,
+		WalletPaise: account.WalletBalancePaise, TotalPaise: proposal.FinalAmountPaise,
+		SpendLimitPaise: account.SpendLimitPaise,
+	}
+	if input.SpendLimitPaise <= 0 || input.SpendLimitPaise > limit {
+		input.SpendLimitPaise = limit
+	}
+	decision, err := services.reasoning.Decide(ctx, input)
 	if err != nil {
 		return "Shopping decision failed.", err
 	}
+	if err := services.audit.RecordReasoningDecision(ctx, telegramID, input, decision); err != nil {
+		return "Shopping decision could not be audited.", err
+	}
 	if decision.Action != buyerreasoning.ActionBuy {
-		return fmt.Sprintf("Human confirmation required before buying %s for INR %.2f.", proposal.ProductID, float64(proposal.FinalAmountPaise)/100), nil
+		return fmt.Sprintf("Shopping decision: %s. %s", decision.Action, decision.Rationale), nil
 	}
 	result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: proposal.ProductID, Quantity: proposal.Quantity, BaseAmountPaise: proposal.BaseAmountPaise, FinalAmountPaise: proposal.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:shop:%d:%d", telegramID, messageID)})
 	if err != nil {
@@ -354,5 +394,12 @@ func shopWithReasoning(ctx context.Context, purchases purchaser, services comman
 	if !result.Fulfilled {
 		return "Purchase was not fulfilled.", nil
 	}
-	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Audit order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.RazorpayOrderID), nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
