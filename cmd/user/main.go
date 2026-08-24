@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -193,7 +194,69 @@ func main() {
 	}
 }
 
+type loggingLinker struct{ inner linkRedeemer }
+
+func (l loggingLinker) Redeem(ctx context.Context, token string, telegramID int64) (string, error) {
+	result, err := l.inner.Redeem(ctx, token, telegramID)
+	if err != nil {
+		log.Printf("link error: %v", err)
+	}
+	return result, err
+}
+
+type loggingPurchaser struct{ inner purchaser }
+
+func (p loggingPurchaser) Purchase(ctx context.Context, request buyer.PurchaseRequest) (buyer.PurchaseResult, error) {
+	result, err := p.inner.Purchase(ctx, request)
+	if err != nil {
+		log.Printf("purchase error: %v", err)
+	}
+	return result, err
+}
+
+type loggingRefunder struct{ inner refunder }
+
+func (r loggingRefunder) Refund(ctx context.Context, request buyer.RefundRequest) (buyer.RefundResult, error) {
+	result, err := r.inner.Refund(ctx, request)
+	if err != nil {
+		log.Printf("refund error: %v", err)
+	}
+	return result, err
+}
+
+type loggingNegotiator struct{ inner negotiator }
+
+func (n loggingNegotiator) Propose(ctx context.Context, productID string, quantity int) (negotiationclient.Proposal, error) {
+	result, err := n.inner.Propose(ctx, productID, quantity)
+	if err != nil {
+		log.Printf("negotiation propose error: %v", err)
+	}
+	return result, err
+}
+
+func (n loggingNegotiator) Accept(ctx context.Context, sessionID string) (negotiationclient.Resolution, error) {
+	result, err := n.inner.Accept(ctx, sessionID)
+	if err != nil {
+		log.Printf("negotiation accept error: %v", err)
+	}
+	return result, err
+}
+
+func (n loggingNegotiator) Decline(ctx context.Context, sessionID, reason string) (negotiationclient.Resolution, error) {
+	result, err := n.inner.Decline(ctx, sessionID, reason)
+	if err != nil {
+		log.Printf("negotiation decline error: %v", err)
+	}
+	return result, err
+}
+
 func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, services commandServices, message *telegram.Message) error {
+	linker = loggingLinker{inner: linker}
+	purchases = loggingPurchaser{inner: purchases}
+	refunds = loggingRefunder{inner: refunds}
+	if services.negotiations != nil {
+		services.negotiations = loggingNegotiator{inner: services.negotiations}
+	}
 	command := strings.Fields(strings.TrimSpace(message.Text))
 	if len(command) == 0 {
 		return nil
