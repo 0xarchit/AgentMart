@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +77,7 @@ func (s *RedisSessionStore) GetValue(ctx context.Context, key string) (string, b
 func (s *RedisSessionStore) PutValue(ctx context.Context, key, value string, ttl time.Duration) error {
 	command := []any{"SET", key, value}
 	if ttl > 0 {
-		command = append(command, "EX", strconv.Itoa(int(ttl.Seconds())))
+		command = append(command, "EX", int(ttl.Seconds()))
 	}
 	_, err := s.command(ctx, command)
 	return err
@@ -163,7 +162,7 @@ func (s *RedisSessionStore) Put(ctx context.Context, id string, session Session)
 	if err != nil {
 		return err
 	}
-	_, err = s.command(ctx, []any{"SET", sessionKey(id), string(encoded), "EX", strconv.Itoa(int(s.ttl.Seconds()))})
+	_, err = s.command(ctx, []any{"SET", sessionKey(id), string(encoded), "EX", int(s.ttl.Seconds())})
 	return err
 }
 
