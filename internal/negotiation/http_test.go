@@ -41,11 +41,13 @@ func TestNegotiationHTTPFlow(t *testing.T) {
 		SessionID        string `json:"session_id"`
 		BaseAmountPaise  int64  `json:"base_amount_paise"`
 		FinalAmountPaise int64  `json:"final_amount_paise"`
+		WarrantyYears    int    `json:"warranty_years"`
+		TrustScore       int    `json:"trust_score"`
 	}
 	if err := json.NewDecoder(propose.Body).Decode(&counter); err != nil {
 		t.Fatalf("decode counter: %v", err)
 	}
-	if counter.SessionID == "" || counter.BaseAmountPaise != 100 || counter.FinalAmountPaise != 10100 {
+	if counter.SessionID == "" || counter.BaseAmountPaise != 100 || counter.FinalAmountPaise != 10100 || counter.WarrantyYears != 1 {
 		t.Fatalf("unexpected counter: %+v", counter)
 	}
 

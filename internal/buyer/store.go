@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"agentmart/internal/gate"
+	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
 )
 
@@ -57,5 +58,25 @@ func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) 
 	}
 	payload := map[string]any{"product_id": decision.Request.ProductID, "quantity": decision.Request.Quantity, "amount_paise": decision.Request.FinalAmountPaise}
 	row := map[string]any{"account_id": decision.Request.AccountID, "actor": "gate", "action": action, "reason": decision.Reason, "payload": payload}
+	return s.db.Insert(ctx, "audit_log", row, nil)
+}
+
+// RecordReasoningDecision persists the buyer's bounded decision and rationale.
+func (s *Store) RecordReasoningDecision(ctx context.Context, telegramID int64, input buyerreasoning.Input, decision buyerreasoning.Decision) error {
+	account, err := s.AccountForTelegram(ctx, telegramID)
+	if err != nil {
+		return err
+	}
+	row := map[string]any{
+		"account_id": account.ID,
+		"actor":      "buyer_agent",
+		"action":     "reasoning_decision",
+		"reason":     decision.Rationale,
+		"payload": map[string]any{
+			"action": decision.Action, "product_id": decision.ProductID,
+			"quantity": decision.Quantity, "max_spend_paise": decision.MaxSpendPaise,
+			"input": input,
+		},
+	}
 	return s.db.Insert(ctx, "audit_log", row, nil)
 }

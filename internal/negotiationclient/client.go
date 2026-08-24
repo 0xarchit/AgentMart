@@ -69,6 +69,14 @@ type Proposal struct {
 	BaseAmountPaise  int64  `json:"base_amount_paise"`
 	FinalAmountPaise int64  `json:"final_amount_paise"`
 	Reason           string `json:"reason"`
+	OfferReason      string `json:"offer_reason,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Category         string `json:"category,omitempty"`
+	Stock            int    `json:"stock,omitempty"`
+	WarrantyYears    int    `json:"warranty_years,omitempty"`
+	TrustScore       int    `json:"trust_score,omitempty"`
+	ComboWith        string `json:"combo_with,omitempty"`
+	ComboDiscountPct int    `json:"combo_discount_pct,omitempty"`
 }
 
 // Resolution is the final merchant negotiation state.
