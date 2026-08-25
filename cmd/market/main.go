@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,9 +43,12 @@ func main() {
 	if addr == "" {
 		addr = ":8081"
 	}
-	agentEndpoint := os.Getenv("MARKET_AGENT_CARD_URL")
+	agentEndpoint := strings.TrimSuffix(os.Getenv("MARKET_AGENT_CARD_URL"), "/.well-known/agent-card.json")
 	if agentEndpoint == "" {
 		agentEndpoint = "http://localhost" + addr + "/a2a/"
+	}
+	if !strings.HasSuffix(agentEndpoint, "/") {
+		agentEndpoint += "/"
 	}
 	merchantNegotiator, nerr := merchantagent.NewNegotiator(ctx, buyerreasoning.FromEnv())
 	if nerr != nil {

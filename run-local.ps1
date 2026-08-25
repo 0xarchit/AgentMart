@@ -20,7 +20,7 @@ Import-DotEnv (Join-Path $root ".env")
 
 $market = if ($env:MARKET_HTTP_PORT) { $env:MARKET_HTTP_PORT } else { "8081" }
 $env:MARKET_ADDR = ":$market"
-$env:MARKET_AGENT_CARD_URL = "http://localhost:$market/a2a/.well-known/agent-card.json"
+$env:MARKET_AGENT_CARD_URL = "http://localhost:$market/a2a/"
 $env:USER_MARKET_MCP_ENDPOINT = "http://localhost:$market/mcp"
 $env:USER_MARKET_A2A_ENDPOINT = "http://localhost:$market/a2a/.well-known/agent-card.json"
 $env:NEXT_PUBLIC_APP_URL = if ($env:NEXT_PUBLIC_APP_URL) { $env:NEXT_PUBLIC_APP_URL } else { "http://localhost:3000" }
