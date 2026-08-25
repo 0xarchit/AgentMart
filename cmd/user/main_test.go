@@ -4,12 +4,16 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/catalog"
 	"agentmart/internal/negotiationclient"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/telegram"
 )
 
 type fakeLinker struct{ err error }
@@ -21,6 +25,10 @@ func (f fakeLinker) Redeem(context.Context, string, int64) (string, error) {
 type fakePurchaser struct {
 	result buyer.PurchaseResult
 	err    error
+}
+
+func (f fakePurchaser) ResolveApproval(context.Context, int64, string, string) (buyer.PurchaseResult, error) {
+	return f.result, f.err
 }
 
 type fakeRefunder struct {
@@ -115,6 +123,40 @@ func TestBuyCommandApproval(t *testing.T) {
 	if got != "Human approval required for INR 600.00. Approval token: token" {
 		t.Fatalf("response = %q", got)
 	}
+}
+
+func TestHandleMessageApprovalResume(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	defer server.Close()
+	client, err := telegram.NewClient("token", &http.Client{Transport: rewriteTelegramTransport{base: server.URL, next: server.Client().Transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &telegram.Message{MessageID: 7, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "/approve approval-token"}
+	err = handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 1250, RazorpayOrderID: "order"}}, fakeRefunder{}, commandServices{}, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+type rewriteTelegramTransport struct {
+	base string
+	next http.RoundTripper
+}
+
+func (t rewriteTelegramTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	u := *r.URL
+	u.Scheme = "http"
+	u.Host = strings.TrimPrefix(t.base, "http://")
+	r2 := r.Clone(r.Context())
+	r2.URL = &u
+	return t.next.RoundTrip(r2)
 }
 
 func TestNegotiationCommands(t *testing.T) {

@@ -214,6 +214,14 @@ func (p loggingPurchaser) Purchase(ctx context.Context, request buyer.PurchaseRe
 	return result, err
 }
 
+func (p loggingPurchaser) ResolveApproval(ctx context.Context, telegramID int64, token, decision string) (buyer.PurchaseResult, error) {
+	result, err := p.inner.(approvalResolver).ResolveApproval(ctx, telegramID, token, decision)
+	if err != nil {
+		log.Printf("approval error: %v", err)
+	}
+	return result, err
+}
+
 type loggingRefunder struct{ inner refunder }
 
 func (r loggingRefunder) Refund(ctx context.Context, request buyer.RefundRequest) (buyer.RefundResult, error) {
