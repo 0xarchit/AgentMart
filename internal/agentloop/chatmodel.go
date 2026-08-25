@@ -23,7 +23,7 @@ import (
 
 // modelHTTPTimeout bounds each provider call so one hung endpoint cannot eat
 // the whole run budget.
-const modelHTTPTimeout = 30 * time.Second
+const modelHTTPTimeout = 120 * time.Second
 
 // ChatModel is a minimal chat-completions model.LLM with function calling.
 // Non-streaming by design: one complete response per GenerateContent call.
@@ -112,9 +112,21 @@ func (m *ChatModel) GenerateContent(ctx context.Context, req *model.LLMRequest, 
 		httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
 		resp, err := m.http.Do(httpReq)
-		if err != nil {
-			yield(nil, fmt.Errorf("chat completions call failed: %w", err))
-			return
+		if err != nil || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			status := "transport error"
+			if err == nil {
+				status = fmt.Sprintf("HTTP %d", resp.StatusCode)
+				resp.Body.Close()
+			}
+			// Free-tier providers hiccup constantly; one bounded retry.
+			time.Sleep(2 * time.Second)
+			retryReq := httpReq.Clone(ctx)
+			resp2, err2 := m.http.Do(retryReq)
+			if err2 != nil {
+				yield(nil, fmt.Errorf("chat completions call failed twice (%s then %v)", status, err2))
+				return
+			}
+			resp = resp2
 		}
 		defer resp.Body.Close()
 		var decoded ccResponse

@@ -43,12 +43,21 @@ func New(ctx context.Context, endpoint string, httpClient *http.Client) (*Client
 	return &Client{mu: sync.Mutex{}, endpoint: endpoint, http: httpClient, session: session}, nil
 }
 
-// Close releases the merchant catalog session.
+// Close releases the merchant catalog session. Shutdown-order races (market
+// already gone) are treated as success — nothing to release.
 func (c *Client) Close() error {
 	if c == nil || c.session == nil {
 		return nil
 	}
-	return c.session.Close()
+	if err := c.session.Close(); err != nil {
+		var msg string
+		if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "closing") {
+			_ = msg
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // Search returns merchant products matching the supplied filters.

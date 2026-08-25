@@ -82,7 +82,7 @@ func fallbackRun(ctx context.Context, tools Tools, state *runState) {
 	state.quantity = proposal.Quantity
 	state.sessionID = proposal.SessionID
 	state.offers[proposal.SessionID] = proposal
-	state.transcript = append(state.transcript, proposal.Transcript...)
+	state.transcript = mergeTranscript(state.transcript, proposal.Transcript)
 
 	final := proposal.FinalAmountPaise
 	base := proposal.BaseAmountPaise
@@ -111,7 +111,7 @@ func fallbackRun(ctx context.Context, tools Tools, state *runState) {
 			state.rationale = fmt.Sprintf("A2A accept failed: %v", err)
 			return false
 		}
-		state.transcript = append(state.transcript, resolution.Transcript...)
+		state.transcript = mergeTranscript(state.transcript, resolution.Transcript)
 		state.accepted = true
 		state.finalPaise = resolution.FinalAmountPaise
 		state.step(fmt.Sprintf("accepted at INR %.2f", float64(resolution.FinalAmountPaise)/100))
@@ -132,7 +132,7 @@ func fallbackRun(ctx context.Context, tools Tools, state *runState) {
 			state.human = &humanRequest{Reason: state.rationale, AmountPaise: final, SessionID: proposal.SessionID}
 			return
 		}
-		state.transcript = append(state.transcript, resolution.Transcript...)
+		state.transcript = mergeTranscript(state.transcript, resolution.Transcript)
 		switch resolution.Status {
 		case "accepted":
 			state.accepted = true

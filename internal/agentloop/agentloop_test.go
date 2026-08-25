@@ -109,7 +109,10 @@ func TestDeterministicBuysWithinBand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := service.Run(t.Context(), "buy me a trimmer", wallet(300000))
+	result, runErr := service.Run(t.Context(), "buy me a trimmer", wallet(300000))
+	if runErr != nil {
+		t.Fatalf("run: %v", runErr)
+	}
 	if result.Action != ActionBuy {
 		t.Fatalf("action = %s rationale = %s steps = %v", result.Action, result.Rationale, result.Steps)
 	}
@@ -124,7 +127,10 @@ func TestDeterministicBuysWithinBand(t *testing.T) {
 func TestDeterministicDeclinesOverWallet(t *testing.T) {
 	fakes := fixtureTools()
 	service, _ := New(t.Context(), buyerreasoning.Config{}, fakes.tools())
-	result := service.Run(t.Context(), "buy me a trimmer", wallet(100000))
+	result, runErr := service.Run(t.Context(), "buy me a trimmer", wallet(100000))
+	if runErr != nil {
+		t.Fatalf("run: %v", runErr)
+	}
 	if result.Action != ActionDecline {
 		t.Fatalf("action = %s (%s)", result.Action, result.Rationale)
 	}
@@ -135,7 +141,10 @@ func TestDeterministicAsksHumanOverPremiumBand(t *testing.T) {
 	fakes.offers.FinalAmountPaise = 400000 // 400000 vs base 240000 = 66% premium
 	fakes.getByID[trimmerID] = catalog.Product{ID: trimmerID, Name: "TrimPro Shield", PricePaise: 240000, Stock: 5}
 	service, _ := New(t.Context(), buyerreasoning.Config{}, fakes.tools())
-	result := service.Run(t.Context(), "buy me a trimmer", wallet(500000))
+	result, runErr := service.Run(t.Context(), "buy me a trimmer", wallet(500000))
+	if runErr != nil {
+		t.Fatalf("run: %v", runErr)
+	}
 	if result.Action != ActionAskHuman || !result.NeedsApproval {
 		t.Fatalf("action = %s needsApproval = %v (%s)", result.Action, result.NeedsApproval, result.Rationale)
 	}
@@ -148,7 +157,10 @@ func TestDeterministicDeclinesWithoutMatch(t *testing.T) {
 	fakes := fixtureTools()
 	fakes.search = nil
 	service, _ := New(t.Context(), buyerreasoning.Config{}, fakes.tools())
-	result := service.Run(t.Context(), "buy me a spaceship", wallet(999999))
+	result, runErr := service.Run(t.Context(), "buy me a spaceship", wallet(999999))
+	if runErr != nil {
+		t.Fatalf("run: %v", runErr)
+	}
 	if result.Action != ActionDecline || !strings.Contains(result.Rationale, "no matching") {
 		t.Fatalf("result = %+v", result)
 	}

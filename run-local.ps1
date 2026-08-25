@@ -93,7 +93,7 @@ try {
   Push-Location web
   try { npm run dev } finally { Pop-Location }
 } finally {
-  foreach ($process in $processes) {
-    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+  for ($i = $processes.Count - 1; $i -ge 0; $i--) {
+    if (-not $processes[$i].HasExited) { Stop-Process -Id $processes[$i].Id -Force }
   }
 }

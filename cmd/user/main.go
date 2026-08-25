@@ -339,10 +339,15 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
-	result := services.loop.Run(ctx, message.Text, agentloop.WalletFacts{
+	result, runErr := services.loop.Run(ctx, message.Text, agentloop.WalletFacts{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 	})
+	if runErr != nil {
+		// Strict mode: the human sees the real failure instead of a silent
+		// scripted purchase.
+		return client.SendMessage(ctx, message.Chat.ID, "Agent could not complete the request: "+runErr.Error())
+	}
 	if len(result.Transcript) > 0 && result.Action != agentloop.ActionDecline || len(result.Transcript) >= 2 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
 			log.Printf("send negotiation transcript failed: %v", docErr)

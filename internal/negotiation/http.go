@@ -325,6 +325,7 @@ func (s *Server) counter(ctx context.Context, request negotiationRequest) (map[s
 		"final_amount_paise": amount,
 		"reason":             reason,
 		"rounds_left":        MaxRounds - session.Round,
+		"transcript":         session.Transcript,
 	}, nil
 }
 

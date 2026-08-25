@@ -24,10 +24,12 @@ import (
 // price the agent may accept without asking the human.
 const AutoBuyPremiumMaxPct = 30
 
-// Run budgets. Breaching any of them falls back to deterministic policy.
+// Run budgets. In strict mode an LLM breach surfaces as a visible error —
+// there is no silent scripted fallback once a model is configured.
 const (
 	maxToolCalls     = 6
-	runDeadline      = 60 * time.Second
+	maxModelEvents   = 24
+	runDeadline      = 180 * time.Second
 	fallbackDeadline = 15 * time.Second
 	settleDeadline   = 10 * time.Second
 )
@@ -121,26 +123,51 @@ func New(ctx context.Context, cfg buyerreasoning.Config, tools Tools) (*Service,
 
 const instruction = `You are AgentMart's buying agent acting for one user. Resolve their request using the tools: search_catalog to find matching products, get_product for details, get_offers for the merchant quote including any combo bundle, and counter_offer at most once when the quote clearly exceeds fair value. Facts you receive include wallet_balance_paise, spend_limit_paise, budget_paise, and premium_band_pct. Rules you cannot change: prefer totals within budget_paise (or spend_limit_paise when no budget was stated); never exceed wallet_balance_paise; when the best total exceeds the premium band above the main product list price, call request_human instead of deciding; otherwise call finish with action "buy" or "decline", the chosen session_id, product_id, quantity, and final_paise exactly as returned by get_offers or counter_offer. Never invent prices, products, or payments.`
 
-// Run resolves one natural-language request into a validated outcome.
-func (s *Service) Run(parent context.Context, request string, wallet WalletFacts) LoopResult {
-	llmCtx, cancelLLM := context.WithTimeout(parent, runDeadline)
+// Run resolves one natural-language request through the live agent
+// conversation. When an LLM is configured there is NO silent scripted
+// fallback: failures return an error so the human sees exactly why the
+// agent could not act. The deterministic engine exists only for fully
+// offline setups (no OPENAI_API_KEY / ADK_MODEL_NAME).
+func (s *Service) Run(parent context.Context, request string, wallet WalletFacts) (LoopResult, error) {
 	state := newState(wallet, strings.TrimSpace(request))
 
 	if s.runner == nil {
-		fallbackRun(llmCtx, s.tools, state)
-	} else if err := s.llmRun(llmCtx, state); err != nil {
-		cancelLLM()
-		state.step(fmt.Sprintf("LLM loop failed (%v); using deterministic policy", err))
-		// The LLM budget is spent (its context may be cancelled), but the
-		// fallback still deserves a fresh slice of time to do its job.
-		fallbackCtx, cancelFallback := context.WithTimeout(context.Background(), fallbackDeadline)
-		defer cancelFallback()
+		fallbackCtx, cancel := context.WithTimeout(parent, fallbackDeadline)
+		defer cancel()
 		fallbackRun(fallbackCtx, s.tools, state)
+		result := s.settle(settleContext(), state)
+		return result, nil
 	}
-	cancelLLM()
+
+	llmCtx, cancelLLM := context.WithTimeout(parent, runDeadline)
+	defer cancelLLM()
+	if err := s.llmRun(llmCtx, state); err != nil {
+		state.step(fmt.Sprintf("agent loop failed: %v", err))
+		result := s.settle(noTimeoutContext(), state)
+		return result, fmt.Errorf("%s | last trace: %s", err, strings.Join(state.steps[len(state.steps)-min(3, len(state.steps)):], " || "))
+	}
 	settleCtx, cancelSettle := context.WithTimeout(context.Background(), settleDeadline)
 	defer cancelSettle()
-	return s.settle(settleCtx, state)
+	result := s.settle(settleCtx, state)
+	if !state.accepted && state.sessionID != "" && result.Action == ActionBuy {
+		// settle self-heals acceptance; reflect any downgrade here.
+	}
+	return result, nil
+}
+
+func settleContext() context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), settleDeadline)
+	_ = cancel
+	return ctx
+}
+
+func noTimeoutContext() context.Context { return context.Background() }
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // settle re-verifies the candidate against authoritative facts and applies the

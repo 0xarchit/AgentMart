@@ -52,3 +52,12 @@ func (s *runState) step(message string) {
 }
 
 func (s *runState) doneTool() {}
+
+// mergeTranscript adopts the server's full-session snapshot when present;
+// empty snapshots never wipe turns already collected.
+func mergeTranscript(current, incoming []negotiation.Turn) []negotiation.Turn {
+	if len(incoming) > 0 {
+		return incoming
+	}
+	return current
+}

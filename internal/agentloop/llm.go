@@ -71,7 +71,7 @@ func (s *Service) modelTools() []tool.Tool {
 				return offersOutput{}, err
 			}
 			st.offers[proposal.SessionID] = proposal
-			st.transcript = append(st.transcript, proposal.Transcript...)
+			st.transcript = mergeTranscript(st.transcript, proposal.Transcript)
 			st.productID = proposal.ProductID
 			st.quantity = proposal.Quantity
 			st.sessionID = proposal.SessionID
@@ -117,7 +117,7 @@ func (s *Service) modelTools() []tool.Tool {
 			if resolution.FinalAmountPaise > 0 {
 				st.finalPaise = resolution.FinalAmountPaise
 			}
-			st.transcript = append(st.transcript, resolution.Transcript...)
+			st.transcript = mergeTranscript(st.transcript, resolution.Transcript)
 			st.step(fmt.Sprintf("accepted at INR %.2f", float64(resolution.FinalAmountPaise)/100))
 			return counterOutput{Status: string(resolution.Status), FinalPaise: resolution.FinalAmountPaise}, nil
 		})
@@ -224,9 +224,14 @@ func (s *Service) llmRun(ctx context.Context, state *runState) error {
 		return fmt.Errorf("encode loop facts: %w", err)
 	}
 	sessionID := fmt.Sprintf("buyer-loop-%d", s.sessions.Add(1))
+	events := 0
 	for event, runErr := range s.runner.Run(ctx, "buyer", sessionID, genai.NewContentFromText(string(payload), genai.RoleUser), agent.RunConfig{}) {
 		if runErr != nil {
-			return fmt.Errorf("runner error: %w", runErr)
+			return fmt.Errorf("runner error after %d events: %w", events, runErr)
+		}
+		events++
+		if events > maxModelEvents {
+			return fmt.Errorf("model exceeded %d events without finishing", maxModelEvents)
 		}
 		if event != nil && event.Content != nil {
 			for _, part := range event.Content.Parts {
