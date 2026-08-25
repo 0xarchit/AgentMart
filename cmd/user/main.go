@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"agentmart/internal/agentloop"
 	"agentmart/internal/buyer"
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
@@ -49,6 +50,7 @@ type negotiator interface {
 	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
 	Accept(context.Context, string) (negotiationclient.Resolution, error)
 	Decline(context.Context, string, string) (negotiationclient.Resolution, error)
+	Counter(context.Context, string, int64) (negotiationclient.Resolution, error)
 }
 
 type decisionMaker interface {
@@ -73,6 +75,7 @@ type commandServices struct {
 	audit        reasoningAuditor
 	accounts     accountFactsReader
 	catalog      productFactsReader
+	loop         *agentloop.Service
 }
 
 func main() {
@@ -92,6 +95,7 @@ func main() {
 	linker := linking.NewService(db)
 	var catalogReader interface {
 		Get(context.Context, string) (catalog.Product, error)
+		Search(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
 	}
 	var closeCatalog func() error
 	marketEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_MCP_ENDPOINT"))
@@ -156,6 +160,26 @@ func main() {
 		}()
 		negotiationService = merchantNegotiation
 	}
+	var loopService *agentloop.Service
+	if negotiationService != nil {
+		loopTools := agentloop.Tools{
+			Search: func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error) {
+				return catalogReader.Search(ctx, catalog.SearchRequest{Query: query, MaxPricePaise: maxPaise})
+			},
+			Get: func(ctx context.Context, id string) (catalog.Product, error) {
+				return catalogReader.Get(ctx, id)
+			},
+			Offers: negotiationService.Propose,
+			Counter: func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error) {
+				return negotiationService.Counter(ctx, sessionID, paise)
+			},
+		}
+		loopService, err = agentloop.New(ctx, buyerreasoning.FromEnv(), loopTools)
+		if err != nil {
+			logger.Error("buyer agent loop configuration failed", "error", err)
+			return
+		}
+	}
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
@@ -186,7 +210,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, "We could not process that request. It was recorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -263,6 +287,14 @@ func (n loggingNegotiator) Decline(ctx context.Context, sessionID, reason string
 	return result, err
 }
 
+func (n loggingNegotiator) Counter(ctx context.Context, sessionID string, amountPaise int64) (negotiationclient.Resolution, error) {
+	result, err := n.inner.Counter(ctx, sessionID, amountPaise)
+	if err != nil {
+		log.Printf("negotiation counter error: %v", err)
+	}
+	return result, err
+}
+
 func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, services commandServices, message *telegram.Message) error {
 	linker = loggingLinker{inner: linker}
 	purchases = loggingPurchaser{inner: purchases}
@@ -270,7 +302,11 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 	if services.negotiations != nil {
 		services.negotiations = loggingNegotiator{inner: services.negotiations}
 	}
-	command := strings.Fields(strings.TrimSpace(message.Text))
+	text := strings.TrimSpace(message.Text)
+	if text != "" && !strings.HasPrefix(text, "/") {
+		return conversationalBuy(ctx, client, purchases, services, message)
+	}
+	command := strings.Fields(text)
 	if len(command) == 0 {
 		return nil
 	}
@@ -284,6 +320,90 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 		}
 	}
 	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
+}
+
+// conversationalBuy routes free-text requests ("buy me a trimmer under 2500")
+// through the bounded agent loop, then executes the settled decision through
+// the same Gate-guarded purchase path as every other command.
+func conversationalBuy(ctx context.Context, client *telegram.Client, purchases purchaser, services commandServices, message *telegram.Message) error {
+	if services.loop == nil || services.accounts == nil || services.catalog == nil || services.negotiations == nil {
+		return client.SendMessage(ctx, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.")
+	}
+	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
+	if accountErr != nil {
+		log.Printf("agent loop account lookup failed: %v", accountErr)
+		return client.SendMessage(ctx, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.")
+	}
+	result := services.loop.Run(ctx, message.Text, agentloop.WalletFacts{
+		BalancePaise:    account.WalletBalancePaise,
+		SpendLimitPaise: account.SpendLimitPaise,
+	})
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Agent decision: %s\n%s", result.Action, result.Rationale)
+	for i, step := range result.Steps {
+		if i >= len(result.Steps)-3 && i < len(result.Steps) {
+			fmt.Fprintf(&summary, "\n- %s", step)
+		}
+	}
+	if result.Action == agentloop.ActionDecline {
+		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+	}
+	baseAmount := result.Product.PricePaise * int64(result.Quantity)
+	purchase, err := purchases.Purchase(ctx, buyer.PurchaseRequest{
+		TelegramID:       message.From.ID,
+		ProductID:        result.Product.ID,
+		Quantity:         result.Quantity,
+		BaseAmountPaise:  baseAmount,
+		FinalAmountPaise: result.FinalPaise,
+		IdempotencyKey:   fmt.Sprintf("telegram:nl:%d:%d", message.From.ID, message.MessageID),
+	})
+	if err != nil {
+		return fmt.Errorf("agentic purchase failed: %w", err)
+	}
+	if purchase.ApprovalRequired {
+		approval := fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(purchase.AmountPaise)/100, purchase.ApprovalToken)
+		approval += "\n\n" + summary.String()
+		if len(result.Transcript) > 0 {
+			_ = client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript))
+		}
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, replyMarkupForResponse(approval))
+	}
+	if !purchase.Fulfilled {
+		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
+		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+	}
+	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(purchase.AmountPaise)/100, purchase.RazorpayOrderID))
+	if len(result.Transcript) > 0 {
+		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
+			log.Printf("send negotiation transcript failed: %v", docErr)
+		}
+	}
+	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), replyMarkupForResponse(summary.String()))
+}
+
+func short(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func transcriptFileName(sessionID string) string {
+	return fmt.Sprintf("negotiation_%s.txt", short(sessionID))
+}
+
+func renderTranscript(turns []negotiation.Turn) string {
+	var builder strings.Builder
+	builder.WriteString("AgentMart A2A negotiation transcript\n")
+	for _, turn := range turns {
+		builder.WriteString(turn.At.Format("15:04:05"))
+		builder.WriteString(" [")
+		builder.WriteString(turn.Actor)
+		builder.WriteString("] ")
+		builder.WriteString(turn.Message)
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }
 
 func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
@@ -318,7 +438,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 	negotiations := services.negotiations
 	switch command[0] {
 	case "/start":
-		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
+		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON.", nil
 	case "/link":
 		if len(command) != 2 {
 			return "Use /link TOKEN after generating a token in the dashboard.", nil
@@ -428,7 +548,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		}
 		return fmt.Sprintf("Refund approved via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	default:
-		return "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
+		return "Use plain sentences like 'buy me a trimmer under 2500', or /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, /shop, or /refund ORDER_ID REASON.", nil
 	}
 }
 

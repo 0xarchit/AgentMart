@@ -258,6 +258,11 @@ func (s *Server) counter(ctx context.Context, request negotiationRequest) (map[s
 	if ferr != nil {
 		return nil, ferr
 	}
+	// The fulfillment contract models revenue growth only (final >= base), so
+	// the effective floor is the higher of cost and the proposal's list total.
+	if session.Proposal.BaseAmountPaise > floorPaise {
+		floorPaise = session.Proposal.BaseAmountPaise
+	}
 	ask := session.Counter.FinalAmountPaise
 	session.RecordBuyer(fmt.Sprintf("Counters INR %.2f", float64(request.CounterAmountPaise)/100))
 

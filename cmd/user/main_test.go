@@ -81,6 +81,10 @@ func (fakeNegotiator) Decline(context.Context, string, string) (negotiationclien
 	return negotiationclient.Resolution{SessionID: "session", Status: "declined"}, nil
 }
 
+func (fakeNegotiator) Counter(context.Context, string, int64) (negotiationclient.Resolution, error) {
+	return negotiationclient.Resolution{SessionID: "session", Status: "accepted", FinalAmountPaise: 100}, nil
+}
+
 func (f fakeRefunder) Refund(context.Context, buyer.RefundRequest) (buyer.RefundResult, error) {
 	return f.result, f.err
 }
@@ -93,7 +97,7 @@ func TestResponseForCommand(t *testing.T) {
 	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); got != "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON." {
+	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); !strings.HasPrefix(got, "Use plain sentences") {
 		t.Fatalf("unexpected fallback response: %q", got)
 	}
 }

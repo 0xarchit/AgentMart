@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"agentmart/internal/negotiation"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -81,13 +83,26 @@ type Proposal struct {
 
 // Resolution is the final merchant negotiation state.
 type Resolution struct {
-	SessionID        string `json:"session_id"`
-	Status           string `json:"status"`
-	ProductID        string `json:"product_id"`
-	Quantity         int    `json:"qty"`
-	BaseAmountPaise  int64  `json:"base_amount_paise"`
-	FinalAmountPaise int64  `json:"final_amount_paise"`
-	UpliftPaise      int64  `json:"uplift_paise"`
+	SessionID        string             `json:"session_id"`
+	Status           string             `json:"status"`
+	ProductID        string             `json:"product_id"`
+	Quantity         int                `json:"qty"`
+	BaseAmountPaise  int64              `json:"base_amount_paise"`
+	FinalAmountPaise int64              `json:"final_amount_paise"`
+	UpliftPaise      int64              `json:"uplift_paise"`
+	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
+}
+
+// Counter submits a buyer counter amount against an open session. The merchant
+// may accept (status accepted), re-counter (status countered), or decline.
+func (c *Client) Counter(ctx context.Context, sessionID string, amountPaise int64) (Resolution, error) {
+	payload := map[string]any{"type": "counter", "session_id": sessionID, "counter_amount_paise": amountPaise}
+	if c.a2a != nil {
+		return c.a2aResolution(ctx, payload)
+	}
+	var result Resolution
+	err := c.post(ctx, payload, &result)
+	return result, err
 }
 
 // Propose asks the merchant for a counter offer.

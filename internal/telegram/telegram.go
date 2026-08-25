@@ -2,9 +2,11 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -121,6 +123,44 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, id string) error {
 	}
 	if !response.OK {
 		return fmt.Errorf("telegram answer callback failed: %s", response.Description)
+	}
+	return nil
+}
+
+// SendDocument uploads a small text file (e.g. an A2A negotiation transcript)
+// to the chat via the multipart sendDocument API.
+func (c *Client) SendDocument(ctx context.Context, chatID int64, filename, content string) error {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return fmt.Errorf("write chat_id field: %w", err)
+	}
+	part, err := writer.CreateFormFile("document", filename)
+	if err != nil {
+		return fmt.Errorf("create document form file: %w", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		return fmt.Errorf("write document part: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sendDocument", body)
+	if err != nil {
+		return fmt.Errorf("create sendDocument request: %w", err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := c.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("send document: %w", err)
+	}
+	defer response.Body.Close()
+	var decoded apiResponse[json.RawMessage]
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		return fmt.Errorf("decode sendDocument response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK || !decoded.OK {
+		return fmt.Errorf("telegram sendDocument: %s", decoded.Description)
 	}
 	return nil
 }
