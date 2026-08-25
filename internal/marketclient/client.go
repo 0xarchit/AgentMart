@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"agentmart/internal/catalog"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const reconnectDialTimeout = 5 * time.Second
 
 // Client calls the merchant's read-only catalog tools. The MCP session is
 // long-lived but transparently re-dialed when the market binary restarts or
@@ -119,8 +122,12 @@ func (c *Client) call(ctx context.Context, name string, arguments map[string]any
 	return result, nil
 }
 
-// reconnect drops the dead session and dials a fresh one.
+// reconnect drops the dead session and dials a fresh one on its own short
+// timeout so it works even when the caller's context is already expiring.
 func (c *Client) reconnect(ctx context.Context) error {
+	dialCtx, cancel := context.WithTimeout(context.Background(), reconnectDialTimeout)
+	defer cancel()
+	ctx = dialCtx
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.session != nil {

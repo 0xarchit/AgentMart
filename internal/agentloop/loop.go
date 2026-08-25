@@ -26,8 +26,10 @@ const AutoBuyPremiumMaxPct = 30
 
 // Run budgets. Breaching any of them falls back to deterministic policy.
 const (
-	maxToolCalls = 6
-	runDeadline  = 45 * time.Second
+	maxToolCalls     = 6
+	runDeadline      = 60 * time.Second
+	fallbackDeadline = 15 * time.Second
+	settleDeadline   = 10 * time.Second
 )
 
 // Action is what the supervisor should do after the loop settles.
@@ -118,17 +120,24 @@ const instruction = `You are AgentMart's buying agent acting for one user. Resol
 
 // Run resolves one natural-language request into a validated outcome.
 func (s *Service) Run(parent context.Context, request string, wallet WalletFacts) LoopResult {
-	ctx, cancel := context.WithTimeout(parent, runDeadline)
-	defer cancel()
+	llmCtx, cancelLLM := context.WithTimeout(parent, runDeadline)
 	state := newState(wallet, strings.TrimSpace(request))
 
 	if s.runner == nil {
-		fallbackRun(ctx, s.tools, state)
-	} else if err := s.llmRun(ctx, state); err != nil {
+		fallbackRun(llmCtx, s.tools, state)
+	} else if err := s.llmRun(llmCtx, state); err != nil {
+		cancelLLM()
 		state.step(fmt.Sprintf("LLM loop failed (%v); using deterministic policy", err))
-		fallbackRun(ctx, s.tools, state)
+		// The LLM budget is spent (its context may be cancelled), but the
+		// fallback still deserves a fresh slice of time to do its job.
+		fallbackCtx, cancelFallback := context.WithTimeout(context.Background(), fallbackDeadline)
+		defer cancelFallback()
+		fallbackRun(fallbackCtx, s.tools, state)
 	}
-	return s.settle(ctx, state)
+	cancelLLM()
+	settleCtx, cancelSettle := context.WithTimeout(context.Background(), settleDeadline)
+	defer cancelSettle()
+	return s.settle(settleCtx, state)
 }
 
 // settle re-verifies the candidate against authoritative facts and applies the

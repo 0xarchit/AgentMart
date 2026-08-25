@@ -15,10 +15,15 @@ import (
 	"iter"
 	"net/http"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
+
+// modelHTTPTimeout bounds each provider call so one hung endpoint cannot eat
+// the whole run budget.
+const modelHTTPTimeout = 30 * time.Second
 
 // ChatModel is a minimal chat-completions model.LLM with function calling.
 // Non-streaming by design: one complete response per GenerateContent call.
@@ -31,7 +36,7 @@ type ChatModel struct {
 
 // NewChatModel builds a chat-completions-backed LLM.
 func NewChatModel(name, apiKey, baseURL string) *ChatModel {
-	return &ChatModel{name: name, apiKey: apiKey, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{}}
+	return &ChatModel{name: name, apiKey: apiKey, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: modelHTTPTimeout}}
 }
 
 func (m *ChatModel) Name() string { return m.name }
