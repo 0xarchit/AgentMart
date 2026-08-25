@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"agentmart/internal/agentloop"
 	"agentmart/internal/buyer"
 	"agentmart/internal/catalog"
 	"agentmart/internal/gate"
@@ -25,6 +24,7 @@ import (
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/shopgraph"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
 	"agentmart/internal/wallet"
@@ -75,7 +75,7 @@ type commandServices struct {
 	audit        reasoningAuditor
 	accounts     accountFactsReader
 	catalog      productFactsReader
-	loop         *agentloop.Service
+	loop         *shopgraph.Service
 }
 
 func main() {
@@ -160,9 +160,9 @@ func main() {
 		}()
 		negotiationService = merchantNegotiation
 	}
-	var loopService *agentloop.Service
+	var loopService *shopgraph.Service
 	if negotiationService != nil {
-		loopTools := agentloop.Tools{
+		loopTools := shopgraph.Tools{
 			Search: func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error) {
 				return catalogReader.Search(ctx, catalog.SearchRequest{Query: query, MaxPricePaise: maxPaise})
 			},
@@ -176,7 +176,11 @@ func main() {
 			Accept:  negotiationService.Accept,
 			Decline: negotiationService.Decline,
 		}
-		loopService, err = agentloop.New(ctx, buyerreasoning.FromEnv(), loopTools)
+		loopService, err = shopgraph.New(ctx, shopgraph.Config{
+			APIKey:  os.Getenv("OPENAI_API_KEY"),
+			BaseURL: os.Getenv("OPENAI_BASE_URL"),
+			Model:   os.Getenv("ADK_MODEL_NAME"),
+		}, loopTools)
 		if err != nil {
 			logger.Error("buyer agent loop configuration failed", "error", err)
 			return
@@ -339,7 +343,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
-	result, runErr := services.loop.Run(ctx, message.Text, agentloop.WalletFacts{
+	result, runErr := services.loop.Run(ctx, message.Text, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 	})
@@ -348,7 +352,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		// scripted purchase.
 		return client.SendMessage(ctx, message.Chat.ID, "Agent could not complete the request: "+runErr.Error())
 	}
-	if len(result.Transcript) > 0 && result.Action != agentloop.ActionDecline || len(result.Transcript) >= 2 {
+	if len(result.Transcript) > 0 && result.Action != shopgraph.ActionDecline || len(result.Transcript) >= 2 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
 			log.Printf("send negotiation transcript failed: %v", docErr)
 		}
@@ -360,13 +364,17 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			fmt.Fprintf(&summary, "\n- %s", step)
 		}
 	}
-	if result.Action == agentloop.ActionDecline {
+	if result.Action == shopgraph.ActionDecline {
 		return client.SendMessage(ctx, message.Chat.ID, summary.String())
 	}
-	baseAmount := result.Product.PricePaise * int64(result.Quantity)
+	product, perr := services.catalog.Get(ctx, result.ProductID)
+	if perr != nil {
+		return client.SendMessage(ctx, message.Chat.ID, "The selected product is no longer available.")
+	}
+	baseAmount := product.PricePaise * int64(result.Quantity)
 	purchase, err := purchases.Purchase(ctx, buyer.PurchaseRequest{
 		TelegramID:       message.From.ID,
-		ProductID:        result.Product.ID,
+		ProductID:        result.ProductID,
 		Quantity:         result.Quantity,
 		BaseAmountPaise:  baseAmount,
 		FinalAmountPaise: result.FinalPaise,

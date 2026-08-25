@@ -41,17 +41,18 @@ func New(name, apiKey, baseURL string) *Model {
 func (m *Model) Name() string { return m.name }
 
 type request struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
-	Tools    []tool    `json:"tools,omitempty"`
+	Model      string         `json:"model"`
+	Messages   []message      `json:"messages"`
+	Tools      []tool         `json:"tools,omitempty"`
+	ToolChoice map[string]any `json:"tool_choice,omitempty"`
 }
 
 type message struct {
-	Role       string      `json:"role"`
-	Content    any         `json:"content"` // string | nil on assistant tool_call turns
-	ToolCalls  []toolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	Name       string      `json:"name,omitempty"` // some gateways want it on tool turns
+	Role       string     `json:"role"`
+	Content    any        `json:"content"` // string | nil on assistant tool_call turns
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"` // some gateways want it on tool turns
 }
 
 type toolCall struct {
