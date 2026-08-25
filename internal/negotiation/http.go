@@ -221,6 +221,7 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 		"combo_with":         product.ComboWith,
 		"combo_discount_pct": product.ComboDiscountPct,
 		"rounds_left":        MaxRounds - session.Round,
+		"transcript":         session.Transcript,
 	}
 	if offer.Bundle != nil {
 		response["bundle"] = offer.Bundle

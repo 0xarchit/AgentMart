@@ -173,6 +173,8 @@ func main() {
 			Counter: func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error) {
 				return negotiationService.Counter(ctx, sessionID, paise)
 			},
+			Accept:  negotiationService.Accept,
+			Decline: negotiationService.Decline,
 		}
 		loopService, err = agentloop.New(ctx, buyerreasoning.FromEnv(), loopTools)
 		if err != nil {
@@ -334,10 +336,18 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		log.Printf("agent loop account lookup failed: %v", accountErr)
 		return client.SendMessage(ctx, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.")
 	}
+	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
+		return fmt.Errorf("send agent ack failed: %w", err)
+	}
 	result := services.loop.Run(ctx, message.Text, agentloop.WalletFacts{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 	})
+	if len(result.Transcript) > 0 && result.Action != agentloop.ActionDecline || len(result.Transcript) >= 2 {
+		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
+			log.Printf("send negotiation transcript failed: %v", docErr)
+		}
+	}
 	var summary strings.Builder
 	fmt.Fprintf(&summary, "Agent decision: %s\n%s", result.Action, result.Rationale)
 	for i, step := range result.Steps {

@@ -71,6 +71,7 @@ func (s *Service) modelTools() []tool.Tool {
 				return offersOutput{}, err
 			}
 			st.offers[proposal.SessionID] = proposal
+			st.transcript = append(st.transcript, proposal.Transcript...)
 			st.productID = proposal.ProductID
 			st.quantity = proposal.Quantity
 			st.sessionID = proposal.SessionID
@@ -96,8 +97,28 @@ func (s *Service) modelTools() []tool.Tool {
 			st.counterUsed++
 			st.sessionID = resolution.SessionID
 			st.finalPaise = resolution.FinalAmountPaise
+			if resolution.Status == "accepted" {
+				st.accepted = true
+			}
 			st.transcript = append(st.transcript, resolution.Transcript...)
 			st.step(fmt.Sprintf("counter -> %s at INR %.2f", resolution.Status, float64(resolution.FinalAmountPaise)/100))
+			return counterOutput{Status: string(resolution.Status), FinalPaise: resolution.FinalAmountPaise}, nil
+		})
+	accept := mustTool("accept_offer", "Formally accept the merchant's current offer for an open session.",
+		func(ctx agent.Context, in acceptInput) (counterOutput, error) {
+			st := beginTool()
+			defer st.doneTool()
+			resolution, err := s.tools.Accept(ctx, in.SessionID)
+			if err != nil {
+				return counterOutput{}, err
+			}
+			st.accepted = true
+			st.sessionID = resolution.SessionID
+			if resolution.FinalAmountPaise > 0 {
+				st.finalPaise = resolution.FinalAmountPaise
+			}
+			st.transcript = append(st.transcript, resolution.Transcript...)
+			st.step(fmt.Sprintf("accepted at INR %.2f", float64(resolution.FinalAmountPaise)/100))
 			return counterOutput{Status: string(resolution.Status), FinalPaise: resolution.FinalAmountPaise}, nil
 		})
 	human := mustTool("request_human", "Ask the human to confirm before buying when the premium crosses the band.",
@@ -130,7 +151,7 @@ func (s *Service) modelTools() []tool.Tool {
 			st.step(fmt.Sprintf("finish action=%s", in.Action))
 			return "decision recorded", nil
 		})
-	return []tool.Tool{search, get, offers, counter, human, finish}
+	return []tool.Tool{search, get, offers, counter, accept, human, finish}
 }
 
 type searchInput struct {
@@ -167,6 +188,10 @@ type counterInput struct {
 type counterOutput struct {
 	Status     string `json:"status"`
 	FinalPaise int64  `json:"final_amount_paise"`
+}
+
+type acceptInput struct {
+	SessionID string `json:"session_id" jsonschema:"session returned by get_offers"`
 }
 
 type humanInput struct {

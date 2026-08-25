@@ -21,6 +21,7 @@ type runState struct {
 	transcript  []negotiation.Turn
 	toolCalls   int
 	counterUsed int
+	accepted    bool
 
 	offers map[string]negotiationclient.Proposal // session id → observed quote
 	finish *finishDecision

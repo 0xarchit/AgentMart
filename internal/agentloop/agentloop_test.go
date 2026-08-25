@@ -14,11 +14,13 @@ import (
 )
 
 type fakeTools struct {
-	search     []catalog.Product
-	getByID    map[string]catalog.Product
-	offers     negotiationclient.Proposal
-	countered  []int64
-	failOffers bool
+	search      []catalog.Product
+	getByID     map[string]catalog.Product
+	offers      negotiationclient.Proposal
+	countered   []int64
+	accepted    bool
+	failAccepts bool
+	failOffers  bool
 }
 
 func (f *fakeTools) tools() Tools {
@@ -35,6 +37,12 @@ func (f *fakeTools) tools() Tools {
 				return negotiationclient.Proposal{}, errFake
 			}
 			return f.offers, nil
+		},
+		Accept: func(_ context.Context, _ string) (negotiationclient.Resolution, error) {
+			return f.accept(context.Background(), "")
+		},
+		Decline: func(_ context.Context, _, reason string) (negotiationclient.Resolution, error) {
+			return f.decline(context.Background(), "", reason)
 		},
 		Counter: func(_ context.Context, _ string, paise int64) (negotiationclient.Resolution, error) {
 			f.countered = append(f.countered, paise)
@@ -76,8 +84,23 @@ func fixtureTools() *fakeTools {
 		offers: negotiationclient.Proposal{
 			SessionID: "sess-1", ProductID: trimmerID, Quantity: 1,
 			BaseAmountPaise: 240000, FinalAmountPaise: 250000, Reason: "extended warranty",
+			// Mirror the real server: propose responses carry the opening
+			// merchant turn so transcripts exist even without counter rounds.
+			Transcript: []negotiation.Turn{{Actor: "merchant", Message: "Offer INR 2500.00: extended warranty"}},
 		},
 	}
+}
+
+func (f *fakeTools) accept(context.Context, string) (negotiationclient.Resolution, error) {
+	if f.failAccepts {
+		return negotiationclient.Resolution{}, errFake
+	}
+	f.accepted = true
+	return negotiationclient.Resolution{SessionID: f.offers.SessionID, Status: "accepted", FinalAmountPaise: f.offers.FinalAmountPaise}, nil
+}
+
+func (f *fakeTools) decline(ctx context.Context, _ string, _ string) (negotiationclient.Resolution, error) {
+	return negotiationclient.Resolution{SessionID: f.offers.SessionID, Status: "declined"}, nil
 }
 
 func TestDeterministicBuysWithinBand(t *testing.T) {
@@ -92,6 +115,9 @@ func TestDeterministicBuysWithinBand(t *testing.T) {
 	}
 	if result.FinalPaise != 250000 || result.Product.ID != trimmerID {
 		t.Fatalf("result = %+v", result)
+	}
+	if !result.Accepted || len(result.Transcript) == 0 {
+		t.Fatalf("A2A session not completed: accepted=%v transcript=%d", result.Accepted, len(result.Transcript))
 	}
 }
 

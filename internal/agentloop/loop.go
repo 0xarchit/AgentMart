@@ -48,10 +48,12 @@ type Tools struct {
 	Get     func(ctx context.Context, id string) (catalog.Product, error)
 	Offers  func(ctx context.Context, id string, qty int) (negotiationclient.Proposal, error)
 	Counter func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error)
+	Accept  func(ctx context.Context, sessionID string) (negotiationclient.Resolution, error)
+	Decline func(ctx context.Context, sessionID string, reason string) (negotiationclient.Resolution, error)
 }
 
 func (t Tools) validate() error {
-	if t.Search == nil || t.Get == nil || t.Offers == nil || t.Counter == nil {
+	if t.Search == nil || t.Get == nil || t.Offers == nil || t.Counter == nil || t.Accept == nil || t.Decline == nil {
 		return fmt.Errorf("agentloop tools are incomplete")
 	}
 	return nil
@@ -74,6 +76,7 @@ type LoopResult struct {
 	Steps         []string
 	SessionID     string
 	Transcript    []negotiation.Turn
+	Accepted      bool // the A2A session was formally accepted
 	NeedsApproval bool // true when ask_human was about an in-budget premium offer
 }
 
@@ -173,6 +176,32 @@ func (s *Service) settle(ctx context.Context, state *runState) LoopResult {
 	if ceiling <= 0 {
 		ceiling = state.wallet.SpendLimitPaise
 	}
+
+	// Close the A2A conversation to match the decision: a buy must be a
+	// formally accepted session; a decline must be formally declined.
+	if state.sessionID != "" && !state.accepted {
+		if result.Action != ActionDecline && final <= state.wallet.BalancePaise &&
+			!(ceiling > 0 && final > ceiling) &&
+			!(baseMain > 0 && premium > 0 && premium*100 > baseMain*AutoBuyPremiumMaxPct) {
+			if resolution, err := s.tools.Accept(ctx, state.sessionID); err == nil {
+				state.accepted = true
+				if resolution.FinalAmountPaise > 0 {
+					final = resolution.FinalAmountPaise
+					result.FinalPaise = final
+				}
+				state.transcript = append(state.transcript, resolution.Transcript...)
+			} else {
+				result.Action = ActionDecline
+				result.Rationale = joinReason(state.rationale, fmt.Sprintf("could not accept the A2A offer: %v", err))
+			}
+		} else {
+			if resolution, err := s.tools.Decline(ctx, state.sessionID, "does not fit my budget"); err == nil {
+				state.transcript = append(state.transcript, resolution.Transcript...)
+			}
+			result.Action = ActionDecline
+		}
+	}
+	result.Accepted = state.accepted
 
 	switch {
 	case final > state.wallet.BalancePaise:

@@ -64,21 +64,22 @@ func (c *Client) Close() error {
 
 // Proposal is the merchant's counter offer for a product quantity.
 type Proposal struct {
-	SessionID        string `json:"session_id"`
-	Type             string `json:"type"`
-	ProductID        string `json:"product_id"`
-	Quantity         int    `json:"qty"`
-	BaseAmountPaise  int64  `json:"base_amount_paise"`
-	FinalAmountPaise int64  `json:"final_amount_paise"`
-	Reason           string `json:"reason"`
-	OfferReason      string `json:"offer_reason,omitempty"`
-	Name             string `json:"name,omitempty"`
-	Category         string `json:"category,omitempty"`
-	Stock            int    `json:"stock,omitempty"`
-	WarrantyYears    int    `json:"warranty_years,omitempty"`
-	TrustScore       int    `json:"trust_score,omitempty"`
-	ComboWith        string `json:"combo_with,omitempty"`
-	ComboDiscountPct int    `json:"combo_discount_pct,omitempty"`
+	SessionID        string             `json:"session_id"`
+	Type             string             `json:"type"`
+	ProductID        string             `json:"product_id"`
+	Quantity         int                `json:"qty"`
+	BaseAmountPaise  int64              `json:"base_amount_paise"`
+	FinalAmountPaise int64              `json:"final_amount_paise"`
+	Reason           string             `json:"reason"`
+	OfferReason      string             `json:"offer_reason,omitempty"`
+	Name             string             `json:"name,omitempty"`
+	Category         string             `json:"category,omitempty"`
+	Stock            int                `json:"stock,omitempty"`
+	WarrantyYears    int                `json:"warranty_years,omitempty"`
+	TrustScore       int                `json:"trust_score,omitempty"`
+	ComboWith        string             `json:"combo_with,omitempty"`
+	ComboDiscountPct int                `json:"combo_discount_pct,omitempty"`
+	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
 }
 
 // Resolution is the final merchant negotiation state.
