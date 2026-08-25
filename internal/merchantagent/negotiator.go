@@ -13,7 +13,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/model/openaimodel"
+	"agentmart/internal/llmchat"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/genai"
 )
@@ -30,10 +30,7 @@ func NewNegotiator(ctx context.Context, cfg buyerreasoning.Config) (*Negotiator,
 	if cfg.APIKey == "" || cfg.Model == "" {
 		return nil, nil
 	}
-	model, err := openaimodel.NewModel(ctx, cfg.Model, &openaimodel.ClientConfig{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
-	if err != nil {
-		return nil, fmt.Errorf("configure merchant negotiator model: %w", err)
-	}
+	model := llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL)
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "merchant-negotiator",
 		Description: "Choose one counter amount inside the owner's rails.",

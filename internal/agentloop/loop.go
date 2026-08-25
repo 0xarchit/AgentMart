@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/llmchat"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 	buyerreasoning "agentmart/internal/reasoning"
@@ -102,7 +103,7 @@ func New(ctx context.Context, cfg buyerreasoning.Config, tools Tools) (*Service,
 	// Chat-completions adapter instead of ADK openaimodel: openaimodel speaks
 	// only OpenAI's Responses API, which OpenRouter/NVIDIA/OpenCode-style
 	// gateways reject. /chat/completions works everywhere.
-	model := NewChatModel(cfg.Model, cfg.APIKey, cfg.BaseURL)
+	model := llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL)
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "buyer-agent",
 		Description: "Resolve a natural-language purchase request against the merchant catalog and negotiate inside bounds.",
