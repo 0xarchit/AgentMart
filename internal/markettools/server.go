@@ -44,10 +44,10 @@ type offersInput struct {
 }
 
 type offersOutput struct {
-	Kind       string             `json:"kind"`
-	BasePaise  int64              `json:"base_amount_paise"`
-	FinalPaise int64              `json:"final_amount_paise"`
-	Reason     string             `json:"reason"`
+	Kind       string                  `json:"kind"`
+	BasePaise  int64                   `json:"base_amount_paise"`
+	FinalPaise int64                   `json:"final_amount_paise"`
+	Reason     string                  `json:"reason"`
 	Bundle     *negotiation.BundleItem `json:"bundle,omitempty"`
 }
 

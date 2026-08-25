@@ -38,17 +38,17 @@ func (m *ChatModel) Name() string { return m.name }
 
 // ccRequest/ccMessage/ccTool mirror the wire format of /chat/completions.
 type ccRequest struct {
-	Model     string       `json:"model"`
-	Messages  []ccMessage  `json:"messages"`
-	Tools     []ccTool     `json:"tools,omitempty"`
-	MaxTokens int          `json:"max_tokens,omitempty"`
+	Model     string      `json:"model"`
+	Messages  []ccMessage `json:"messages"`
+	Tools     []ccTool    `json:"tools,omitempty"`
+	MaxTokens int         `json:"max_tokens,omitempty"`
 }
 
 type ccMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"` // string | nil for assistant tool_call turns
+	Role       string       `json:"role"`
+	Content    any          `json:"content"` // string | nil for assistant tool_call turns
 	ToolCalls  []ccToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
 }
 
 type ccToolCall struct {
@@ -76,7 +76,7 @@ type ccFunctionSchema struct {
 type ccResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   *string     `json:"content"`
+			Content   *string      `json:"content"`
 			ToolCalls []ccToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`

@@ -51,15 +51,15 @@ func NewNegotiator(ctx context.Context, cfg buyerreasoning.Config) (*Negotiator,
 }
 
 type negotiatorFacts struct {
-	AskPaise           int64    `json:"ask_paise"`
-	FloorPaise         int64    `json:"floor_paise"`
-	BuyerPaise         int64    `json:"buyer_paise"`
-	Round              int      `json:"round"`
-	MaxRounds          int      `json:"max_rounds"`
-	ProductName        string   `json:"product_name,omitempty"`
-	Bundle             []string `json:"bundle,omitempty"`
-	SuggestedPaise     int64    `json:"suggested_paise"` // deterministic schedule anchor
-	Transcript         []string `json:"transcript,omitempty"`
+	AskPaise       int64    `json:"ask_paise"`
+	FloorPaise     int64    `json:"floor_paise"`
+	BuyerPaise     int64    `json:"buyer_paise"`
+	Round          int      `json:"round"`
+	MaxRounds      int      `json:"max_rounds"`
+	ProductName    string   `json:"product_name,omitempty"`
+	Bundle         []string `json:"bundle,omitempty"`
+	SuggestedPaise int64    `json:"suggested_paise"` // deterministic schedule anchor
+	Transcript     []string `json:"transcript,omitempty"`
 }
 
 type negotiatorOutput struct {

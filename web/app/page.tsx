@@ -137,10 +137,15 @@ export default async function HomePage() {
                       </a>
                     </div>
                     <div className="text-right">
-                      <code className="text-xs text-ink/50" title="Use this ID with /buy in Telegram">
+                      <code
+                        className="text-xs text-ink/50"
+                        title="Use this ID with /buy in Telegram"
+                      >
                         {product.id.slice(0, 8)}
                       </code>
-                      <p className="text-sm text-ink/60">{product.stock} in stock</p>
+                      <p className="text-sm text-ink/60">
+                        {product.stock} in stock
+                      </p>
                     </div>
                   </div>
                 </article>

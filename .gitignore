@@ -7,3 +7,7 @@ skills-lock.json
 web/.next
 web/node_modules
 tsconfig.tsbuildinfo
+%SystemDrive%
+.pi
+.mcp.json
+bin/
