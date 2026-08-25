@@ -145,6 +145,17 @@ func TestHandleMessageApprovalResume(t *testing.T) {
 	}
 }
 
+func TestReplyMarkupForApprovalAndOrder(t *testing.T) {
+	approval := replyMarkupForResponse("Human approval required for INR 600.00. Approval token: token")
+	if approval == nil || approval.InlineKeyboard[0][0].CallbackData != "/approve token" || approval.InlineKeyboard[0][1].CallbackData != "/reject token" {
+		t.Fatalf("approval markup = %#v", approval)
+	}
+	order := replyMarkupForResponse("Purchase fulfilled via wallet for INR 12.50. Audit order: order-1")
+	if order == nil || order.InlineKeyboard[0][0].CallbackData != "/refund order-1 Cancelled by user" {
+		t.Fatalf("order markup = %#v", order)
+	}
+}
+
 type rewriteTelegramTransport struct {
 	base string
 	next http.RoundTripper

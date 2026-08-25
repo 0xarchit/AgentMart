@@ -14,16 +14,18 @@ import (
 
 // Update is the subset of Telegram updates used by the buyer commands.
 type Update struct {
-	UpdateID int      `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int            `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
 }
 
 // Message contains a text message and its sender identifiers.
 type Message struct {
-	MessageID int    `json:"message_id"`
-	Chat      Chat   `json:"chat"`
-	From      User   `json:"from"`
-	Text      string `json:"text"`
+	MessageID       int    `json:"message_id"`
+	Chat            Chat   `json:"chat"`
+	From            User   `json:"from"`
+	Text            string `json:"text"`
+	CallbackQueryID string `json:"-"`
 }
 
 // Chat identifies a Telegram conversation.
@@ -34,6 +36,21 @@ type Chat struct {
 // User identifies a Telegram sender.
 type User struct {
 	ID int64 `json:"id"`
+}
+
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    User     `json:"from"`
+	Message *Message `json:"message"`
+	Data    string   `json:"data"`
+}
+
+type InlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
 }
 
 type apiResponse[T any] struct {
@@ -62,7 +79,7 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 
 // Poll retrieves updates after the supplied offset using long polling.
 func (c *Client) Poll(ctx context.Context, offset int) ([]Update, error) {
-	query := url.Values{"timeout": {"30"}, "allowed_updates": {"[\"message\"]"}}
+	query := url.Values{"timeout": {"30"}, "allowed_updates": {"[\"message\",\"callback_query\"]"}}
 	if offset > 0 {
 		query.Set("offset", strconv.Itoa(offset))
 	}
@@ -78,14 +95,32 @@ func (c *Client) Poll(ctx context.Context, offset int) ([]Update, error) {
 
 // SendMessage sends plain text to a conversation.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
+	return c.SendMessageWithMarkup(ctx, chatID, text, nil)
+}
+
+func (c *Client) SendMessageWithMarkup(ctx context.Context, chatID int64, text string, markup *InlineKeyboardMarkup) error {
 	query := url.Values{}
 	payload := map[string]any{"chat_id": chatID, "text": text}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
 	var response apiResponse[json.RawMessage]
 	if err := c.call(ctx, "sendMessage", query, payload, &response); err != nil {
 		return err
 	}
 	if !response.OK {
 		return fmt.Errorf("telegram sendMessage: %s", response.Description)
+	}
+	return nil
+}
+
+func (c *Client) AnswerCallbackQuery(ctx context.Context, id string) error {
+	var response apiResponse[struct{}]
+	if err := c.call(ctx, "answerCallbackQuery", url.Values{}, map[string]any{"callback_query_id": id}, &response); err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram answer callback failed: %s", response.Description)
 	}
 	return nil
 }

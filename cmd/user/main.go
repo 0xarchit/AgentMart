@@ -278,7 +278,29 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 	if err != nil {
 		return err
 	}
-	return client.SendMessage(ctx, message.Chat.ID, response)
+	if message.CallbackQueryID != "" {
+		if err := client.AnswerCallbackQuery(ctx, message.CallbackQueryID); err != nil {
+			return err
+		}
+	}
+	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
+}
+
+func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
+	if prefix := "Human approval required"; strings.HasPrefix(response, prefix) {
+		token := strings.TrimPrefix(response[strings.LastIndex(response, ":")+1:], " ")
+		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+			{Text: "Approve", CallbackData: "/approve " + token},
+			{Text: "Decline", CallbackData: "/reject " + token},
+		}}}
+	}
+	if marker := "Audit order: "; strings.Contains(response, marker) {
+		orderID := strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0])
+		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+			{Text: "Cancel Order", CallbackData: "/refund " + orderID + " Cancelled by user"},
+		}}}
+	}
+	return nil
 }
 
 func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, negotiationServices ...negotiator) (string, error) {

@@ -77,3 +77,16 @@ func TestProcessUpdatesPersistsSuccessfulUpdates(t *testing.T) {
 		t.Fatalf("offset = %d, processed = %d, saved = %v", offset, processed, store.offsets)
 	}
 }
+
+func TestProcessUpdatesConvertsCallbackToCommand(t *testing.T) {
+	store := &recordingOffsetStore{}
+	update := telegram.Update{UpdateID: 9, CallbackQuery: &telegram.CallbackQuery{
+		ID: "callback", From: telegram.User{ID: 4}, Data: "/approve token",
+		Message: &telegram.Message{MessageID: 3, Chat: telegram.Chat{ID: 8}},
+	}}
+	var got *telegram.Message
+	offset, err := processUpdates(t.Context(), []telegram.Update{update}, 9, store, func(_ context.Context, message *telegram.Message) error { got = message; return nil })
+	if err != nil || offset != 10 || got == nil || got.Text != "/approve token" || got.From.ID != 4 || got.CallbackQueryID != "callback" {
+		t.Fatalf("offset=%d message=%#v err=%v", offset, got, err)
+	}
+}

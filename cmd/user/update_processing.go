@@ -14,8 +14,16 @@ func processUpdates(ctx context.Context, updates []telegram.Update, offset int, 
 		if update.UpdateID < offset {
 			continue
 		}
-		if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-			_ = process(ctx, update.Message)
+		message := update.Message
+		if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
+			copy := *update.CallbackQuery.Message
+			copy.From = update.CallbackQuery.From
+			copy.Text = update.CallbackQuery.Data
+			copy.CallbackQueryID = update.CallbackQuery.ID
+			message = &copy
+		}
+		if message != nil && strings.TrimSpace(message.Text) != "" {
+			_ = process(ctx, message)
 		}
 		nextOffset := update.UpdateID + 1
 		if err := checkpoints.Save(ctx, nextOffset); err != nil {
