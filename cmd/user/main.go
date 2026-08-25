@@ -437,7 +437,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 	}
 	negotiations := services.negotiations
 	switch command[0] {
-	case "/start":
+	case "/start", "/help":
 		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON.", nil
 	case "/link":
 		if len(command) != 2 {
