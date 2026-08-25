@@ -186,7 +186,12 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			return handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, message)
+			if err != nil {
+				_ = client.SendMessage(ctx, message.Chat.ID, "We could not process that request. It was recorded for review.")
+				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
+			}
+			return nil
 		})
 		if err != nil {
 			logger.Error("telegram update processing failed", "error", err)

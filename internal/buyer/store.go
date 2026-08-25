@@ -80,3 +80,14 @@ func (s *Store) RecordReasoningDecision(ctx context.Context, telegramID int64, i
 	}
 	return s.db.Insert(ctx, "audit_log", row, nil)
 }
+
+func (s *Store) RecordUpdateDeadLetter(ctx context.Context, telegramID int64, text string, cause error) error {
+	account, err := s.AccountForTelegram(ctx, telegramID)
+	if err != nil {
+		return err
+	}
+	return s.db.Insert(ctx, "audit_log", map[string]any{
+		"account_id": account.ID, "actor": "user", "action": "update_dead_letter",
+		"reason": cause.Error(), "payload": map[string]any{"text": text},
+	}, nil)
+}

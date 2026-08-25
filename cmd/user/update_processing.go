@@ -15,9 +15,7 @@ func processUpdates(ctx context.Context, updates []telegram.Update, offset int, 
 			continue
 		}
 		if update.Message != nil && strings.TrimSpace(update.Message.Text) != "" {
-			if err := process(ctx, update.Message); err != nil {
-				return offset, fmt.Errorf("process update %d: %w", update.UpdateID, err)
-			}
+			_ = process(ctx, update.Message)
 		}
 		nextOffset := update.UpdateID + 1
 		if err := checkpoints.Save(ctx, nextOffset); err != nil {

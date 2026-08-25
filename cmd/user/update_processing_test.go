@@ -39,7 +39,7 @@ func TestProcessUpdatesDoesNotAdvanceWhenCheckpointFails(t *testing.T) {
 	}
 }
 
-func TestProcessUpdatesStopsAtHandlerFailure(t *testing.T) {
+func TestProcessUpdatesAdvancesPastHandlerFailure(t *testing.T) {
 	store := &recordingOffsetStore{}
 	updates := []telegram.Update{
 		{UpdateID: 7, Message: &telegram.Message{Text: "/shop product 1"}},
@@ -51,10 +51,10 @@ func TestProcessUpdatesStopsAtHandlerFailure(t *testing.T) {
 		processed++
 		return wantErr
 	})
-	if !errors.Is(err, wantErr) {
+	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if offset != 7 || processed != 1 || len(store.offsets) != 0 {
+	if offset != 9 || processed != 2 || len(store.offsets) != 2 {
 		t.Fatalf("offset = %d, processed = %d, saved = %v", offset, processed, store.offsets)
 	}
 }
