@@ -15,10 +15,7 @@ export default async function HomePage() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mint">Operations</p>
             <h1 className="mt-1 text-2xl font-semibold">AgentMart</h1>
           </div>
-          <div className="text-right text-sm text-mint">
-            <p>Wallet commerce</p>
-            <p className="mt-1 text-xs text-paper/60">Read-only catalog slice</p>
-          </div>
+          <nav className="flex items-center gap-4 text-sm"><a className="text-mint hover:text-white" href="#catalog">Catalog</a><a className="text-mint hover:text-white" href="/dashboard">User portal</a><a className="border border-mint/40 px-3 py-2 font-semibold text-white" href="/login">Sign in</a></nav>
         </div>
       </header>
 
@@ -27,9 +24,9 @@ export default async function HomePage() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-moss">Workspace</p>
           <nav className="mt-4 space-y-2 text-sm">
             <a className="block border-l-2 border-moss bg-mint px-3 py-2 font-medium text-ink" href="#catalog">Catalog</a>
-            <span className="block px-3 py-2 text-ink/45">Wallet</span>
-            <span className="block px-3 py-2 text-ink/45">Orders</span>
-            <span className="block px-3 py-2 text-ink/45">Revenue</span>
+            <a className="block px-3 py-2 text-ink/70 hover:bg-mint" href="/dashboard">Wallet and orders</a>
+            <a className="block px-3 py-2 text-ink/70 hover:bg-mint" href="/dashboard#telegram">Telegram agent</a>
+            <a className="block px-3 py-2 text-ink/70 hover:bg-mint" href="/admin">Admin revenue</a>
           </nav>
         </aside>
 
@@ -61,7 +58,7 @@ export default async function HomePage() {
                     <span className="bg-mint px-2 py-1 text-xs font-semibold text-moss">Trust {product.trust_score}</span>
                   </div>
                   <div className="mt-6 flex items-end justify-between border-t border-ink/10 pt-4">
-                    <p className="text-xl font-semibold">{formatRupees(product.price_paise)}</p>
+                    <div><p className="text-xl font-semibold">{formatRupees(product.price_paise)}</p><a href="/login" className="mt-3 inline-block text-sm font-semibold text-moss hover:underline">Sign in to buy</a></div>
                     <p className="text-sm text-ink/60">{product.stock} in stock</p>
                   </div>
                 </article>
