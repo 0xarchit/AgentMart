@@ -12,6 +12,8 @@ import (
 )
 
 // Product is the catalog representation used by service boundaries.
+// CostPaise is merchant-private: it is only populated by GetWithCost and must
+// never be selected in buyer-facing queries or returned through MCP/A2A payloads.
 type Product struct {
 	ID               string  `json:"id"`
 	Name             string  `json:"name"`
@@ -22,6 +24,7 @@ type Product struct {
 	TrustScore       int     `json:"trust_score"`
 	ComboWith        *string `json:"combo_with"`
 	ComboDiscountPct int     `json:"combo_discount_pct"`
+	CostPaise        int64   `json:"-"`
 }
 
 // SearchRequest contains optional catalog filters.
@@ -102,4 +105,24 @@ func (s *Service) CheckStock(ctx context.Context, id string, qty int) (StockResu
 
 func escapeFilter(value string) string {
 	return strings.NewReplacer("%", "\\%", "*", "\\*", ",", "\\,", "(", "\\(", ")", "\\)").Replace(value)
+}
+
+// GetWithCost returns one product including the merchant-private cost basis.
+// It exists for merchant-side pricing only (negotiation floor, offer engine).
+func (s *Service) GetWithCost(ctx context.Context, id string) (Product, error) {
+	if strings.TrimSpace(id) == "" {
+		return Product{}, fmt.Errorf("product id is required")
+	}
+	query := url.Values{}
+	query.Set("select", "id,name,category,price_paise,stock,warranty_years,trust_score,combo_with,combo_discount_pct,cost_paise")
+	query.Set("id", "eq."+escapeFilter(id))
+	query.Set("limit", "1")
+	var products []Product
+	if err := s.db.Get(ctx, "products", query, &products); err != nil {
+		return Product{}, err
+	}
+	if len(products) == 0 {
+		return Product{}, fmt.Errorf("product %q not found", id)
+	}
+	return products[0], nil
 }

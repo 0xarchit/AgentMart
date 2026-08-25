@@ -18,6 +18,7 @@ import (
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
+	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -45,7 +46,12 @@ func main() {
 	if agentEndpoint == "" {
 		agentEndpoint = "http://localhost" + addr + "/a2a"
 	}
-	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"))
+	merchantNegotiator, nerr := merchantagent.NewNegotiator(ctx, buyerreasoning.FromEnv())
+	if nerr != nil {
+		logger.Error("merchant negotiator configuration failed", "error", nerr)
+		return
+	}
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchantNegotiator)
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -73,14 +79,25 @@ func main() {
 type catalogReader interface {
 	Search(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
 	Get(context.Context, string) (catalog.Product, error)
+	GetWithCost(context.Context, string) (catalog.Product, error)
 	CheckStock(context.Context, string, int) (catalog.StockResult, error)
 }
 
-func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string) (http.Handler, error) {
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator negotiation.Negotiator) (http.Handler, error) {
 	privateMux := http.NewServeMux()
-	negotiationServer, err := negotiation.NewCatalogServerWithStore(service.Get, store)
+	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
+		product, err := service.GetWithCost(ctx, id)
+		if err != nil {
+			return catalog.Product{}, 0, err
+		}
+		return product, product.CostPaise, nil
+	}
+	negotiationServer, err := negotiation.NewOrchestratedServer(service.Get, getPriced, store)
 	if err != nil {
 		return nil, err
+	}
+	if merchantNegotiator != nil {
+		negotiationServer.UseNegotiator(merchantNegotiator)
 	}
 	privateMux.Handle("POST /negotiation", negotiationServer.Handler())
 	agentHandler, err := merchantagent.NewHandler(service.Get, store, agentEndpoint)
@@ -89,6 +106,7 @@ func newHandler(service catalogReader, store negotiation.SessionStore, agentEndp
 	}
 	privateMux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
 	mcpServer := markettools.NewServer(service)
+	markettools.AddOffersTool(mcpServer, service)
 	privateMux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
 	privateMux.HandleFunc("GET /catalog/search", func(w http.ResponseWriter, r *http.Request) {
 		maxPrice, err := parseInt64(r.URL.Query().Get("max_price_paise"))
