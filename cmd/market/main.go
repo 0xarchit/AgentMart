@@ -44,7 +44,7 @@ func main() {
 	}
 	agentEndpoint := os.Getenv("MARKET_AGENT_CARD_URL")
 	if agentEndpoint == "" {
-		agentEndpoint = "http://localhost" + addr + "/a2a"
+		agentEndpoint = "http://localhost" + addr + "/a2a/"
 	}
 	merchantNegotiator, nerr := merchantagent.NewNegotiator(ctx, buyerreasoning.FromEnv())
 	if nerr != nil {
@@ -104,6 +104,10 @@ func newHandler(service catalogReader, store negotiation.SessionStore, agentEndp
 	if err != nil {
 		return nil, err
 	}
+	// Register both spellings: a POST to the bare "/a2a" would otherwise hit
+	// ServeMux's 301 redirect, which rewrites POST to GET and yields a confusing
+	// 405 Method Not Allowed from the JSON-RPC handler.
+	privateMux.Handle("/a2a", http.StripPrefix("/a2a", agentHandler))
 	privateMux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
 	mcpServer := markettools.NewServer(service)
 	markettools.AddOffersTool(mcpServer, service)

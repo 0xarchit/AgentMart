@@ -7,14 +7,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"agentmart/internal/catalog"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Client calls the merchant's read-only catalog tools.
+// Client calls the merchant's read-only catalog tools. The MCP session is
+// long-lived but transparently re-dialed when the market binary restarts or
+// the stream idles out.
 type Client struct {
-	session *mcp.ClientSession
+	mu       sync.Mutex
+	endpoint string
+	http     *http.Client
+	session  *mcp.ClientSession
 }
 
 // New connects to a streamable merchant catalog endpoint.
@@ -31,7 +37,7 @@ func New(ctx context.Context, endpoint string, httpClient *http.Client) (*Client
 	if err != nil {
 		return nil, fmt.Errorf("connect merchant catalog: %w", err)
 	}
-	return &Client{session: session}, nil
+	return &Client{mu: sync.Mutex{}, endpoint: endpoint, http: httpClient, session: session}, nil
 }
 
 // Close releases the merchant catalog session.
@@ -93,12 +99,41 @@ func (c *Client) call(ctx context.Context, name string, arguments map[string]any
 	}
 	result, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
-		return nil, fmt.Errorf("call merchant catalog tool %s: %w", name, err)
+		// Long-lived MCP sessions die when the market binary restarts or the
+		// stream idles out. Reconnect once and retry before giving up.
+		if reconnectErr := c.reconnect(ctx); reconnectErr != nil {
+			return nil, fmt.Errorf("call merchant catalog tool %s: %w (reconnect failed: %v)", name, err, reconnectErr)
+		}
+		result, retryErr := c.session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
+		if retryErr != nil {
+			return nil, fmt.Errorf("call merchant catalog tool %s after reconnect: %w", name, retryErr)
+		}
+		if result.IsError {
+			return nil, fmt.Errorf("merchant catalog tool %s failed: %s", name, toolError(result))
+		}
+		return result, nil
 	}
 	if result.IsError {
 		return nil, fmt.Errorf("merchant catalog tool %s failed: %s", name, toolError(result))
 	}
 	return result, nil
+}
+
+// reconnect drops the dead session and dials a fresh one.
+func (c *Client) reconnect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.session != nil {
+		_ = c.session.Close()
+	}
+	transport := &mcp.StreamableClientTransport{Endpoint: c.endpoint, HTTPClient: c.http}
+	client := mcp.NewClient(&mcp.Implementation{Name: "buyer-catalog", Version: "v1.0.0"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return err
+	}
+	c.session = session
+	return nil
 }
 
 func decodeStructured(result *mcp.CallToolResult, destination any) error {

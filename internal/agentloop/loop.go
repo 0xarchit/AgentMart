@@ -17,7 +17,6 @@ import (
 	buyerreasoning "agentmart/internal/reasoning"
 
 	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/model/openaimodel"
 	"google.golang.org/adk/v2/runner"
 )
 
@@ -93,10 +92,10 @@ func New(ctx context.Context, cfg buyerreasoning.Config, tools Tools) (*Service,
 	if cfg.APIKey == "" || cfg.Model == "" {
 		return svc, nil
 	}
-	model, err := openaimodel.NewModel(ctx, cfg.Model, &openaimodel.ClientConfig{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
-	if err != nil {
-		return nil, fmt.Errorf("configure agent loop model: %w", err)
-	}
+	// Chat-completions adapter instead of ADK openaimodel: openaimodel speaks
+	// only OpenAI's Responses API, which OpenRouter/NVIDIA/OpenCode-style
+	// gateways reject. /chat/completions works everywhere.
+	model := NewChatModel(cfg.Model, cfg.APIKey, cfg.BaseURL)
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "buyer-agent",
 		Description: "Resolve a natural-language purchase request against the merchant catalog and negotiate inside bounds.",
