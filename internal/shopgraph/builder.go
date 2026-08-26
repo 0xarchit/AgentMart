@@ -58,6 +58,7 @@ type Service struct {
 	merchant agent.Agent
 	mu       sync.Mutex
 	wallet   Wallet
+	offer    Offer
 	wfAgent  agent.Agent
 }
 
@@ -88,6 +89,20 @@ func (s *Service) setWallet(w Wallet) {
 	s.wallet = w
 }
 
+// setOffer/offerSnapshot hold the merchant's standing offer for the run, so the
+// router can pair the agent's judgement with the offer it judged.
+func (s *Service) setOffer(offer Offer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offer = offer
+}
+
+func (s *Service) offerSnapshot() Offer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.offer
+}
+
 func (s *Service) decisionModel() model.LLM { return s.model }
 
 var (
@@ -100,6 +115,28 @@ no budget was stated.`
 user's request. Prefer relevance first, then lower price, then higher
 trust_score. Return the chosen product_id, quantity, and one-line rationale. If
 nothing matches, return product_id "" with the reason.`
+
+	assessInstruction = fmt.Sprintf(`You are AgentMart's buyer, shopping for one
+real person and spending their money. You are handed the merchant's offer plus
+that person's money facts: wallet_balance_paise, spend_limit_paise,
+budget_paise, premium_over_list_paise, premium_over_list_pct, and an advisory
+advisory_band_pct=%d.
+
+Decide what a careful shopper would do next and return only JSON:
+{"decision":"accept|negotiate|ask_human|decline","reason":"one short sentence"}
+
+How to think about it (guidance, not rules you must obey):
+- "accept" when the total is fair for what is included and comfortably within
+  the person's money.
+- "negotiate" when the merchant is asking more than the value justifies, or a
+  bundle is being pushed you think you can get cheaper.
+- "ask_human" when the call is genuinely theirs to make: a big premium, a
+  trade-off between price and warranty or bundle, or anything you would want a
+  friend's nod on before spending their money.
+- "decline" when it simply does not work for them.
+
+Speak in the reason like a person explaining the choice to a friend, referring
+to the actual amounts and what the offer includes.`, AutoBuyPremiumMaxPct)
 
 	negotiateInstruction = fmt.Sprintf(`You are AgentMart's negotiating buyer.
 You receive the merchant's opening offer (session_id, final_amount_paise,
@@ -121,10 +158,12 @@ const (
 	negotiateTimeout = 180 * time.Second
 )
 
-// Route names emitted by fetch_offer.
+// Route names. The buyer agent picks one; code only maps its choice onto an
+// edge and refuses to spend money the user does not have.
 const (
 	RouteAccept    = "ACCEPT"
 	RouteNegotiate = "NEGOTIATE"
+	RouteAskHuman  = "ASK_HUMAN"
 	RouteDecline   = "DECLINE"
 )
 
@@ -151,6 +190,12 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("negotiate agent: %w", err)
 	}
+	assessAgent, err := llmagent.New(llmagent.Config{
+		Name: "assess-agent", Model: s.decisionModel(), Instruction: assessInstruction,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("assess agent: %w", err)
+	}
 
 	intentNode, err := workflow.NewAgentNodeTyped[string, Intent](intentAgent, workflow.NodeConfig{Timeout: nodeTimeout})
 	if err != nil {
@@ -170,11 +215,12 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 		return nil, fmt.Errorf("select node: %w", err)
 	}
 
-	offerNode := workflow.NewEmittingFunctionNode[Selection, Offer]("fetch_offer",
-		func(ctx agent.Context, sel Selection, emit func(*session.Event) error) (Offer, error) {
-			proposal, err := s.tools.Offers(ctx, sel.ProductID, sel.Quantity, s.walletSnapshot().AccountID)
+	offerNode := workflow.NewFunctionNode[Selection, OfferView]("fetch_offer",
+		func(ctx agent.Context, sel Selection) (OfferView, error) {
+			wallet := s.walletSnapshot()
+			proposal, err := s.tools.Offers(ctx, sel.ProductID, sel.Quantity, wallet.AccountID)
 			if err != nil {
-				return Offer{}, err
+				return OfferView{}, err
 			}
 			offer := Offer{
 				SessionID: proposal.SessionID, ProductID: proposal.ProductID,
@@ -182,9 +228,43 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				BasePaise: proposal.BaseAmountPaise, FinalPaise: proposal.FinalAmountPaise,
 				Reason: proposal.Reason, Transcript: proposal.Transcript,
 			}
-			offer.Route = classifyOffer(offer, s.walletSnapshot())
+			s.setOffer(offer)
+			premium := offer.FinalPaise - offer.BasePaise
+			view := OfferView{
+				Offer:              offer,
+				WalletBalancePaise: wallet.BalancePaise,
+				SpendLimitPaise:    wallet.SpendLimitPaise,
+				BudgetPaise:        wallet.BudgetPaise,
+				PremiumPaise:       premium,
+				AdvisoryBandPct:    AutoBuyPremiumMaxPct,
+			}
+			if offer.BasePaise > 0 {
+				view.PremiumPct = int(premium * 100 / offer.BasePaise)
+			}
+			return view, nil
+		}, workflow.NodeConfig{Timeout: nodeTimeout})
+
+	// The judgement node: the agent decides accept / negotiate / ask_human /
+	// decline. No threshold in code makes this call.
+	assessNode, err := workflow.NewAgentNodeTyped[OfferView, Assessment](assessAgent, workflow.NodeConfig{Timeout: nodeTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("assess node: %w", err)
+	}
+
+	// The router carries the agent's decision onto an edge. Its only override is
+	// a money guard: it will not let an "accept" spend past the wallet or the
+	// stated budget, and escalates to the human instead of silently refusing.
+	routeNode := workflow.NewEmittingFunctionNode[Assessment, Offer]("route_decision",
+		func(ctx agent.Context, assessment Assessment, emit func(*session.Event) error) (Offer, error) {
+			offer := s.offerSnapshot()
+			if offer.SessionID == "" {
+				return Offer{}, fmt.Errorf("no merchant offer in flight")
+			}
+			route, note := routeFor(assessment, offer, s.walletSnapshot())
+			offer.Route = route
+			offer.Reason = joinReason(assessment.Reason, note, offer.Reason)
 			ev := session.NewEvent(ctx, ctx.InvocationID())
-			ev.Routes = []string{offer.Route}
+			ev.Routes = []string{route}
 			ev.Output = offer
 			if err := emit(ev); err != nil {
 				return Offer{}, err
@@ -201,7 +281,20 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			out := outcomeFrom(offer, resolution)
 			out.Action = string(ActionBuy)
 			out.Accepted = true
-			out.Rationale = "accepted within budget and premium band"
+			out.Rationale = joinReason(offer.Reason, "buyer agent accepted the merchant's terms")
+			return out, nil
+		}, workflow.NodeConfig{Timeout: nodeTimeout})
+
+	// The agent asked for the human. The A2A session stays open on purpose: the
+	// deal is genuinely pending a person, not accepted and not refused.
+	askHumanNode := workflow.NewFunctionNode[Offer, Outcome]("ask_human",
+		func(ctx agent.Context, offer Offer) (Outcome, error) {
+			out := outcomeFrom(offer, negotiationclient.Resolution{
+				SessionID: offer.SessionID, FinalAmountPaise: offer.FinalPaise, Transcript: offer.Transcript,
+			})
+			out.Action = string(ActionAskHuman)
+			out.Status = "needs_human"
+			out.Rationale = joinReason(offer.Reason, "buyer agent escalated this offer to the human")
 			return out, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
@@ -228,16 +321,20 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 		Add(workflow.Start, intentNode).
 		Add(intentNode, searchNode).
 		Add(searchNode, selectNode).
-		Add(selectNode, offerNode)
-	builder.AddRoutes(offerNode, map[string]workflow.Node{
+		Add(selectNode, offerNode).
+		Add(offerNode, assessNode).
+		Add(assessNode, routeNode)
+	builder.AddRoutes(routeNode, map[string]workflow.Node{
 		RouteAccept:    acceptNode,
 		RouteNegotiate: negotiateNode,
+		RouteAskHuman:  askHumanNode,
 		RouteDecline:   declinedNode,
 	})
 	// The engine requires branch convergence via JoinNode.
 	join := workflow.NewJoinNode("negotiation_join")
 	builder.Add(negotiateNode, join).
 		Add(acceptNode, join).
+		Add(askHumanNode, join).
 		Add(declinedNode, join)
 
 	finalizeNode := workflow.NewFunctionNode[any, Result]("finalize",
@@ -455,23 +552,53 @@ type counterResult struct {
 	Reason           string `json:"reason,omitempty"`
 }
 
-// classifyOffer routes an offer by hard money ceilings first, then the
-// premium-band guidance given to the negotiating agent.
-func classifyOffer(offer Offer, wallet Wallet) string {
+// classifyOffer is gone: the buyer agent decides accept/negotiate/ask_human/
+// decline. routeFor only carries that decision onto an edge, and refuses to let
+// an "accept" spend money the user does not have — escalating to the human
+// rather than quietly overruling the agent.
+func routeFor(assessment Assessment, offer Offer, wallet Wallet) (string, string) {
+	route := ""
+	switch strings.ToLower(strings.TrimSpace(assessment.Decision)) {
+	case "accept", "buy", "accept_offer":
+		route = RouteAccept
+	case "negotiate", "counter", "counter_offer":
+		route = RouteNegotiate
+	case "ask_human", "ask-human", "askhuman", "human", "confirm":
+		route = RouteAskHuman
+	case "decline", "reject", "skip":
+		route = RouteDecline
+	default:
+		return RouteAskHuman, fmt.Sprintf("agent returned an unclear decision %q, so the human decides", assessment.Decision)
+	}
+
+	if route != RouteAccept {
+		return route, ""
+	}
 	ceiling := wallet.BudgetPaise
 	if ceiling <= 0 {
 		ceiling = wallet.SpendLimitPaise
 	}
 	switch {
-	case offer.FinalPaise > wallet.BalancePaise,
-		ceiling > 0 && offer.FinalPaise > ceiling:
-		return RouteDecline
-	case offer.BasePaise > 0 &&
-		(offer.FinalPaise-offer.BasePaise)*100 <= offer.BasePaise*AutoBuyPremiumMaxPct:
-		return RouteAccept
+	case offer.FinalPaise > wallet.BalancePaise:
+		return RouteAskHuman, fmt.Sprintf("wallet holds INR %.2f but the offer is INR %.2f, so the human decides",
+			float64(wallet.BalancePaise)/100, float64(offer.FinalPaise)/100)
+	case ceiling > 0 && offer.FinalPaise > ceiling:
+		return RouteAskHuman, fmt.Sprintf("offer INR %.2f is above the stated limit INR %.2f, so the human decides",
+			float64(offer.FinalPaise)/100, float64(ceiling)/100)
 	default:
-		return RouteNegotiate
+		return RouteAccept, ""
 	}
+}
+
+// joinReason strings together the non-empty parts of an explanation.
+func joinReason(parts ...string) string {
+	var kept []string
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func mustTool[TArgs, TResult any](name, description string, fn func(agent.Context, TArgs) (TResult, error)) tool.Tool {

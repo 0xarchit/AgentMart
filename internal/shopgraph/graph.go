@@ -46,6 +46,26 @@ type Result struct {
 	NeedsApproval bool // informational: premium band crossed on an in-budget offer
 }
 
+// Assessment is the buyer agent's judgement on a merchant offer. The agent —
+// not a threshold in code — chooses what happens next.
+type Assessment struct {
+	Decision string `json:"decision"` // accept | negotiate | ask_human | decline
+	Reason   string `json:"reason"`
+}
+
+// OfferView is what the assessing agent sees: the merchant's offer plus the
+// user's money facts, so its judgement is grounded in both instead of in a
+// hardcoded rule.
+type OfferView struct {
+	Offer
+	WalletBalancePaise int64 `json:"wallet_balance_paise"`
+	SpendLimitPaise    int64 `json:"spend_limit_paise"`
+	BudgetPaise        int64 `json:"budget_paise"`
+	PremiumPaise       int64 `json:"premium_over_list_paise"`
+	PremiumPct         int   `json:"premium_over_list_pct"`
+	AdvisoryBandPct    int   `json:"advisory_band_pct"`
+}
+
 // Tools are the graph's hands: MCP lookups + A2A negotiation voice. Money
 // movement stays outside — purchases execute through PurchaseService after Run.
 type Tools struct {

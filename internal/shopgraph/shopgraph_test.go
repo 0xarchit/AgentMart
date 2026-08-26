@@ -40,16 +40,63 @@ func TestNewCompilesShopGraph(t *testing.T) {
 	}
 }
 
-func TestClassifyOfferRoutesByMoney(t *testing.T) {
-	w := Wallet{BalancePaise: 500000, SpendLimitPaise: 500000}
+// The buyer agent owns the accept/negotiate/ask_human/decline call. routeFor
+// only carries that decision onto an edge, with one money guard.
+func TestRouteForCarriesTheAgentsDecision(t *testing.T) {
+	wallet := Wallet{BalancePaise: 500000, SpendLimitPaise: 500000}
 	offer := Offer{BasePaise: 240000, FinalPaise: 250000}
-	if got := classifyOffer(offer, w); got != RouteAccept {
-		t.Fatalf("in-band route = %s", got)
+
+	for decision, want := range map[string]string{
+		"accept":    RouteAccept,
+		"negotiate": RouteNegotiate,
+		"ask_human": RouteAskHuman,
+		"decline":   RouteDecline,
+		"ACCEPT":    RouteAccept,
+		"counter":   RouteNegotiate,
+		"confirm":   RouteAskHuman,
+		"reject":    RouteDecline,
+	} {
+		got, note := routeFor(Assessment{Decision: decision, Reason: "agent reasoning"}, offer, wallet)
+		if got != want {
+			t.Fatalf("decision %q routed to %s, want %s", decision, got, want)
+		}
+		if note != "" {
+			t.Fatalf("decision %q should pass through unannotated, got %q", decision, note)
+		}
 	}
-	if got := classifyOffer(Offer{BasePaise: 240000, FinalPaise: 400000}, w); got != RouteNegotiate {
-		t.Fatalf("premium-in-budget route = %s", got)
+}
+
+func TestRouteForEscalatesUnaffordableAccept(t *testing.T) {
+	// An "accept" the wallet cannot fund goes to the human, not silently refused.
+	got, note := routeFor(Assessment{Decision: "accept"},
+		Offer{BasePaise: 240000, FinalPaise: 600000},
+		Wallet{BalancePaise: 500000, SpendLimitPaise: 500000})
+	if got != RouteAskHuman || note == "" {
+		t.Fatalf("over-wallet accept: route = %s note = %q", got, note)
 	}
-	if got := classifyOffer(Offer{BasePaise: 240000, FinalPaise: 600000}, w); got != RouteDecline {
-		t.Fatalf("over-ceiling route = %s", got)
+
+	// Same for an accept above the stated budget.
+	got, note = routeFor(Assessment{Decision: "accept"},
+		Offer{BasePaise: 240000, FinalPaise: 300000},
+		Wallet{BalancePaise: 900000, SpendLimitPaise: 900000, BudgetPaise: 250000})
+	if got != RouteAskHuman || note == "" {
+		t.Fatalf("over-budget accept: route = %s note = %q", got, note)
+	}
+
+	// Negotiate is never overridden by the money guard.
+	got, _ = routeFor(Assessment{Decision: "negotiate"},
+		Offer{BasePaise: 240000, FinalPaise: 900000},
+		Wallet{BalancePaise: 100000, SpendLimitPaise: 100000})
+	if got != RouteNegotiate {
+		t.Fatalf("negotiate route = %s", got)
+	}
+}
+
+func TestRouteForUnclearDecisionAsksHuman(t *testing.T) {
+	got, note := routeFor(Assessment{Decision: "maybe?"},
+		Offer{BasePaise: 240000, FinalPaise: 250000},
+		Wallet{BalancePaise: 500000, SpendLimitPaise: 500000})
+	if got != RouteAskHuman || note == "" {
+		t.Fatalf("unclear decision: route = %s note = %q", got, note)
 	}
 }

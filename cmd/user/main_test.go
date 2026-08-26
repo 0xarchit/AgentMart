@@ -31,6 +31,10 @@ func (f fakePurchaser) ResolveApproval(context.Context, int64, string, string) (
 	return f.result, f.err
 }
 
+func (f fakePurchaser) RequestApproval(context.Context, buyer.PurchaseRequest, string) (buyer.PurchaseResult, error) {
+	return buyer.PurchaseResult{ApprovalRequired: true, ApprovalToken: "token", AmountPaise: f.result.AmountPaise}, f.err
+}
+
 type fakeRefunder struct {
 	result buyer.RefundResult
 	err    error

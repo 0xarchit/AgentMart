@@ -38,6 +38,7 @@ type linkRedeemer interface {
 
 type purchaser interface {
 	Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error)
+	RequestApproval(context.Context, buyer.PurchaseRequest, string) (buyer.PurchaseResult, error)
 }
 
 type refunder interface {
@@ -297,6 +298,14 @@ func (p loggingPurchaser) Purchase(ctx context.Context, request buyer.PurchaseRe
 	return result, err
 }
 
+func (p loggingPurchaser) RequestApproval(ctx context.Context, request buyer.PurchaseRequest, reason string) (buyer.PurchaseResult, error) {
+	result, err := p.inner.RequestApproval(ctx, request, reason)
+	if err != nil {
+		log.Printf("approval request error: %v", err)
+	}
+	return result, err
+}
+
 func (p loggingPurchaser) ResolveApproval(ctx context.Context, telegramID int64, token, decision string) (buyer.PurchaseResult, error) {
 	result, err := p.inner.(approvalResolver).ResolveApproval(ctx, telegramID, token, decision)
 	if err != nil {
@@ -441,14 +450,34 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		return client.SendMessage(ctx, message.Chat.ID, "The selected product is no longer available.")
 	}
 	baseAmount := product.PricePaise * int64(result.Quantity)
-	purchase, err := purchases.Purchase(ctx, buyer.PurchaseRequest{
+	purchaseRequest := buyer.PurchaseRequest{
 		TelegramID:       message.From.ID,
 		ProductID:        result.ProductID,
 		Quantity:         result.Quantity,
 		BaseAmountPaise:  baseAmount,
 		FinalAmountPaise: result.FinalPaise,
 		IdempotencyKey:   fmt.Sprintf("telegram:nl:%d:%d", message.From.ID, message.MessageID),
-	})
+	}
+
+	// The buyer agent itself asked for the human: record a pending approval and
+	// hand the decision over instead of spending.
+	if result.Action == shopgraph.ActionAskHuman {
+		pending, approvalErr := purchases.RequestApproval(ctx, purchaseRequest, result.Rationale)
+		if approvalErr != nil {
+			return fmt.Errorf("request human approval: %w", approvalErr)
+		}
+		ask := fmt.Sprintf("Your call: %s for INR %.2f. Approval token: %s",
+			product.Name, float64(pending.AmountPaise)/100, pending.ApprovalToken)
+		ask += "\n\n" + summary.String()
+		if len(result.Transcript) > 0 {
+			if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
+				log.Printf("send negotiation transcript failed: %v", docErr)
+			}
+		}
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, replyMarkupForResponse(ask))
+	}
+
+	purchase, err := purchases.Purchase(ctx, purchaseRequest)
 	if err != nil {
 		return fmt.Errorf("agentic purchase failed: %w", err)
 	}
