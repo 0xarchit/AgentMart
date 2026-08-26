@@ -45,6 +45,7 @@ type fakeDecisionMaker struct {
 type fakeReasoningAuditor struct {
 	input    buyerreasoning.Input
 	decision buyerreasoning.Decision
+	runs     []buyer.AgentRun
 }
 
 type fakeAccountFacts struct{}
@@ -62,6 +63,11 @@ func (fakeProductFacts) Get(context.Context, string) (catalog.Product, error) {
 func (f *fakeReasoningAuditor) RecordReasoningDecision(_ context.Context, _ int64, input buyerreasoning.Input, decision buyerreasoning.Decision) error {
 	f.input = input
 	f.decision = decision
+	return nil
+}
+
+func (f *fakeReasoningAuditor) RecordAgentRun(_ context.Context, _ int64, _ string, run buyer.AgentRun) error {
+	f.runs = append(f.runs, run)
 	return nil
 }
 

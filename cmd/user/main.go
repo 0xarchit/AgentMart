@@ -60,6 +60,7 @@ type decisionMaker interface {
 
 type reasoningAuditor interface {
 	RecordReasoningDecision(context.Context, int64, buyerreasoning.Input, buyerreasoning.Decision) error
+	RecordAgentRun(context.Context, int64, string, buyer.AgentRun) error
 }
 
 type accountFactsReader interface {
@@ -363,6 +364,18 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		// Strict mode: the human sees the real failure instead of a silent
 		// scripted purchase.
 		return client.SendMessage(ctx, message.Chat.ID, "Agent could not complete the request: "+runErr.Error())
+	}
+	// Explainability: persist the graph's decision and node trace before any
+	// money moves, so the dashboard can justify the purchase afterwards.
+	if services.audit != nil {
+		if auditErr := services.audit.RecordAgentRun(ctx, message.From.ID, message.Text, buyer.AgentRun{
+			Action: string(result.Action), ProductID: result.ProductID, ProductName: result.ProductName,
+			Quantity: result.Quantity, FinalPaise: result.FinalPaise, SessionID: result.SessionID,
+			Accepted: result.Accepted, NeedsHuman: result.NeedsApproval,
+			Rationale: result.Rationale, Steps: result.Steps,
+		}); auditErr != nil {
+			return fmt.Errorf("audit agent run: %w", auditErr)
+		}
 	}
 	if len(result.Transcript) > 0 && result.Action != shopgraph.ActionDecline || len(result.Transcript) >= 2 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
