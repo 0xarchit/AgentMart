@@ -24,6 +24,7 @@ import (
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/remotemerchant"
 	"agentmart/internal/shopgraph"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
@@ -180,10 +181,21 @@ func main() {
 			Accept:  negotiationService.Accept,
 			Decline: negotiationService.Decline,
 		}
+		// Reach the merchant as a native ADK agent over A2A when its card is
+		// published: the negotiating agent then delegates to a real agent instead
+		// of only calling RPC tools.
+		merchantAgent, merchantErr := remotemerchant.New(ctx, remotemerchant.Config{
+			Endpoint:    negotiationEndpoint,
+			SharedToken: os.Getenv("MARKET_SHARED_TOKEN"),
+		})
+		if merchantErr != nil {
+			logger.Error("merchant remote agent unavailable", "error", merchantErr)
+		}
 		loopService, err = shopgraph.New(ctx, shopgraph.Config{
-			APIKey:  os.Getenv("OPENAI_API_KEY"),
-			BaseURL: os.Getenv("OPENAI_BASE_URL"),
-			Model:   os.Getenv("ADK_MODEL_NAME"),
+			APIKey:        os.Getenv("OPENAI_API_KEY"),
+			BaseURL:       os.Getenv("OPENAI_BASE_URL"),
+			Model:         os.Getenv("ADK_MODEL_NAME"),
+			MerchantAgent: merchantAgent,
 		}, loopTools)
 		if err != nil {
 			logger.Error("buyer agent loop configuration failed", "error", err)

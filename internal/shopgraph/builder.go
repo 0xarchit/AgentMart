@@ -29,6 +29,7 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/agenttool"
 	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
@@ -43,16 +44,21 @@ type Config struct {
 	APIKey  string
 	BaseURL string
 	Model   string
+	// MerchantAgent, when set, is the merchant's own agent reached over A2A.
+	// The negotiating agent gets it as a delegate tool, so the deal is struck
+	// agent-to-agent through ADK instead of bespoke RPC glue.
+	MerchantAgent agent.Agent
 }
 
 // Service owns the compiled graph and per-run wallet slot. The buyer bot is
 // serial, so one slot is safe; revisit if runs ever fan out per user.
 type Service struct {
-	tools   Tools
-	model   *llmchat.Model
-	mu      sync.Mutex
-	wallet  Wallet
-	wfAgent agent.Agent
+	tools    Tools
+	model    *llmchat.Model
+	merchant agent.Agent
+	mu       sync.Mutex
+	wallet   Wallet
+	wfAgent  agent.Agent
 }
 
 // New compiles the graph. Safe to call without network: models are only used
@@ -61,7 +67,7 @@ func New(ctx context.Context, cfg Config, tools Tools) (*Service, error) {
 	if err := tools.validate(); err != nil {
 		return nil, err
 	}
-	s := &Service{tools: tools, model: llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL)}
+	s := &Service{tools: tools, model: llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL), merchant: cfg.MerchantAgent}
 	root, err := s.buildGraph()
 	if err != nil {
 		return nil, err
@@ -102,6 +108,10 @@ base_amount_paise) plus wallet facts and premium_band_pct=%d. Decide:
 - Otherwise call counter_offer(session_id, amount_paise) ONCE at about 85%% of
   the ask. Then judge the response: accept_offer if it now fits, decline_offer
   otherwise. Never exceed wallet_balance_paise or budget_paise.
+- When merchant_agent is available you may consult it first: ask why the price
+  holds, what the bundle adds, or whether a loyalty deal applies. Use its
+  answer in your reasoning, but only counter_offer/accept_offer/decline_offer
+  change the deal.
 Finish with a short summary of what you did and why.`, AutoBuyPremiumMaxPct)
 )
 
@@ -414,7 +424,15 @@ func (s *Service) negotiationTools() []tool.Tool {
 		func(ctx agent.Context, in sessionInput) (map[string]any, error) {
 			return map[string]any{"session_id": in.SessionID}, nil
 		})
-	return []tool.Tool{counter, accept, decline, getTerms}
+	negotiationTools := []tool.Tool{counter, accept, decline, getTerms}
+	// Agent-to-agent delegation: when the merchant's own agent is reachable over
+	// A2A, expose it as a tool so the buyer can ask it to justify terms, pitch
+	// bundles, or respond to a counter in its own words.
+	if s.merchant != nil {
+		negotiationTools = append(negotiationTools,
+			agenttool.New(s.merchant, &agenttool.Config{SkipSummarization: false}))
+	}
+	return negotiationTools
 }
 
 type counterInput struct {

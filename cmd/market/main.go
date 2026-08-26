@@ -16,8 +16,8 @@ import (
 
 	"agentmart/internal/campaigns"
 	"agentmart/internal/catalog"
-	"agentmart/internal/marketauth"
 	"agentmart/internal/marketaudit"
+	"agentmart/internal/marketauth"
 	"agentmart/internal/marketgraph"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
