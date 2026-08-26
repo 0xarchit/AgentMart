@@ -29,6 +29,7 @@ type Config struct {
 // Negotiator runs the merchant graph. It satisfies negotiation.Negotiator.
 type Negotiator struct {
 	graph     agent.Agent
+	shopfront agent.Agent
 	campaigns CampaignProvider
 	auditor   Auditor
 	sessions  atomic.Uint64
@@ -49,6 +50,11 @@ func New(cfg Config, campaigns CampaignProvider, auditor Auditor) (*Negotiator, 
 		return nil, err
 	}
 	n.graph = graph
+	shopfront, err := buildShopfront(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("shop owner agent: %w", err)
+	}
+	n.shopfront = shopfront
 	return n, nil
 }
 

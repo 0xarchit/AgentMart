@@ -79,6 +79,15 @@ func (f fakeDecisionMaker) Decide(context.Context, buyerreasoning.Input) (buyerr
 	return f.decision, nil
 }
 
+func (fakeNegotiator) Browse(context.Context, string, int64, string) (negotiationclient.Shortlist, error) {
+	return negotiationclient.Shortlist{
+		Greeting: "welcome in",
+		Options: []negotiationclient.ShortlistOption{{
+			ProductID: "product", Name: "Trimmer", PricePaise: 100, Pitch: "solid everyday pick",
+		}},
+	}, nil
+}
+
 func (fakeNegotiator) Propose(context.Context, string, int) (negotiationclient.Proposal, error) {
 	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, Reason: "three-year warranty"}, nil
 }

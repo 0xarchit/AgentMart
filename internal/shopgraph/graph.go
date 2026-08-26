@@ -66,10 +66,11 @@ type OfferView struct {
 	AdvisoryBandPct    int   `json:"advisory_band_pct"`
 }
 
-// Tools are the graph's hands: catalog lookups and the negotiation voice. Money
-// movement stays outside, purchases execute through PurchaseService after Run.
+// Tools are the graph's hands: the shop conversation plus the one catalog read
+// used to re-verify what was bought. Money movement stays outside: purchases
+// execute through PurchaseService after Run.
 type Tools struct {
-	Search  func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error)
+	Browse  func(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error)
 	Get     func(ctx context.Context, id string) (catalog.Product, error)
 	Offers  func(ctx context.Context, id string, qty int, accountID string) (negotiationclient.Proposal, error)
 	Counter func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error)
@@ -78,10 +79,17 @@ type Tools struct {
 }
 
 func (t Tools) validate() error {
-	if t.Search == nil || t.Get == nil || t.Offers == nil || t.Counter == nil || t.Accept == nil || t.Decline == nil {
+	if t.Browse == nil || t.Get == nil || t.Offers == nil || t.Counter == nil || t.Accept == nil || t.Decline == nil {
 		return fmt.Errorf("shopgraph tools are incomplete")
 	}
 	return nil
+}
+
+// Pick is the buyer's choice from the shop's shortlist, carrying the opening
+// conversation forward so the final transcript starts where the talking did.
+type Pick struct {
+	Selection
+	ShopTranscript []negotiation.Turn `json:"-"`
 }
 
 // Intent is the parsed user request produced by the intent node.

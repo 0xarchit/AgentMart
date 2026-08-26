@@ -50,6 +50,7 @@ type approvalResolver interface {
 }
 
 type negotiator interface {
+	Browse(context.Context, string, int64, string) (negotiationclient.Shortlist, error)
 	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
 	ProposeAs(context.Context, string, int, string) (negotiationclient.Proposal, error)
 	Accept(context.Context, string) (negotiationclient.Resolution, error)
@@ -168,8 +169,8 @@ func main() {
 	var loopService *shopgraph.Service
 	if negotiationService != nil {
 		loopTools := shopgraph.Tools{
-			Search: func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error) {
-				return catalogReader.Search(ctx, catalog.SearchRequest{Query: query, MaxPricePaise: maxPaise})
+			Browse: func(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error) {
+				return negotiationService.Browse(ctx, brief, budgetPaise, accountID)
 			},
 			Get: func(ctx context.Context, id string) (catalog.Product, error) {
 				return catalogReader.Get(ctx, id)
@@ -325,6 +326,14 @@ func (r loggingRefunder) Refund(ctx context.Context, request buyer.RefundRequest
 }
 
 type loggingNegotiator struct{ inner negotiator }
+
+func (n loggingNegotiator) Browse(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error) {
+	result, err := n.inner.Browse(ctx, brief, budgetPaise, accountID)
+	if err != nil {
+		log.Printf("shop browse error: %v", err)
+	}
+	return result, err
+}
 
 func (n loggingNegotiator) Propose(ctx context.Context, productID string, quantity int) (negotiationclient.Proposal, error) {
 	result, err := n.inner.Propose(ctx, productID, quantity)

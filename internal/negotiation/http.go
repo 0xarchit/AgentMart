@@ -25,8 +25,18 @@ type Server struct {
 	products   map[string]catalog.Product
 	getProduct func(context.Context, string) (catalog.Product, error)
 	getPriced  func(context.Context, string) (catalog.Product, int64, error)
+	search     func(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
+	shopfront  Shopfront
 	negotiator Negotiator
 	policy     Policy
+}
+
+// WithShopfront gives the server its shop-owner voice and the stock it can look
+// through, enabling the opening browse turn.
+func (s *Server) WithShopfront(shopfront Shopfront, search func(context.Context, catalog.SearchRequest) ([]catalog.Product, error)) *Server {
+	s.shopfront = shopfront
+	s.search = search
+	return s
 }
 
 // Negotiator lets the merchant agent choose counter amounts and wording inside
@@ -110,6 +120,8 @@ func (s *Server) Handler() http.Handler {
 		var response any
 		var err error
 		switch request.Type {
+		case "browse":
+			response, err = s.browse(r.Context(), request)
 		case "propose":
 			response, err = s.propose(r.Context(), request)
 		case "counter":
@@ -117,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 		case "accept", "decline":
 			response, err = s.resolve(r.Context(), request)
 		default:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be propose, counter, accept, or decline"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be browse, propose, counter, accept, or decline"})
 			return
 		}
 		if err != nil {
@@ -139,7 +151,9 @@ type negotiationRequest struct {
 	Quantity           int    `json:"qty"`
 	Reason             string `json:"reason"`
 	CounterAmountPaise int64  `json:"counter_amount_paise"`
-	AccountID          string `json:"account_id"` // optional buyer identity for campaign personalisation
+	AccountID          string `json:"account_id"`   // optional buyer identity for campaign personalisation
+	Brief              string `json:"brief"`        // browse only: what the buyer is shopping for
+	BudgetPaise        int64  `json:"budget_paise"` // browse only: the ceiling the buyer stated
 }
 
 func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[string]any, error) {

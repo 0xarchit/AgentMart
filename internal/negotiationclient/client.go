@@ -126,6 +126,57 @@ func (c *Client) ProposeAs(ctx context.Context, productID string, quantity int, 
 	return result, err
 }
 
+// Shortlist is the merchant's answer to "what do you have": its own pick of
+// stock, pitched in the owner's words, with prices from the shop's records.
+type Shortlist struct {
+	Greeting   string             `json:"greeting"`
+	Options    []ShortlistOption  `json:"options"`
+	Closing    string             `json:"closing,omitempty"`
+	Transcript []negotiation.Turn `json:"transcript,omitempty"`
+}
+
+// ShortlistOption is one pitched product from the merchant.
+type ShortlistOption struct {
+	ProductID     string `json:"product_id"`
+	Name          string `json:"name"`
+	PricePaise    int64  `json:"price_paise"`
+	Pitch         string `json:"pitch"`
+	Includes      string `json:"includes,omitempty"`
+	Stock         int    `json:"stock,omitempty"`
+	WarrantyYears int    `json:"warranty_years,omitempty"`
+	TrustScore    int    `json:"trust_score,omitempty"`
+}
+
+// Browse opens the conversation: the buyer tells the merchant what it is after
+// and the merchant answers with what it wants to show.
+func (c *Client) Browse(ctx context.Context, brief string, budgetPaise int64, accountID string) (Shortlist, error) {
+	payload := map[string]any{"type": "browse", "brief": brief}
+	if budgetPaise > 0 {
+		payload["budget_paise"] = budgetPaise
+	}
+	if strings.TrimSpace(accountID) != "" {
+		payload["account_id"] = accountID
+	}
+	if c.a2a != nil {
+		return c.a2aShortlist(ctx, payload)
+	}
+	var result Shortlist
+	err := c.post(ctx, payload, &result)
+	return result, err
+}
+
+func (c *Client) a2aShortlist(ctx context.Context, request map[string]any) (Shortlist, error) {
+	var result Shortlist
+	text, err := c.sendA2A(ctx, request)
+	if err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return result, fmt.Errorf("decode merchant shortlist: %w", err)
+	}
+	return result, nil
+}
+
 // Accept accepts a merchant counter offer.
 func (c *Client) Accept(ctx context.Context, sessionID string) (Resolution, error) {
 	return c.resolve(ctx, sessionID, "accept", "")

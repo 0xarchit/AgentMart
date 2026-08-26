@@ -11,7 +11,14 @@ import (
 
 func fakeGraphTools() Tools {
 	return Tools{
-		Search: func(context.Context, string, int64) ([]catalog.Product, error) { return nil, nil },
+		Browse: func(context.Context, string, int64, string) (negotiationclient.Shortlist, error) {
+			return negotiationclient.Shortlist{
+				Greeting: "welcome in",
+				Options: []negotiationclient.ShortlistOption{{
+					ProductID: "product", Name: "Trimmer", PricePaise: 100, Pitch: "solid everyday pick",
+				}},
+			}, nil
+		},
 		Get: func(_ context.Context, id string) (catalog.Product, error) {
 			return catalog.Product{ID: id, PricePaise: 100, Stock: 1}, nil
 		},

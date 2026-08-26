@@ -61,7 +61,14 @@ func main() {
 		logger.Error("merchant negotiator configuration failed", "error", nerr)
 		return
 	}
-	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchantNegotiator)
+	// marketgraph.New returns a nil pointer when no model is configured. Assign
+	// through the interface only when it is real, otherwise the interface value
+	// is non-nil while the pointer inside it is not.
+	var merchant merchantBrain
+	if merchantNegotiator != nil {
+		merchant = merchantNegotiator
+	}
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant)
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -93,7 +100,14 @@ type catalogReader interface {
 	CheckStock(context.Context, string, int) (catalog.StockResult, error)
 }
 
-func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator negotiation.Negotiator) (http.Handler, error) {
+// merchantBrain is the merchant's reasoning: the shop-owner voice that shows
+// stock and the strategist that prices it.
+type merchantBrain interface {
+	negotiation.Negotiator
+	negotiation.Shopfront
+}
+
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain) (http.Handler, error) {
 	privateMux := http.NewServeMux()
 	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
 		product, err := service.GetWithCost(ctx, id)
@@ -108,9 +122,14 @@ func newHandler(service catalogReader, store negotiation.SessionStore, agentEndp
 	}
 	if merchantNegotiator != nil {
 		negotiationServer.UseNegotiator(merchantNegotiator)
+		// One merchant, one brain: the shop-owner voice answers browse turns
+		// through the same server that quotes and negotiates.
+		negotiationServer.WithShopfront(merchantNegotiator, service.Search)
 	}
 	privateMux.Handle("POST /negotiation", negotiationServer.Handler())
-	agentHandler, err := merchantagent.NewHandler(service.Get, store, agentEndpoint)
+	// The agent surface shares that server, so a buyer talking agent to agent
+	// reaches the same reasoning and the same cost floor as a direct caller.
+	agentHandler, err := merchantagent.NewHandler(negotiationServer, agentEndpoint)
 	if err != nil {
 		return nil, err
 	}

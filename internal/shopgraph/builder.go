@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"agentmart/internal/catalog"
 	"agentmart/internal/llmchat"
+	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 
 	"google.golang.org/adk/v2/agent"
@@ -56,6 +56,7 @@ type Service struct {
 	tools       Tools
 	model       *llmchat.Model
 	merchant    agent.Agent
+	chooseAgent agent.Agent
 	assessAgent agent.Agent
 	mu          sync.Mutex
 	wallet      Wallet
@@ -97,10 +98,16 @@ Return keywords that name the product or category (e.g. ["trimmer"]), and
 budget_paise parsed from phrases like "under 2500" (rupees -> x100). Use 0 when
 no budget was stated.`
 
-	selectInstruction = `Choose exactly one product from the candidates for the
-user's request. Prefer relevance first, then lower price, then higher
-trust_score. Return the chosen product_id, quantity, and one-line rationale. If
-nothing matches, return product_id "" with the reason.`
+	selectInstruction = `The shop has shown you what it has. Each option carries
+the shop's own pitch, its price in paise, stock, warranty, and trust score.
+
+Pick exactly one, the way a careful shopper would: does it match what was
+asked for, is the price sensible for what is included, and is the shop's pitch
+backed by the numbers. Prefer the option that genuinely suits the request over
+the cheapest one, and say in one line why you chose it.
+
+Return the chosen product_id, the quantity you want, and that reason. If
+nothing on offer fits, return product_id "" and say why.`
 
 	assessInstruction = fmt.Sprintf(`You are AgentMart's buyer, shopping for one
 real person and spending their money. You are handed the merchant's offer plus
@@ -189,6 +196,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
+	s.chooseAgent = selectAgent
 	negotiateAgent, err := llmagent.New(llmagent.Config{
 		Name:         "negotiate-agent",
 		Model:        s.decisionModel(),
@@ -212,24 +220,49 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("intent node: %w", err)
 	}
-	searchNode := workflow.NewFunctionNode[Intent, []catalog.Product]("search_catalog",
-		func(ctx agent.Context, in Intent) ([]catalog.Product, error) {
-			w := s.walletSnapshot()
-			maxPaise := w.SpendLimitPaise
-			if in.BudgetPaise > 0 {
-				maxPaise = in.BudgetPaise
-			}
-			return s.tools.Search(ctx, strings.Join(in.Keywords, " "), maxPaise)
-		}, workflow.NodeConfig{Timeout: nodeTimeout})
-	selectNode, err := workflow.NewAgentNodeTyped[[]catalog.Product, Selection](selectAgent, workflow.NodeConfig{Timeout: nodeTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("select node: %w", err)
-	}
-
-	offerNode := workflow.NewFunctionNode[Selection, OfferView]("fetch_offer",
-		func(ctx agent.Context, sel Selection) (OfferView, error) {
+	// The shop conversation opens here: the buyer says what it wants and the
+	// merchant answers with its own pick of stock, pitched in its own words.
+	askShopNode := workflow.NewFunctionNode[Intent, negotiationclient.Shortlist]("ask_shop",
+		func(ctx agent.Context, in Intent) (negotiationclient.Shortlist, error) {
 			wallet := s.walletSnapshot()
-			proposal, err := s.tools.Offers(ctx, sel.ProductID, sel.Quantity, wallet.AccountID)
+			budget := wallet.SpendLimitPaise
+			if in.BudgetPaise > 0 {
+				budget = in.BudgetPaise
+			}
+			brief := strings.TrimSpace(strings.Join(in.Keywords, " "))
+			if brief == "" {
+				return negotiationclient.Shortlist{}, fmt.Errorf("nothing to ask the shop for")
+			}
+			shortlist, err := s.tools.Browse(ctx, brief, budget, wallet.AccountID)
+			if err != nil {
+				return negotiationclient.Shortlist{}, err
+			}
+			if len(shortlist.Options) == 0 {
+				return negotiationclient.Shortlist{}, fmt.Errorf("the shop had nothing to show for %q", brief)
+			}
+			return shortlist, nil
+		}, workflow.NodeConfig{Timeout: negotiateTimeout})
+
+	// Choosing runs inline so the opening turns keep travelling with the choice.
+	chooseNode := workflow.NewFunctionNode[negotiationclient.Shortlist, Pick]("choose_option",
+		func(ctx agent.Context, shortlist negotiationclient.Shortlist) (Pick, error) {
+			selection, err := s.choose(ctx, shortlist)
+			if err != nil {
+				return Pick{}, err
+			}
+			if strings.TrimSpace(selection.ProductID) == "" {
+				return Pick{}, fmt.Errorf("buyer agent chose nothing: %s", selection.Rationale)
+			}
+			if selection.Quantity <= 0 {
+				selection.Quantity = 1
+			}
+			return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
+		}, workflow.NodeConfig{Timeout: assessTimeout})
+
+	offerNode := workflow.NewFunctionNode[Pick, OfferView]("fetch_offer",
+		func(ctx agent.Context, pick Pick) (OfferView, error) {
+			wallet := s.walletSnapshot()
+			proposal, err := s.tools.Offers(ctx, pick.ProductID, pick.Quantity, wallet.AccountID)
 			if err != nil {
 				return OfferView{}, err
 			}
@@ -237,7 +270,9 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				SessionID: proposal.SessionID, ProductID: proposal.ProductID,
 				ProductName: proposal.Name, Quantity: proposal.Quantity,
 				BasePaise: proposal.BaseAmountPaise, FinalPaise: proposal.FinalAmountPaise,
-				Reason: proposal.Reason, Transcript: proposal.Transcript,
+				Reason: proposal.Reason,
+				// The transcript starts where the talking started.
+				Transcript: append(append([]negotiation.Turn{}, pick.ShopTranscript...), proposal.Transcript...),
 			}
 			premium := offer.FinalPaise - offer.BasePaise
 			view := OfferView{
@@ -326,9 +361,9 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	builder := workflow.NewEdgeBuilder()
 	builder.
 		Add(workflow.Start, intentNode).
-		Add(intentNode, searchNode).
-		Add(searchNode, selectNode).
-		Add(selectNode, offerNode).
+		Add(intentNode, askShopNode).
+		Add(askShopNode, chooseNode).
+		Add(chooseNode, offerNode).
 		Add(offerNode, decideNode)
 	builder.AddRoutes(decideNode, map[string]workflow.Node{
 		RouteAccept:    acceptNode,
@@ -618,6 +653,60 @@ func mustTool[TArgs, TResult any](name, description string, fn func(agent.Contex
 
 // runnerFor builds a fresh in-memory runner per run so sessions never leak
 // between Telegram messages.
+// choose asks the buyer agent which of the shop's options to take. Run inline
+// so the shortlist and the choice never leave the same scope.
+func (s *Service) choose(parent context.Context, shortlist negotiationclient.Shortlist) (Selection, error) {
+	if s.chooseAgent == nil {
+		return Selection{}, fmt.Errorf("choosing agent is not built")
+	}
+	payload, err := jsonMarshal(shortlist)
+	if err != nil {
+		return Selection{}, err
+	}
+	run, err := runnerFor("shop-choose", s.chooseAgent)
+	if err != nil {
+		return Selection{}, fmt.Errorf("choosing runner: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(parent, assessTimeout)
+	defer cancel()
+
+	var last *session.Event
+	for ev, runErr := range run.Run(ctx, "user", fmt.Sprintf("choose-%d", time.Now().UnixNano()),
+		textContent(string(payload)), defaultRunConfig()) {
+		if runErr != nil {
+			return Selection{}, fmt.Errorf("choose an option: %w", runErr)
+		}
+		if ev != nil {
+			last = ev
+		}
+	}
+	return selectionFrom(last)
+}
+
+func selectionFrom(ev *session.Event) (Selection, error) {
+	if ev == nil {
+		return Selection{}, fmt.Errorf("choosing agent produced no answer")
+	}
+	if encoded, err := json.Marshal(ev.Output); err == nil {
+		var out Selection
+		if json.Unmarshal(encoded, &out) == nil && out.ProductID != "" {
+			return out, nil
+		}
+	}
+	if ev.Content != nil {
+		for _, part := range ev.Content.Parts {
+			if part == nil || strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+			var out Selection
+			if err := json.Unmarshal([]byte(part.Text), &out); err == nil && out.ProductID != "" {
+				return out, nil
+			}
+		}
+	}
+	return Selection{}, fmt.Errorf("choosing agent named no product")
+}
+
 // assess asks the buyer agent to judge one offer. It runs inside the deciding
 // node so the offer and the judgement never leave the same scope.
 func (s *Service) assess(parent context.Context, view OfferView) (Assessment, error) {

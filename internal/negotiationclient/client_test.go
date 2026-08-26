@@ -41,9 +41,13 @@ func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	defer server.Close()
 
 	var err error
-	handler, err = merchantagent.NewHandler(func(context.Context, string) (catalog.Product, error) {
+	merchantServer, err := negotiation.NewCatalogServerWithStore(func(context.Context, string) (catalog.Product, error) {
 		return catalog.Product{ID: "product", PricePaise: 100, Stock: 3, WarrantyYears: 2, TrustScore: 90}, nil
-	}, negotiation.NewMemorySessionStore(), server.URL)
+	}, negotiation.NewMemorySessionStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err = merchantagent.NewHandler(merchantServer, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
