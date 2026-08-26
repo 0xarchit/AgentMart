@@ -37,7 +37,7 @@ func New(endpoint string, httpClient *http.Client) (*Client, error) {
 // NewA2A discovers a merchant agent card and creates a standards-based client.
 func NewA2A(ctx context.Context, endpoint string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(endpoint) == "" {
-		return nil, fmt.Errorf("merchant A2A endpoint is required")
+		return nil, fmt.Errorf("merchant agent endpoint is required")
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -49,12 +49,12 @@ func NewA2A(ctx context.Context, endpoint string, httpClient *http.Client) (*Cli
 	}
 	client, err := a2aclient.NewFromCard(ctx, card, a2aclient.WithJSONRPCTransport(httpClient))
 	if err != nil {
-		return nil, fmt.Errorf("create merchant A2A client: %w", err)
+		return nil, fmt.Errorf("create merchant agent client: %w", err)
 	}
 	return &Client{endpoint: strings.TrimRight(endpoint, "/"), http: httpClient, a2a: client}, nil
 }
 
-// Close releases transport resources held by the A2A client.
+// Close releases transport resources held by the merchant agent client.
 func (c *Client) Close() error {
 	if c.a2a == nil {
 		return nil
@@ -153,7 +153,7 @@ func (c *Client) a2aProposal(ctx context.Context, request map[string]any) (Propo
 		return result, err
 	}
 	if err := json.Unmarshal([]byte(payload), &result); err != nil {
-		return result, fmt.Errorf("decode A2A proposal: %w", err)
+		return result, fmt.Errorf("decode merchant proposal: %w", err)
 	}
 	return result, nil
 }
@@ -165,7 +165,7 @@ func (c *Client) a2aResolution(ctx context.Context, request map[string]any) (Res
 		return result, err
 	}
 	if err := json.Unmarshal([]byte(payload), &result); err != nil {
-		return result, fmt.Errorf("decode A2A resolution: %w", err)
+		return result, fmt.Errorf("decode merchant resolution: %w", err)
 	}
 	return result, nil
 }
@@ -173,12 +173,12 @@ func (c *Client) a2aResolution(ctx context.Context, request map[string]any) (Res
 func (c *Client) sendA2A(ctx context.Context, request map[string]any) (string, error) {
 	payload, err := json.Marshal(request)
 	if err != nil {
-		return "", fmt.Errorf("encode A2A request: %w", err)
+		return "", fmt.Errorf("encode merchant request: %w", err)
 	}
 	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(string(payload)))
 	result, err := c.a2a.SendMessage(ctx, &a2a.SendMessageRequest{Message: message})
 	if err != nil {
-		return "", fmt.Errorf("send A2A request: %w", err)
+		return "", fmt.Errorf("send merchant request: %w", err)
 	}
 	return extractA2AText(result)
 }
@@ -198,14 +198,14 @@ func extractA2AText(result a2a.SendMessageResult) (string, error) {
 			}
 		}
 	default:
-		return "", fmt.Errorf("merchant A2A returned unsupported result %T", result)
+		return "", fmt.Errorf("merchant agent returned unsupported result %T", result)
 	}
 	for _, part := range parts {
 		if text := part.Text(); text != "" {
 			return text, nil
 		}
 	}
-	return "", fmt.Errorf("merchant A2A response contained no text artifact")
+	return "", fmt.Errorf("merchant agent response contained no text artifact")
 }
 
 func (c *Client) post(ctx context.Context, payload any, destination any) error {

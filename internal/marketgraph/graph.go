@@ -1,12 +1,12 @@
-// Package marketgraph is the merchant side of AgentMart as an ADK workflow
+// Package marketgraph is the merchant side of AgentMart as a workflow
 // graph: deterministic campaign/eligibility facts feed an LLM pricing
 // strategist, whose amount is then clamped by a price guard that can never
 // sell below the merchant's cost floor. Every decision carries an explanation
 // so the audit trail reads as prose, not magic numbers.
 //
-//	START → campaign(fn) → strategy(LLM) → guard(fn) → END
+//	START  to  campaign(fn)  to  strategy(LLM)  to  guard(fn)  to  END
 //
-// The graph implements negotiation.Negotiator, so the A2A negotiation server
+// The graph implements negotiation.Negotiator, so the negotiation server
 // gets an agentic orchestrator without changing its wiring.
 package marketgraph
 
@@ -94,7 +94,7 @@ type Auditor interface {
 	RecordOfferDecision(ctx context.Context, in negotiation.CounterInput, facts Facts, decision Decision) error
 }
 
-// Per-node bounds keep a slow provider from stalling an A2A round.
+// Per-node bounds keep a slow provider from stalling a negotiation round.
 const (
 	strategyTimeout = 60 * time.Second
 	graphTimeout    = 120 * time.Second

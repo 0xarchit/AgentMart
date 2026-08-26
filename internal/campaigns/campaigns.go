@@ -41,7 +41,7 @@ func (p *Provider) Eligibility(ctx context.Context, in negotiation.CounterInput)
 	}
 	account := strings.TrimSpace(in.BuyerAccountID)
 	if account == "" {
-		// Anonymous A2A caller: no history, so no funded discount. Still a
+		// Anonymous agent caller: no history, so no funded discount. Still a
 		// valid negotiation, just without personalisation.
 		return "standard", 0, []string{"no buyer account supplied: campaigns not applied"}, nil
 	}

@@ -1,7 +1,7 @@
-// Package buyeragent publishes AgentMart's buyer as a discoverable A2A agent.
+// Package buyeragent publishes AgentMart's buyer as a discoverable agent.
 //
-// Scope is deliberately quote-only: an external agent can ask ours to shop —
-// intent, catalog search, selection, and a full merchant negotiation — and gets
+// Scope is deliberately quote-only: an external agent can ask ours to shop,
+// intent, catalog search, selection, and a full merchant negotiation, and gets
 // the settled terms plus the conversation transcript back. It cannot move
 // money. Wallet debits stay on the Telegram path where the human is identified
 // and the Gate plus approval flow apply.
@@ -48,7 +48,7 @@ func NewHandler(shopper Shopper, endpoint string) (http.Handler, error) {
 		Skills: []a2a.AgentSkill{{
 			ID:          "negotiate_purchase",
 			Name:        "Negotiated shopping quote",
-			Description: `Send {"request":"a trimmer under 2500","budget_paise":250000}. Returns the chosen product, negotiated amount, whether the merchant accepted, and the A2A transcript.`,
+			Description: `Send {"request":"a trimmer under 2500","budget_paise":250000}. Returns the chosen product, negotiated amount, whether the merchant accepted, and the negotiation transcript.`,
 			Tags:        []string{"commerce", "negotiation", "shopping", "quote"},
 		}},
 	}
@@ -84,7 +84,7 @@ type shopResponse struct {
 	Note             string             `json:"note"`
 }
 
-const quoteOnlyNote = "quote only: AgentMart never debits a wallet over A2A; settle through the owning user's approved checkout"
+const quoteOnlyNote = "quote only: AgentMart never debits a wallet for an agent caller; settle through the owning user's approved checkout"
 
 func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {

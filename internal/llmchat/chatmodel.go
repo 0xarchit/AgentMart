@@ -1,7 +1,7 @@
-// Package llmchat implements adk's model.LLM over the universally-supported
+// Package llmchat implements the framework's model interface over the universally-supported
 // OpenAI POST {base}/chat/completions wire format with function calling.
 //
-// Why this exists: ADK v2.2.0's openaimodel hardcodes OpenAI's Responses API
+// Why this exists: the framework's bundled OpenAI model hardcodes OpenAI's Responses API
 // (POST {base}/responses), which OpenRouter free pools, NVIDIA NIM, OpenCode
 // Zen (for non-GPT families), and most gateways reject.
 package llmchat
@@ -167,7 +167,7 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 	return &decoded, nil
 }
 
-// adapt converts the provider choice into an ADK LLMResponse. Tool results
+// adapt converts the provider choice into a framework response. Tool results
 // flow back through GenerateContent requests built by this same adapter.
 func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	out := &model.LLMResponse{
@@ -208,9 +208,9 @@ func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	return out
 }
 
-// buildRequest converts the ADK conversation into chat-completions messages.
+// buildRequest converts the framework conversation into chat-completions messages.
 //
-// ADK delivers tool results as genai.Contents whose Parts carry
+// The framework delivers tool results as genai.Contents whose Parts carry
 // FunctionResponse (role is typically "user"), and model turns carry
 // FunctionCall parts (role "model"). Both MUST reach the provider: results as
 // role:"tool" messages echoing the call ID, calls inside assistant messages.

@@ -13,7 +13,7 @@ import (
 
 // Product is the catalog representation used by service boundaries.
 // CostPaise is merchant-private: it is only populated by GetWithCost and must
-// never be selected in buyer-facing queries or returned through MCP/A2A payloads.
+// never be selected in buyer-facing queries or returned through catalog or negotiation payloads.
 type Product struct {
 	ID               string  `json:"id"`
 	Name             string  `json:"name"`

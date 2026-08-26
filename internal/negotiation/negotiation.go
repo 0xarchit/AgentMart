@@ -36,7 +36,7 @@ type Counter struct {
 // MaxRounds caps merchant counters after the opening offer.
 const MaxRounds = 3
 
-// Turn records one side of the A2A conversation for transcript export.
+// Turn records one side of the negotiation conversation for transcript export.
 type Turn struct {
 	Actor   string    `json:"actor"` // buyer | merchant
 	Message string    `json:"message"`

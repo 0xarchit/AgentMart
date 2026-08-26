@@ -1,8 +1,8 @@
-// Package shopgraph builds AgentMart's buyer agent as a typed ADK workflow
+// Package shopgraph builds AgentMart's buyer agent as a typed workflow
 // graph: LLM decision nodes (intent / selection / negotiation) interleaved
-// with deterministic function nodes (MCP catalog lookup, A2A offer fetch,
-// band routing, final verification). The graph is wrapped by
-// agent/workflowagent so it is itself a standard ADK agent.
+// with deterministic function nodes (catalog lookup, offer fetch,
+// final verification). The graph is wrapped by
+// a workflow agent so it is itself a standard agent.
 package shopgraph
 
 import (
@@ -46,8 +46,8 @@ type Result struct {
 	NeedsApproval bool // informational: premium band crossed on an in-budget offer
 }
 
-// Assessment is the buyer agent's judgement on a merchant offer. The agent —
-// not a threshold in code — chooses what happens next.
+// Assessment is the buyer agent's judgement on a merchant offer. The agent,
+// not a threshold in code, chooses what happens next.
 type Assessment struct {
 	Decision string `json:"decision"` // accept | negotiate | ask_human | decline
 	Reason   string `json:"reason"`
@@ -66,8 +66,8 @@ type OfferView struct {
 	AdvisoryBandPct    int   `json:"advisory_band_pct"`
 }
 
-// Tools are the graph's hands: MCP lookups + A2A negotiation voice. Money
-// movement stays outside — purchases execute through PurchaseService after Run.
+// Tools are the graph's hands: catalog lookups and the negotiation voice. Money
+// movement stays outside, purchases execute through PurchaseService after Run.
 type Tools struct {
 	Search  func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error)
 	Get     func(ctx context.Context, id string) (catalog.Product, error)
@@ -97,7 +97,7 @@ type Selection struct {
 	Rationale string `json:"rationale"`
 }
 
-// Offer is the merchant's opening A2A quote for the selected product.
+// Offer is the merchant's opening quote for the selected product.
 type Offer struct {
 	SessionID   string             `json:"session_id"`
 	ProductID   string             `json:"product_id"`

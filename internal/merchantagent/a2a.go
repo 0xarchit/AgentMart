@@ -1,4 +1,4 @@
-// Package merchantagent exposes the merchant negotiation agent over A2A.
+// Package merchantagent exposes the merchant negotiation agent to other agents.
 package merchantagent
 
 import (

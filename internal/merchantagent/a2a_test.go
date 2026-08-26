@@ -1,4 +1,4 @@
-// Tests for the merchant A2A negotiation boundary.
+// Tests for the merchant negotiation boundary.
 package merchantagent
 
 import (
@@ -46,6 +46,6 @@ func TestMerchantAgentCardIsDiscoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result == nil {
-		t.Fatal("expected A2A result")
+		t.Fatal("expected an agent result")
 	}
 }

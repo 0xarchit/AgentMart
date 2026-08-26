@@ -1,4 +1,4 @@
-// Tests for the buyer A2A service: card discovery, bearer wall, quote-only
+// Tests for the buyer agent service: card discovery, bearer wall, quote-only
 // contract, and input-required signalling for human approval.
 package main
 
@@ -121,6 +121,6 @@ func TestBuyerAgentQuoteUsesStatedBudget(t *testing.T) {
 		t.Fatalf("stated budget not used as the ceiling: %+v", got)
 	}
 	if got.AccountID != "" {
-		t.Fatalf("A2A callers must stay account-less, got %q", got.AccountID)
+		t.Fatalf("agent callers must stay account-less, got %q", got.AccountID)
 	}
 }

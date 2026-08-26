@@ -183,7 +183,7 @@ func main() {
 			Accept:  negotiationService.Accept,
 			Decline: negotiationService.Decline,
 		}
-		// Reach the merchant as a native ADK agent over A2A when its card is
+		// Reach the merchant as a native remote agent when its card is
 		// published: the negotiating agent then delegates to a real agent instead
 		// of only calling RPC tools.
 		merchantAgent, merchantErr := remotemerchant.New(ctx, remotemerchant.Config{
@@ -204,7 +204,7 @@ func main() {
 			return
 		}
 	}
-	// Publish the buyer as a discoverable A2A agent when a token is configured.
+	// Publish the buyer as a discoverable agent when a token is configured.
 	// Quote-only by design: the skill negotiates and returns terms, never debits.
 	if token := strings.TrimSpace(os.Getenv("USER_AGENT_TOKEN")); token != "" && loopService != nil {
 		addr := strings.TrimSpace(os.Getenv("USER_AGENT_ADDR"))
@@ -515,7 +515,7 @@ func transcriptFileName(sessionID string) string {
 
 func renderTranscript(turns []negotiation.Turn) string {
 	var builder strings.Builder
-	builder.WriteString("AgentMart A2A negotiation transcript\n")
+	builder.WriteString("AgentMart negotiation transcript\n")
 	for _, turn := range turns {
 		builder.WriteString(turn.At.Format("15:04:05"))
 		builder.WriteString(" [")

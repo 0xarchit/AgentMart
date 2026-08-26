@@ -1,4 +1,4 @@
-// The buyer agent's A2A service: card discovery, JSON-RPC handling, and the
+// The buyer agent's public service: card discovery, JSON-RPC handling, and the
 // bearer wall that keeps an unauthenticated agent from driving our shopper.
 package main
 
@@ -14,7 +14,7 @@ import (
 	"agentmart/internal/shopgraph"
 )
 
-// newBuyerAgentHandler builds the buyer A2A mux. Everything except /health sits
+// newBuyerAgentHandler builds the buyer agent mux. Everything except /health sits
 // behind the shared token; without a token the service is not exposed at all,
 // because a reachable shopper is a spending surface.
 func newBuyerAgentHandler(shopper buyeragent.Shopper, endpoint, sharedToken string) (http.Handler, error) {

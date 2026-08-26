@@ -1,11 +1,11 @@
 // Graph construction and runtime for AgentMart's buying agent.
 //
-// Layout (ADK Go 2.0 workflow engine):
+// Layout (workflow engine):
 //
-//	START → intent(LLM) → search(MCP) → select(LLM) → offer(A2A propose + band route)
-//	    offer ──ACCEPT───▶ accept(A2A) ─────────────┐
-//	    offer ──NEGOTIATE▶ negotiate(LLM⇄A2A loop) ─┴─▶ finalize(verify) → END
-//	    offer ──DECLINE──▶ declined(outcome) ────────▶ END
+//	START  to  intent(LLM)  to  search(catalog)  to  select(LLM)  to  offer(propose)
+//	    offer --ACCEPT---> accept -------------
+//	    offer --NEGOTIATE> negotiate(reasoning loop) -+-> finalize(verify)  to  END
+//	    offer --DECLINE--> declined(outcome) --------> END
 //
 // Every judgment node is an LLM agent; routing/floors/caps are deterministic.
 package shopgraph
@@ -44,9 +44,9 @@ type Config struct {
 	APIKey  string
 	BaseURL string
 	Model   string
-	// MerchantAgent, when set, is the merchant's own agent reached over A2A.
+	// MerchantAgent, when set, is the merchant's own agent reached as a remote agent.
 	// The negotiating agent gets it as a delegate tool, so the deal is struck
-	// agent-to-agent through ADK instead of bespoke RPC glue.
+	// agent-to-agent through the framework instead of bespoke RPC glue.
 	MerchantAgent agent.Agent
 }
 
@@ -308,7 +308,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			return out, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
-	// The agent asked for the human. The A2A session stays open on purpose: the
+	// The agent asked for the human. The negotiation session stays open on purpose: the
 	// deal is genuinely pending a person, not accepted and not refused.
 	askHumanNode := workflow.NewFunctionNode[Offer, Outcome]("ask_human",
 		func(ctx agent.Context, offer Offer) (Outcome, error) {
@@ -402,7 +402,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 }
 
 // Run executes the graph for one natural-language request and returns the
-// verified result. Errors surface the real cause — strict mode.
+// verified result. Errors surface the real cause, strict mode.
 func (s *Service) Run(parent context.Context, request string, wallet Wallet) (Result, error) {
 	if s.wfAgent == nil {
 		return Result{}, fmt.Errorf("shop graph is not built")
@@ -488,7 +488,7 @@ func outcomeFromAny(raw any) (Outcome, bool) {
 	return Outcome{}, false
 }
 
-// outcomeFrom projects an A2A resolution onto the stage contract.
+// outcomeFrom projects a merchant resolution onto the stage contract.
 func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
 	out := Outcome{
 		Status:      resolution.Status,
@@ -514,7 +514,7 @@ const (
 	maxGraphEvents   = 200
 )
 
-// negotiationTools exposes the A2A conversation moves to the negotiate agent.
+// negotiationTools exposes the negotiation moves to the negotiate agent.
 func (s *Service) negotiationTools() []tool.Tool {
 	counter := mustTool("counter_offer", "Submit one counter amount in paise against the session.",
 		func(ctx agent.Context, in counterInput) (counterResult, error) {
@@ -546,7 +546,7 @@ func (s *Service) negotiationTools() []tool.Tool {
 		})
 	negotiationTools := []tool.Tool{counter, accept, decline, getTerms}
 	// Agent-to-agent delegation: when the merchant's own agent is reachable over
-	// A2A, expose it as a tool so the buyer can ask it to justify terms, pitch
+	// as a remote agent, expose it as a tool so the buyer can ask it to justify terms, pitch
 	// bundles, or respond to a counter in its own words.
 	if s.merchant != nil {
 		negotiationTools = append(negotiationTools,
@@ -577,7 +577,7 @@ type counterResult struct {
 
 // classifyOffer is gone: the buyer agent decides accept/negotiate/ask_human/
 // decline. routeFor only carries that decision onto an edge, and refuses to let
-// an "accept" spend money the user does not have — escalating to the human
+// an "accept" spend money the user does not have, escalating to the human
 // rather than quietly overruling the agent.
 func routeFor(assessment Assessment, offer Offer, wallet Wallet) (string, string) {
 	route := ""

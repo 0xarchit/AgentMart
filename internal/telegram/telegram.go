@@ -127,7 +127,7 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, id string) error {
 	return nil
 }
 
-// SendDocument uploads a small text file (e.g. an A2A negotiation transcript)
+// SendDocument uploads a small text file (e.g. a negotiation transcript)
 // to the chat via the multipart sendDocument API.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, filename, content string) error {
 	body := &bytes.Buffer{}

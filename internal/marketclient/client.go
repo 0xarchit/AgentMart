@@ -16,7 +16,7 @@ import (
 
 const reconnectDialTimeout = 5 * time.Second
 
-// Client calls the merchant's read-only catalog tools. The MCP session is
+// Client calls the merchant's read-only catalog tools. The catalog session is
 // long-lived but transparently re-dialed when the market binary restarts or
 // the stream idles out.
 type Client struct {
@@ -44,7 +44,7 @@ func New(ctx context.Context, endpoint string, httpClient *http.Client) (*Client
 }
 
 // Close releases the merchant catalog session. Shutdown-order races (market
-// already gone) are treated as success — nothing to release.
+// already gone) are treated as success, nothing to release.
 func (c *Client) Close() error {
 	if c == nil || c.session == nil {
 		return nil
@@ -111,7 +111,7 @@ func (c *Client) call(ctx context.Context, name string, arguments map[string]any
 	}
 	result, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
-		// Long-lived MCP sessions die when the market binary restarts or the
+		// Long-lived catalog sessions die when the market binary restarts or the
 		// stream idles out. Reconnect once and retry before giving up.
 		if reconnectErr := c.reconnect(ctx); reconnectErr != nil {
 			return nil, fmt.Errorf("call merchant catalog tool %s: %w (reconnect failed: %v)", name, err, reconnectErr)

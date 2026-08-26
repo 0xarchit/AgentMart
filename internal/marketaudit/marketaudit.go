@@ -59,7 +59,7 @@ func (s *Store) RecordOfferDecision(ctx context.Context, in negotiation.CounterI
 			"campaign_notes":       facts.CampaignNotes,
 		},
 	}
-	// audit_log.account_id is nullable: an anonymous A2A caller still gets a
+	// audit_log.account_id is nullable: an anonymous agent caller still gets a
 	// merchant-side trail, just without buyer attribution.
 	if in.BuyerAccountID != "" {
 		row["account_id"] = in.BuyerAccountID

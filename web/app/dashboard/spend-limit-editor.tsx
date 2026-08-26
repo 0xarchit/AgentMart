@@ -33,7 +33,7 @@ export function SpendLimitEditor({ currentPaise }: { currentPaise: number }) {
       <h2 className="text-lg font-semibold">Agent spending limit</h2>
       <p className="mt-1 text-sm text-ink/60">
         Purchases above this amount require your approval in Telegram. Applies
-        to agent buys only — wallet top-ups are unaffected.
+        to agent buys only, wallet top-ups are unaffected.
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm font-medium">

@@ -1,5 +1,5 @@
 // Strict-JSON single-function-call completion over any OpenAI-compatible
-// provider. Forces the model to emit exactly one structured payload — the
+// provider. Forces the model to emit exactly one structured payload, the
 // building block for every pipeline stage.
 package llmchat
 

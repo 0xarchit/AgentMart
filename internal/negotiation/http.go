@@ -200,7 +200,7 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 		return nil, err
 	}
 	// Record the buyer's identity once so later rounds can personalise
-	// campaign offers without re-sending it on every A2A message.
+	// campaign offers without re-sending it on every negotiation message.
 	session.BuyerAccountID = strings.TrimSpace(request.AccountID)
 	sessionID, err := newSessionID()
 	if err != nil {

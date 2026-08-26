@@ -1,6 +1,6 @@
-// Package remotemerchant exposes the merchant's A2A service as a native ADK
+// Package remotemerchant exposes the merchant's agent service as a native remote
 // agent. The buyer graph can then delegate to the merchant the same way it
-// delegates to any sub-agent, instead of hand-rolling JSON-RPC calls: ADK owns
+// delegates to any sub-agent, instead of hand-rolling JSON-RPC calls: the framework owns
 // the task lifecycle, including TaskStateInputRequired hand-backs.
 package remotemerchant
 
@@ -22,7 +22,7 @@ import (
 // Config points at the merchant's agent card and carries the shared token the
 // market requires on private routes.
 type Config struct {
-	// Endpoint is the merchant agent-card URL or its A2A mount.
+	// Endpoint is the merchant agent-card URL or its protocol mount.
 	Endpoint string
 	// SharedToken is MARKET_SHARED_TOKEN; required when the market enforces it.
 	SharedToken string
@@ -32,7 +32,7 @@ type Config struct {
 
 const defaultTimeout = 60 * time.Second
 
-// New resolves the merchant agent card and wraps it as an ADK agent. It returns
+// New resolves the merchant agent card and wraps it as a local agent. It returns
 // (nil, nil) when no endpoint is configured so callers can degrade to their
 // local tools.
 func New(ctx context.Context, cfg Config) (agent.Agent, error) {
