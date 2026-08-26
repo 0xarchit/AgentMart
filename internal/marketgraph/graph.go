@@ -87,6 +87,13 @@ type CampaignProvider interface {
 	Eligibility(ctx context.Context, in negotiation.CounterInput) (tier string, discountPct int, notes []string, err error)
 }
 
+// Auditor persists the merchant agent's explanation for every priced offer.
+// The guard node fails closed when auditing fails, mirroring the Gate: an
+// unexplainable price is not allowed to reach the buyer.
+type Auditor interface {
+	RecordOfferDecision(ctx context.Context, in negotiation.CounterInput, facts Facts, decision Decision) error
+}
+
 // Per-node bounds keep a slow provider from stalling an A2A round.
 const (
 	strategyTimeout = 60 * time.Second

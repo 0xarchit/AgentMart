@@ -17,6 +17,7 @@ import (
 	"agentmart/internal/campaigns"
 	"agentmart/internal/catalog"
 	"agentmart/internal/marketauth"
+	"agentmart/internal/marketaudit"
 	"agentmart/internal/marketgraph"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
@@ -55,7 +56,7 @@ func main() {
 	merchantConfig := buyerreasoning.FromEnv()
 	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
 		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
-	}, campaigns.NewProvider(db))
+	}, campaigns.NewProvider(db), marketaudit.New(db))
 	if nerr != nil {
 		logger.Error("merchant negotiator configuration failed", "error", nerr)
 		return

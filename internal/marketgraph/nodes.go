@@ -30,17 +30,20 @@ type Config struct {
 type Negotiator struct {
 	graph     agent.Agent
 	campaigns CampaignProvider
+	auditor   Auditor
 	sessions  atomic.Uint64
 	pending   atomic.Pointer[negotiation.CounterInput]
 }
 
 // New builds the merchant graph. Returns (nil, nil) when no model is
 // configured so the caller keeps its deterministic concession schedule.
-func New(cfg Config, campaigns CampaignProvider) (*Negotiator, error) {
+// The auditor is optional; when supplied, an offer that cannot be explained in
+// the audit trail is not returned to the buyer.
+func New(cfg Config, campaigns CampaignProvider, auditor Auditor) (*Negotiator, error) {
 	if cfg.APIKey == "" || cfg.Model == "" {
 		return nil, nil
 	}
-	n := &Negotiator{campaigns: campaigns}
+	n := &Negotiator{campaigns: campaigns, auditor: auditor}
 	graph, err := n.buildGraph(cfg)
 	if err != nil {
 		return nil, err
@@ -121,13 +124,21 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 			if reason == "" {
 				reason = "best price we can hold while keeping the quality guarantees"
 			}
-			return Decision{
+			decision := Decision{
 				AmountPaise: amount,
 				Reason:      reason,
 				Strategy:    strategy,
 				GuardNote:   note,
 				MarginPaise: amount - facts.FloorPaise,
-			}, nil
+			}
+			// Fail closed on auditing, exactly like the Gate: a price the
+			// merchant cannot explain in the trail never reaches the buyer.
+			if n.auditor != nil {
+				if err := n.auditor.RecordOfferDecision(ctx, *input, facts, decision); err != nil {
+					return Decision{}, fmt.Errorf("audit merchant offer: %w", err)
+				}
+			}
+			return decision, nil
 		}, workflow.NodeConfig{})
 
 	edges := workflow.NewEdgeBuilder().

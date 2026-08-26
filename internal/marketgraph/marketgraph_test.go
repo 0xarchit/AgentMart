@@ -32,7 +32,7 @@ func TestClampToRailsNeverSellsBelowFloor(t *testing.T) {
 }
 
 func TestNewWithoutModelStaysDeterministic(t *testing.T) {
-	negotiator, err := New(Config{}, nil)
+	negotiator, err := New(Config{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestNewWithoutModelStaysDeterministic(t *testing.T) {
 }
 
 func TestNewCompilesMerchantGraph(t *testing.T) {
-	negotiator, err := New(Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, nil)
+	negotiator, err := New(Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, nil, nil)
 	if err != nil {
 		t.Fatalf("build merchant graph: %v", err)
 	}
