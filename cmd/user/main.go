@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -201,6 +202,37 @@ func main() {
 			logger.Error("buyer agent loop configuration failed", "error", err)
 			return
 		}
+	}
+	// Publish the buyer as a discoverable A2A agent when a token is configured.
+	// Quote-only by design: the skill negotiates and returns terms, never debits.
+	if token := strings.TrimSpace(os.Getenv("USER_AGENT_TOKEN")); token != "" && loopService != nil {
+		addr := strings.TrimSpace(os.Getenv("USER_AGENT_ADDR"))
+		if addr == "" {
+			addr = ":8082"
+		}
+		cardURL := strings.TrimSpace(os.Getenv("USER_AGENT_CARD_URL"))
+		if cardURL == "" {
+			cardURL = "http://localhost" + addr + "/a2a/"
+		}
+		buyerHandler, handlerErr := newBuyerAgentHandler(shopperFunc(loopService.Run), cardURL, token)
+		if handlerErr != nil {
+			logger.Error("buyer agent service configuration failed", "error", handlerErr)
+			return
+		}
+		buyerServer := &http.Server{Addr: addr, Handler: buyerHandler}
+		go func() {
+			if serveErr := buyerServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				logger.Error("buyer agent service stopped", "error", serveErr)
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if shutErr := buyerServer.Shutdown(shutdownCtx); shutErr != nil {
+				logger.Error("buyer agent service shutdown failed", "error", shutErr)
+			}
+		}()
+		logger.Info("buyer agent published", "addr", addr, "card", cardURL+".well-known/agent-card.json")
 	}
 	pollContext := ctx
 	offset := 0

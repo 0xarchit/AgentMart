@@ -25,6 +25,14 @@ $env:USER_MARKET_MCP_ENDPOINT = "http://localhost:$market/mcp"
 $env:USER_MARKET_A2A_ENDPOINT = "http://localhost:$market/a2a/.well-known/agent-card.json"
 $env:NEXT_PUBLIC_APP_URL = if ($env:NEXT_PUBLIC_APP_URL) { $env:NEXT_PUBLIC_APP_URL } else { "http://localhost:3000" }
 
+# Publish the buyer as a discoverable A2A agent (quote-only: it negotiates and
+# returns terms, it never debits a wallet). Reuses the market shared token when
+# no dedicated one is configured.
+$buyerAgentPort = if ($env:USER_AGENT_PORT) { $env:USER_AGENT_PORT } else { "8082" }
+$env:USER_AGENT_ADDR = ":$buyerAgentPort"
+$env:USER_AGENT_CARD_URL = "http://localhost:$buyerAgentPort/a2a/"
+if (-not $env:USER_AGENT_TOKEN) { $env:USER_AGENT_TOKEN = $env:MARKET_SHARED_TOKEN }
+
 Write-Host "building market and user..."
 go build -o bin/market.exe ./cmd/market
 if ($LASTEXITCODE -ne 0) { throw "market build failed" }
