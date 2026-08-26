@@ -73,13 +73,20 @@ and <= ask_paise. Selling below the floor is a loss and is forbidden.
 Return only JSON: {"strategy":"...","amount_paise":integer,"reason":"one short
 sentence a customer would accept"}.`
 
-// buildGraph wires campaign → strategy → guard and wraps it as an agent.
+// buildGraph wires campaign to strategy to guard and wraps it as an agent.
 func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
+	// The strategist answers in the shape of its result type, otherwise the
+	// provider replies in prose and the node rejects it.
+	choiceSchema, err := llmchat.SchemaFor[StrategyChoice]()
+	if err != nil {
+		return nil, err
+	}
 	strategist, err := llmagent.New(llmagent.Config{
-		Name:        "merchant-strategist",
-		Description: "Chooses one pricing strategy and amount inside the owner's rails.",
-		Model:       llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL),
-		Instruction: strategyInstruction,
+		Name:         "merchant-strategist",
+		Description:  "Chooses one pricing strategy and amount inside the owner's rails.",
+		Model:        llmchat.New(cfg.Model, cfg.APIKey, cfg.BaseURL),
+		Instruction:  strategyInstruction,
+		OutputSchema: choiceSchema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("merchant strategist agent: %w", err)

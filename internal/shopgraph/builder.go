@@ -169,29 +169,52 @@ const (
 
 // buildGraph wires every node and wraps the workflow as a standard agent.
 func (s *Service) buildGraph() (agent.Agent, error) {
+	// Each reasoning node answers in the shape of its result type. Without this
+	// the provider replies in prose and the node's own validation rejects it.
+	intentSchema, err := llmchat.SchemaFor[Intent]()
+	if err != nil {
+		return nil, err
+	}
+	selectionSchema, err := llmchat.SchemaFor[Selection]()
+	if err != nil {
+		return nil, err
+	}
+	assessmentSchema, err := llmchat.SchemaFor[Assessment]()
+	if err != nil {
+		return nil, err
+	}
+	outcomeSchema, err := llmchat.SchemaFor[Outcome]()
+	if err != nil {
+		return nil, err
+	}
+
 	intentAgent, err := llmagent.New(llmagent.Config{
 		Name: "intent-agent", Model: s.decisionModel(), Instruction: intentInstruction,
+		OutputSchema: intentSchema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("intent agent: %w", err)
 	}
 	selectAgent, err := llmagent.New(llmagent.Config{
 		Name: "select-agent", Model: s.decisionModel(), Instruction: selectInstruction,
+		OutputSchema: selectionSchema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
 	negotiateAgent, err := llmagent.New(llmagent.Config{
-		Name:        "negotiate-agent",
-		Model:       s.decisionModel(),
-		Instruction: negotiateInstruction,
-		Tools:       s.negotiationTools(),
+		Name:         "negotiate-agent",
+		Model:        s.decisionModel(),
+		Instruction:  negotiateInstruction,
+		Tools:        s.negotiationTools(),
+		OutputSchema: outcomeSchema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("negotiate agent: %w", err)
 	}
 	assessAgent, err := llmagent.New(llmagent.Config{
 		Name: "assess-agent", Model: s.decisionModel(), Instruction: assessInstruction,
+		OutputSchema: assessmentSchema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("assess agent: %w", err)

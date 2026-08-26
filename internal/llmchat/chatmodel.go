@@ -25,6 +25,17 @@ import (
 // their first byte.
 const providerTimeout = 120 * time.Second
 
+// structuredOutputTool is the function a schema-shaped answer arrives through.
+// Function calling is the one structured-output mechanism every gateway in this
+// project supports; json_schema response formats are not.
+const structuredOutputTool = "final_answer"
+
+// wantsStructuredOutput reports whether the caller asked for a schema-shaped
+// answer rather than prose.
+func wantsStructuredOutput(req *model.LLMRequest) bool {
+	return req != nil && req.Config != nil && req.Config.ResponseSchema != nil
+}
+
 // Model speaks /chat/completions for any OpenAI-compatible provider.
 type Model struct {
 	name    string
@@ -108,7 +119,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 			yield(nil, err)
 			return
 		}
-		response := m.adapt(decoded)
+		response := m.adapt(decoded, wantsStructuredOutput(req))
 		yield(response, nil)
 	}
 }
@@ -158,7 +169,7 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 
 // adapt converts the provider choice into an ADK LLMResponse. Tool results
 // flow back through GenerateContent requests built by this same adapter.
-func (m *Model) adapt(decoded *response) *model.LLMResponse {
+func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	out := &model.LLMResponse{
 		Content:      &genai.Content{Role: "model"},
 		TurnComplete: true,
@@ -174,6 +185,18 @@ func (m *Model) adapt(decoded *response) *model.LLMResponse {
 				out.ErrorMessage = fmt.Sprintf("decode arguments for %s: %v", call.Function.Name, err)
 				return out
 			}
+		}
+		// The structured-answer call is the reply itself, not a tool to run: hand
+		// its arguments back as the model's text so the caller can parse them
+		// against the schema it asked for.
+		if structured && call.Function.Name == structuredOutputTool {
+			encoded, err := json.Marshal(args)
+			if err != nil {
+				out.ErrorMessage = fmt.Sprintf("encode structured answer: %v", err)
+				return out
+			}
+			out.Content.Parts = []*genai.Part{{Text: string(encoded)}}
+			return out
 		}
 		id := call.ID
 		if id == "" {
@@ -194,12 +217,38 @@ func (m *Model) adapt(decoded *response) *model.LLMResponse {
 func (m *Model) buildRequest(req *model.LLMRequest) ([]byte, error) {
 	out := request{Model: req.Model}
 	if req.Config != nil {
+		// The agent's instruction arrives here, not in the conversation. Dropping
+		// it leaves the model with no role and no output contract, so it answers
+		// the raw user text as an open-ended chat.
+		if instruction := textOf(req.Config.SystemInstruction); instruction != "" {
+			out.Messages = append(out.Messages, message{Role: "system", Content: instruction})
+		}
 		for _, declared := range req.Config.Tools {
 			for _, decl := range declared.FunctionDeclarations {
 				out.Tools = append(out.Tools, tool{Type: "function", Function: toolFunction{
 					Name: decl.Name, Description: decl.Description,
 					Parameters: schemaAsMap(decl.Parameters),
 				}})
+			}
+		}
+	}
+
+	// A caller that asked for a schema-shaped answer gets one: the schema is
+	// declared as a function the model answers through. Chat models otherwise
+	// reply in prose, which then fails the caller's own validation.
+	if wantsStructuredOutput(req) {
+		answer := tool{Type: "function", Function: toolFunction{
+			Name:        structuredOutputTool,
+			Description: "Give your final answer through this function. Every field is required.",
+			Parameters:  schemaAsMap(req.Config.ResponseSchema),
+		}}
+		hadOtherTools := len(out.Tools) > 0
+		out.Tools = append(out.Tools, answer)
+		if !hadOtherTools {
+			// Nothing else to call, so the answer is the only legal move.
+			out.ToolChoice = map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": structuredOutputTool},
 			}
 		}
 	}
@@ -264,6 +313,20 @@ func (m *Model) buildRequest(req *model.LLMRequest) ([]byte, error) {
 		out.Messages = append(out.Messages, results...)
 	}
 	return json.Marshal(out)
+}
+
+// textOf flattens a content block into plain text.
+func textOf(content *genai.Content) string {
+	if content == nil {
+		return ""
+	}
+	var parts []string
+	for _, part := range content.Parts {
+		if part != nil && strings.TrimSpace(part.Text) != "" {
+			parts = append(parts, part.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // callTracker issues IDs for tool calls lacking one and remembers them so the
