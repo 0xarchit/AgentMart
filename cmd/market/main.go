@@ -16,6 +16,7 @@ import (
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/marketauth"
+	"agentmart/internal/marketgraph"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
@@ -50,7 +51,10 @@ func main() {
 	if !strings.HasSuffix(agentEndpoint, "/") {
 		agentEndpoint += "/"
 	}
-	merchantNegotiator, nerr := merchantagent.NewNegotiator(ctx, buyerreasoning.FromEnv())
+	merchantConfig := buyerreasoning.FromEnv()
+	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
+		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
+	}, nil)
 	if nerr != nil {
 		logger.Error("merchant negotiator configuration failed", "error", nerr)
 		return

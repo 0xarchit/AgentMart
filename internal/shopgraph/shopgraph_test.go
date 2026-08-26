@@ -15,10 +15,18 @@ func fakeGraphTools() Tools {
 		Get: func(_ context.Context, id string) (catalog.Product, error) {
 			return catalog.Product{ID: id, PricePaise: 100, Stock: 1}, nil
 		},
-		Offers:  func(context.Context, string, int) (negotiationclient.Proposal, error) { return negotiationclient.Proposal{}, nil },
-		Counter: func(context.Context, string, int64) (negotiationclient.Resolution, error) { return negotiationclient.Resolution{}, nil },
-		Accept:  func(context.Context, string) (negotiationclient.Resolution, error) { return negotiationclient.Resolution{}, nil },
-		Decline: func(context.Context, string, string) (negotiationclient.Resolution, error) { return negotiationclient.Resolution{}, nil },
+		Offers: func(context.Context, string, int) (negotiationclient.Proposal, error) {
+			return negotiationclient.Proposal{}, nil
+		},
+		Counter: func(context.Context, string, int64) (negotiationclient.Resolution, error) {
+			return negotiationclient.Resolution{}, nil
+		},
+		Accept: func(context.Context, string) (negotiationclient.Resolution, error) {
+			return negotiationclient.Resolution{}, nil
+		},
+		Decline: func(context.Context, string, string) (negotiationclient.Resolution, error) {
+			return negotiationclient.Resolution{}, nil
+		},
 	}
 }
 
