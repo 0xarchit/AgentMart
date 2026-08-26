@@ -15,7 +15,7 @@ func fakeGraphTools() Tools {
 		Get: func(_ context.Context, id string) (catalog.Product, error) {
 			return catalog.Product{ID: id, PricePaise: 100, Stock: 1}, nil
 		},
-		Offers: func(context.Context, string, int) (negotiationclient.Proposal, error) {
+		Offers: func(_ context.Context, _ string, _ int, _ string) (negotiationclient.Proposal, error) {
 			return negotiationclient.Proposal{}, nil
 		},
 		Counter: func(context.Context, string, int64) (negotiationclient.Resolution, error) {

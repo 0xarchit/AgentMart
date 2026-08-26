@@ -41,10 +41,11 @@ type CounterInput struct {
 	Session            Session
 	Product            catalog.Product
 	Partner            *catalog.Product
-	FloorPaise         int64 // never go below
-	AskPaise           int64 // current standing offer
-	BuyerPaise         int64 // buyer's latest counter
-	MinAcceptablePaise int64 // orchestrator's concede schedule for this round
+	FloorPaise         int64  // never go below
+	AskPaise           int64  // current standing offer
+	BuyerPaise         int64  // buyer's latest counter
+	MinAcceptablePaise int64  // orchestrator's concede schedule for this round
+	BuyerAccountID     string // set when the buyer agent identifies itself; enables campaigns
 }
 
 // CounterOutput is one merchant counter. Amounts outside the rails are clamped.
@@ -138,6 +139,7 @@ type negotiationRequest struct {
 	Quantity           int    `json:"qty"`
 	Reason             string `json:"reason"`
 	CounterAmountPaise int64  `json:"counter_amount_paise"`
+	AccountID          string `json:"account_id"` // optional buyer identity for campaign personalisation
 }
 
 func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[string]any, error) {
@@ -197,6 +199,9 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 	if err := session.CounterOffer(counter); err != nil {
 		return nil, err
 	}
+	// Record the buyer's identity once so later rounds can personalise
+	// campaign offers without re-sending it on every A2A message.
+	session.BuyerAccountID = strings.TrimSpace(request.AccountID)
 	sessionID, err := newSessionID()
 	if err != nil {
 		return nil, err
@@ -292,6 +297,7 @@ func (s *Server) counter(ctx context.Context, request negotiationRequest) (map[s
 			Session: session, Product: product, Partner: partner,
 			FloorPaise: floorPaise, AskPaise: ask,
 			BuyerPaise: request.CounterAmountPaise, MinAcceptablePaise: minAcceptable,
+			BuyerAccountID: buyerAccountFor(session, request),
 		}); nerr == nil && out.AmountPaise > 0 {
 			amount = clampCounter(out.AmountPaise, maxInt64(floorPaise, request.CounterAmountPaise), ask)
 			if strings.TrimSpace(out.Reason) != "" {
@@ -421,6 +427,15 @@ func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[s
 		"final_amount_paise": session.Counter.FinalAmountPaise,
 		"transcript":         session.Transcript,
 	}, nil
+}
+
+// buyerAccountFor prefers the identity recorded when the session was proposed,
+// falling back to one supplied on this request.
+func buyerAccountFor(session Session, request negotiationRequest) string {
+	if id := strings.TrimSpace(session.BuyerAccountID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(request.AccountID)
 }
 
 func newSessionID() (string, error) {

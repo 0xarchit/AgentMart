@@ -108,11 +108,21 @@ func (c *Client) Counter(ctx context.Context, sessionID string, amountPaise int6
 
 // Propose asks the merchant for a counter offer.
 func (c *Client) Propose(ctx context.Context, productID string, quantity int) (Proposal, error) {
+	return c.ProposeAs(ctx, productID, quantity, "")
+}
+
+// ProposeAs asks the merchant for a counter offer while identifying the buyer
+// account, which lets the merchant agent apply campaign and loyalty deals.
+func (c *Client) ProposeAs(ctx context.Context, productID string, quantity int, accountID string) (Proposal, error) {
+	payload := map[string]any{"type": "propose", "product_id": productID, "qty": quantity}
+	if strings.TrimSpace(accountID) != "" {
+		payload["account_id"] = accountID
+	}
 	if c.a2a != nil {
-		return c.a2aProposal(ctx, map[string]any{"type": "propose", "product_id": productID, "qty": quantity})
+		return c.a2aProposal(ctx, payload)
 	}
 	var result Proposal
-	err := c.post(ctx, map[string]any{"type": "propose", "product_id": productID, "qty": quantity}, &result)
+	err := c.post(ctx, payload, &result)
 	return result, err
 }
 

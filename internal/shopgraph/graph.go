@@ -27,7 +27,8 @@ const (
 type Wallet struct {
 	BalancePaise    int64
 	SpendLimitPaise int64
-	BudgetPaise     int64 // user-stated budget; 0 = use spend limit
+	BudgetPaise     int64  // user-stated budget; 0 = use spend limit
+	AccountID       string // identifies the buyer to the merchant for campaign deals
 }
 
 // Result is what the caller uses after the graph finishes.
@@ -50,7 +51,7 @@ type Result struct {
 type Tools struct {
 	Search  func(ctx context.Context, query string, maxPaise int64) ([]catalog.Product, error)
 	Get     func(ctx context.Context, id string) (catalog.Product, error)
-	Offers  func(ctx context.Context, id string, qty int) (negotiationclient.Proposal, error)
+	Offers  func(ctx context.Context, id string, qty int, accountID string) (negotiationclient.Proposal, error)
 	Counter func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error)
 	Accept  func(ctx context.Context, sessionID string) (negotiationclient.Resolution, error)
 	Decline func(ctx context.Context, sessionID string, reason string) (negotiationclient.Resolution, error)

@@ -48,6 +48,7 @@ type approvalResolver interface {
 
 type negotiator interface {
 	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
+	ProposeAs(context.Context, string, int, string) (negotiationclient.Proposal, error)
 	Accept(context.Context, string) (negotiationclient.Resolution, error)
 	Decline(context.Context, string, string) (negotiationclient.Resolution, error)
 	Counter(context.Context, string, int64) (negotiationclient.Resolution, error)
@@ -169,7 +170,9 @@ func main() {
 			Get: func(ctx context.Context, id string) (catalog.Product, error) {
 				return catalogReader.Get(ctx, id)
 			},
-			Offers: negotiationService.Propose,
+			Offers: func(ctx context.Context, id string, qty int, accountID string) (negotiationclient.Proposal, error) {
+				return negotiationService.ProposeAs(ctx, id, qty, accountID)
+			},
 			Counter: func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error) {
 				return negotiationService.Counter(ctx, sessionID, paise)
 			},
@@ -277,6 +280,14 @@ func (n loggingNegotiator) Propose(ctx context.Context, productID string, quanti
 	return result, err
 }
 
+func (n loggingNegotiator) ProposeAs(ctx context.Context, productID string, quantity int, accountID string) (negotiationclient.Proposal, error) {
+	result, err := n.inner.ProposeAs(ctx, productID, quantity, accountID)
+	if err != nil {
+		log.Printf("negotiation propose error: %v", err)
+	}
+	return result, err
+}
+
 func (n loggingNegotiator) Accept(ctx context.Context, sessionID string) (negotiationclient.Resolution, error) {
 	result, err := n.inner.Accept(ctx, sessionID)
 	if err != nil {
@@ -346,6 +357,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	result, runErr := services.loop.Run(ctx, message.Text, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
+		AccountID:       account.ID,
 	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent

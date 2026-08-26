@@ -50,6 +50,10 @@ type Session struct {
 	Status     Status
 	Round      int // number of merchant counters so far (opening = 1)
 	Transcript []Turn
+	// BuyerAccountID is recorded at propose time when the buyer agent
+	// identifies itself, so later rounds can personalise campaign offers
+	// without the buyer resending identity on every message.
+	BuyerAccountID string `json:"buyer_account_id,omitempty"`
 }
 
 // New creates a proposed negotiation session.

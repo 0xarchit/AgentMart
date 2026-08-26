@@ -162,7 +162,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 
 	offerNode := workflow.NewEmittingFunctionNode[Selection, Offer]("fetch_offer",
 		func(ctx agent.Context, sel Selection, emit func(*session.Event) error) (Offer, error) {
-			proposal, err := s.tools.Offers(ctx, sel.ProductID, sel.Quantity)
+			proposal, err := s.tools.Offers(ctx, sel.ProductID, sel.Quantity, s.walletSnapshot().AccountID)
 			if err != nil {
 				return Offer{}, err
 			}

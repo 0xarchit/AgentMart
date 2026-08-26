@@ -73,6 +73,10 @@ func (fakeNegotiator) Propose(context.Context, string, int) (negotiationclient.P
 	return negotiationclient.Proposal{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, Reason: "three-year warranty"}, nil
 }
 
+func (f fakeNegotiator) ProposeAs(ctx context.Context, productID string, quantity int, _ string) (negotiationclient.Proposal, error) {
+	return f.Propose(ctx, productID, quantity)
+}
+
 func (fakeNegotiator) Accept(context.Context, string) (negotiationclient.Resolution, error) {
 	return negotiationclient.Resolution{SessionID: "session", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, Status: "accepted"}, nil
 }
