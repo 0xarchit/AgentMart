@@ -53,13 +53,13 @@ type Config struct {
 // Service owns the compiled graph and per-run wallet slot. The buyer bot is
 // serial, so one slot is safe; revisit if runs ever fan out per user.
 type Service struct {
-	tools    Tools
-	model    *llmchat.Model
-	merchant agent.Agent
-	mu       sync.Mutex
-	wallet   Wallet
-	offer    Offer
-	wfAgent  agent.Agent
+	tools       Tools
+	model       *llmchat.Model
+	merchant    agent.Agent
+	assessAgent agent.Agent
+	mu          sync.Mutex
+	wallet      Wallet
+	wfAgent     agent.Agent
 }
 
 // New compiles the graph. Safe to call without network: models are only used
@@ -87,20 +87,6 @@ func (s *Service) setWallet(w Wallet) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.wallet = w
-}
-
-// setOffer/offerSnapshot hold the merchant's standing offer for the run, so the
-// router can pair the agent's judgement with the offer it judged.
-func (s *Service) setOffer(offer Offer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.offer = offer
-}
-
-func (s *Service) offerSnapshot() Offer {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.offer
 }
 
 func (s *Service) decisionModel() model.LLM { return s.model }
@@ -155,6 +141,7 @@ Finish with a short summary of what you did and why.`, AutoBuyPremiumMaxPct)
 // Per-node time bounds.
 const (
 	nodeTimeout      = 90 * time.Second
+	assessTimeout    = 90 * time.Second
 	negotiateTimeout = 180 * time.Second
 )
 
@@ -219,6 +206,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assess agent: %w", err)
 	}
+	s.assessAgent = assessAgent
 
 	intentNode, err := workflow.NewAgentNodeTyped[string, Intent](intentAgent, workflow.NodeConfig{Timeout: nodeTimeout})
 	if err != nil {
@@ -251,7 +239,6 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				BasePaise: proposal.BaseAmountPaise, FinalPaise: proposal.FinalAmountPaise,
 				Reason: proposal.Reason, Transcript: proposal.Transcript,
 			}
-			s.setOffer(offer)
 			premium := offer.FinalPaise - offer.BasePaise
 			view := OfferView{
 				Offer:              offer,
@@ -267,22 +254,19 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			return view, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
-	// The judgement node: the agent decides accept / negotiate / ask_human /
-	// decline. No threshold in code makes this call.
-	assessNode, err := workflow.NewAgentNodeTyped[OfferView, Assessment](assessAgent, workflow.NodeConfig{Timeout: nodeTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("assess node: %w", err)
-	}
-
-	// The router carries the agent's decision onto an edge. Its only override is
-	// a money guard: it will not let an "accept" spend past the wallet or the
-	// stated budget, and escalates to the human instead of silently refusing.
-	routeNode := workflow.NewEmittingFunctionNode[Assessment, Offer]("route_decision",
-		func(ctx agent.Context, assessment Assessment, emit func(*session.Event) error) (Offer, error) {
-			offer := s.offerSnapshot()
-			if offer.SessionID == "" {
-				return Offer{}, fmt.Errorf("no merchant offer in flight")
+	// One node judges and routes. The offer and the judgement stay in the same
+	// scope, so nothing has to look up what an earlier node left behind. The
+	// judgement itself is the agent's: the only override here is a money guard.
+	decideNode := workflow.NewEmittingFunctionNode[OfferView, Offer]("decide_offer",
+		func(ctx agent.Context, view OfferView, emit func(*session.Event) error) (Offer, error) {
+			if view.SessionID == "" {
+				return Offer{}, fmt.Errorf("merchant returned no negotiation session for %q", view.ProductID)
 			}
+			assessment, err := s.assess(ctx, view)
+			if err != nil {
+				return Offer{}, err
+			}
+			offer := view.Offer
 			route, note := routeFor(assessment, offer, s.walletSnapshot())
 			offer.Route = route
 			offer.Reason = joinReason(assessment.Reason, note, offer.Reason)
@@ -292,8 +276,8 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if err := emit(ev); err != nil {
 				return Offer{}, err
 			}
-			return Offer{}, nil // routed edge carries ev.Output forward
-		}, workflow.NodeConfig{Timeout: nodeTimeout})
+			return Offer{}, nil // the routed edge carries ev.Output forward
+		}, workflow.NodeConfig{Timeout: nodeTimeout + assessTimeout})
 
 	acceptNode := workflow.NewFunctionNode[Offer, Outcome]("accept_offer",
 		func(ctx agent.Context, offer Offer) (Outcome, error) {
@@ -345,9 +329,8 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 		Add(intentNode, searchNode).
 		Add(searchNode, selectNode).
 		Add(selectNode, offerNode).
-		Add(offerNode, assessNode).
-		Add(assessNode, routeNode)
-	builder.AddRoutes(routeNode, map[string]workflow.Node{
+		Add(offerNode, decideNode)
+	builder.AddRoutes(decideNode, map[string]workflow.Node{
 		RouteAccept:    acceptNode,
 		RouteNegotiate: negotiateNode,
 		RouteAskHuman:  askHumanNode,
@@ -635,6 +618,67 @@ func mustTool[TArgs, TResult any](name, description string, fn func(agent.Contex
 
 // runnerFor builds a fresh in-memory runner per run so sessions never leak
 // between Telegram messages.
+// assess asks the buyer agent to judge one offer. It runs inside the deciding
+// node so the offer and the judgement never leave the same scope.
+func (s *Service) assess(parent context.Context, view OfferView) (Assessment, error) {
+	if s.assessAgent == nil {
+		return Assessment{}, fmt.Errorf("assessing agent is not built")
+	}
+	payload, err := jsonMarshal(view)
+	if err != nil {
+		return Assessment{}, err
+	}
+	run, err := runnerFor("shop-assess", s.assessAgent)
+	if err != nil {
+		return Assessment{}, fmt.Errorf("assessing runner: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(parent, assessTimeout)
+	defer cancel()
+
+	var last *session.Event
+	for ev, runErr := range run.Run(ctx, "user", fmt.Sprintf("assess-%d", time.Now().UnixNano()),
+		textContent(string(payload)), defaultRunConfig()) {
+		if runErr != nil {
+			return Assessment{}, fmt.Errorf("assess offer: %w", runErr)
+		}
+		if ev != nil {
+			last = ev
+		}
+	}
+	return assessmentFrom(last)
+}
+
+// assessmentFrom reads the judgement out of the agent's last event, whether the
+// framework already parsed it or left it as text.
+func assessmentFrom(ev *session.Event) (Assessment, error) {
+	if ev == nil {
+		return Assessment{}, fmt.Errorf("assessing agent produced no answer")
+	}
+	switch typed := ev.Output.(type) {
+	case Assessment:
+		return typed, nil
+	case map[string]any:
+		if encoded, err := json.Marshal(typed); err == nil {
+			var out Assessment
+			if json.Unmarshal(encoded, &out) == nil && out.Decision != "" {
+				return out, nil
+			}
+		}
+	}
+	if ev.Content != nil {
+		for _, part := range ev.Content.Parts {
+			if part == nil || strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+			var out Assessment
+			if err := json.Unmarshal([]byte(part.Text), &out); err == nil && out.Decision != "" {
+				return out, nil
+			}
+		}
+	}
+	return Assessment{}, fmt.Errorf("assessing agent answered without a decision")
+}
+
 func runnerFor(appName string, a agent.Agent) (*runner.Runner, error) {
 	return runner.NewInMemory(appName, a)
 }
