@@ -164,6 +164,11 @@ through the final answer function. Never reply in prose.`, AutoBuyPremiumMaxPct)
 // rather than failing.
 var errNothingToShow = errors.New("the shop had nothing within the budget")
 
+// errNothingWorthBuying means the buyer looked at the shortlist and picked
+// nothing from it. Refusing everything on offer is a judgement, not a fault, so
+// a run ending this way declines rather than failing.
+var errNothingWorthBuying = errors.New("nothing on the shelf was worth buying")
+
 // Per-node time bounds.
 const (
 	nodeTimeout      = 90 * time.Second
@@ -477,6 +482,10 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 				s.note("The shop had nothing within the budget, so nothing was bought.")
 				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingToShow.Error()}, nil
 			}
+			if errors.Is(runErr, errNothingWorthBuying) {
+				s.note("Nothing the shop showed was worth buying, so nothing was bought.")
+				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingWorthBuying.Error()}, nil
+			}
 			return Result{}, fmt.Errorf("graph run failed after %d events: %w", events, runErr)
 		}
 		events++
@@ -776,7 +785,7 @@ func selectionFrom(ev *session.Event) (Selection, error) {
 			}
 		}
 	}
-	return Selection{}, fmt.Errorf("choosing agent named no product")
+	return Selection{}, errNothingWorthBuying
 }
 
 // assess asks the buyer agent to judge one offer. It runs inside the deciding
