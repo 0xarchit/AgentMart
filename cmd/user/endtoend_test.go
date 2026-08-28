@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"agentmart/internal/campaigns"
 	"agentmart/internal/catalog"
@@ -149,7 +152,15 @@ func stageAnswer(instruction, facts string) (string, any) {
 // marketProcess wires the merchant exactly as its binary does: one server with
 // the strategist, the shop-owner voice, and the cost floor, exposed on the
 // conversation surface.
-func marketProcess(t *testing.T, providerURL string) *httptest.Server {
+// reasoningWiring is where both processes get their model from. The stand-in
+// server is used by default; a live run points it at the real endpoint.
+type reasoningWiring struct {
+	baseURL string
+	apiKey  string
+	model   string
+}
+
+func marketProcess(t *testing.T, wiring reasoningWiring) *httptest.Server {
 	t.Helper()
 	getProduct := func(_ context.Context, id string) (catalog.Product, error) {
 		for _, product := range demoStock() {
@@ -171,7 +182,7 @@ func marketProcess(t *testing.T, providerURL string) *httptest.Server {
 	}
 
 	merchant, err := marketgraph.New(marketgraph.Config{
-		APIKey: "test-key", BaseURL: providerURL, Model: "stand-in",
+		APIKey: wiring.apiKey, BaseURL: wiring.baseURL, Model: wiring.model,
 	}, campaigns.NewProvider(nil), nil)
 	if err != nil {
 		t.Fatalf("merchant reasoning: %v", err)
@@ -204,8 +215,9 @@ func shoppingSystem(t *testing.T, refuse ...string) (*shopgraph.Service, map[str
 	seen := map[string]int{}
 	provider := standInProvider(t, seen, refuse...)
 	t.Cleanup(provider.Close)
+	wiring := reasoningWiring{baseURL: provider.URL, apiKey: "test-key", model: "stand-in"}
 
-	market := marketProcess(t, provider.URL)
+	market := marketProcess(t, wiring)
 	t.Cleanup(market.Close)
 
 	merchantConversation, err := negotiationclient.NewAgentClient(t.Context(), market.URL, market.Client())
@@ -215,7 +227,7 @@ func shoppingSystem(t *testing.T, refuse ...string) (*shopgraph.Service, map[str
 	t.Cleanup(func() { _ = merchantConversation.Close() })
 
 	buyer, err := shopgraph.New(t.Context(), shopgraph.Config{
-		APIKey: "test-key", BaseURL: provider.URL, Model: "stand-in",
+		APIKey: wiring.apiKey, BaseURL: wiring.baseURL, Model: wiring.model,
 	}, shopgraph.Tools{
 		Browse:  merchantConversation.Browse,
 		Get:     func(_ context.Context, id string) (catalog.Product, error) { return catalog.Product{ID: id}, nil },
@@ -339,5 +351,88 @@ func TestALostJudgementGoesToThePersonInsteadOfLosingTheRun(t *testing.T) {
 	}
 	if seen["assess"] == 0 {
 		t.Fatal("the judgement was never attempted")
+	}
+}
+
+// liveWiring reads the real endpoint from .env so a run can be proved against
+// the provider the binaries actually use.
+func liveWiring(t *testing.T) reasoningWiring {
+	t.Helper()
+	if os.Getenv("LIVE_PROVIDER") != "1" {
+		t.Skip("set LIVE_PROVIDER=1 to spend real quota")
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".env"))
+	if err != nil {
+		t.Skipf("no .env to read: %v", err)
+	}
+	values := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if key, value, found := strings.Cut(line, "="); found {
+			values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	key := values["OPENAI_API_KEY_USER"]
+	if key == "" {
+		key = values["OPENAI_API_KEY"]
+	}
+	wiring := reasoningWiring{baseURL: values["OPENAI_BASE_URL"], apiKey: key, model: values["ADK_MODEL_NAME"]}
+	if wiring.baseURL == "" || wiring.apiKey == "" || wiring.model == "" {
+		t.Fatal("OPENAI_BASE_URL, an API key, and ADK_MODEL_NAME must all be set")
+	}
+	t.Logf("endpoint %s model %s", wiring.baseURL, wiring.model)
+	return wiring
+}
+
+func TestLiveShoppingRunAgainstTheRealProvider(t *testing.T) {
+	wiring := liveWiring(t)
+
+	market := marketProcess(t, wiring)
+	t.Cleanup(market.Close)
+	merchantConversation, err := negotiationclient.NewAgentClient(t.Context(), market.URL, market.Client())
+	if err != nil {
+		t.Fatalf("reach the merchant: %v", err)
+	}
+	t.Cleanup(func() { _ = merchantConversation.Close() })
+
+	buyer, err := shopgraph.New(t.Context(), shopgraph.Config{
+		APIKey: wiring.apiKey, BaseURL: wiring.baseURL, Model: wiring.model,
+	}, shopgraph.Tools{
+		Browse:  merchantConversation.Browse,
+		Get:     func(_ context.Context, id string) (catalog.Product, error) { return catalog.Product{ID: id}, nil },
+		Offers:  merchantConversation.ProposeAs,
+		Counter: merchantConversation.Counter,
+		Accept:  merchantConversation.Accept,
+		Decline: merchantConversation.Decline,
+	})
+	if err != nil {
+		t.Fatalf("build the buyer: %v", err)
+	}
+
+	started := time.Now()
+	result, err := buyer.RunWithProgress(t.Context(), "i want a trimmer",
+		shopgraph.Wallet{BalancePaise: 1045000, SpendLimitPaise: 250000, AccountID: "account-1"},
+		func(line string) { t.Logf("[%s] %s", time.Since(started).Round(time.Second), line) })
+	if err != nil {
+		t.Fatalf("live run failed after %s: %v", time.Since(started).Round(time.Second), err)
+	}
+	t.Logf("finished in %s: %s %s at INR %.2f, action %s",
+		time.Since(started).Round(time.Second), result.ProductID, result.ProductName,
+		float64(result.FinalPaise)/100, result.Action)
+	for _, turn := range result.Transcript {
+		t.Logf("  %s: %s", turn.Actor, turn.Message)
+	}
+
+	if result.Action == "" {
+		t.Fatal("a run must end in an action")
+	}
+	if result.ProductID == "" || result.FinalPaise == 0 {
+		t.Fatalf("a run must name a product and a price, got %q at %d", result.ProductID, result.FinalPaise)
+	}
+	if len(result.Transcript) < 3 {
+		t.Fatalf("transcript has %d turns, want the browse turns plus the quote", len(result.Transcript))
 	}
 }

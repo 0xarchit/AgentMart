@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"iter"
 	"net/http"
 	"strconv"
@@ -35,6 +36,11 @@ const (
 	maxAttempts  = 5
 	retryBase    = time.Second
 	maxRetryWait = 20 * time.Second
+	// attemptsPerFallback is used when a model chain is configured: fewer waits
+	// per model, because moving to a working model beats waiting on a dead one.
+	attemptsPerFallback = 2
+	// maxBodySnippet bounds how much of a failing response is quoted back.
+	maxBodySnippet = 600
 )
 
 // structuredOutputTool is the function a schema-shaped answer arrives through.
@@ -51,14 +57,33 @@ func wantsStructuredOutput(req *model.LLMRequest) bool {
 // Model speaks /chat/completions for any OpenAI-compatible provider.
 type Model struct {
 	name    string
+	models  []string
 	apiKey  string
 	baseURL string
 	http    *http.Client
 }
 
-// New builds a chat-completions-backed adk model.LLM.
+// New builds a chat-completions-backed model. Name may be a comma-separated
+// chain, for example "laguna-s-2.1-free,hy3-free". A free pool takes models
+// offline without warning, so when the first is unavailable the next is tried
+// rather than failing the run.
 func New(name, apiKey, baseURL string) *Model {
-	return &Model{name: name, apiKey: apiKey, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: providerTimeout}}
+	var models []string
+	for _, candidate := range strings.Split(name, ",") {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			models = append(models, trimmed)
+		}
+	}
+	if len(models) == 0 {
+		models = []string{strings.TrimSpace(name)}
+	}
+	return &Model{
+		name:    models[0],
+		models:  models,
+		apiKey:  apiKey,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Timeout: providerTimeout},
+	}
 }
 
 func (m *Model) Name() string { return m.name }
@@ -136,18 +161,62 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 }
 
-// post calls the provider, retrying the failures a shared free pool produces
-// constantly: rate limits, gateway errors, and dropped connections. It waits as
-// long as the provider asks when it says so, and backs off otherwise.
+// post works down the model chain. Each model gets a few bounded attempts for
+// the transient failures a shared pool produces constantly; when a model is
+// simply unavailable or out of free quota, the next one is tried.
 func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
+	attempts := maxAttempts
+	if len(m.models) > 1 {
+		// With somewhere else to go, spend less time waiting on one endpoint.
+		attempts = attemptsPerFallback
+	}
+	var reasons []string
+	for _, name := range m.models {
+		aimed, err := withModel(body, name)
+		if err != nil {
+			return nil, err
+		}
+		decoded, err := m.postTo(ctx, aimed, attempts)
+		if err == nil {
+			return decoded, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		reasons = append(reasons, name+" -> "+err.Error())
+	}
+	if len(reasons) == 1 {
+		return nil, fmt.Errorf("%s", reasons[0])
+	}
+	return nil, fmt.Errorf("every configured model failed: %s", strings.Join(reasons, "; "))
+}
+
+// withModel aims an already-encoded request at one model.
+func withModel(body []byte, name string) ([]byte, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("reaim request: %w", err)
+	}
+	aimed, err := json.Marshal(name)
+	if err != nil {
+		return nil, fmt.Errorf("encode model name: %w", err)
+	}
+	fields["model"] = aimed
+	return json.Marshal(fields)
+}
+
+// postTo calls one model, retrying the failures that clear on their own. A rate
+// limit on a shared pool usually clears in a second or two, so the first retry
+// is quick and each later one waits longer.
+func (m *Model) postTo(ctx context.Context, body []byte, attempts int) (*response, error) {
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		decoded, wait, err := m.attempt(ctx, body)
 		if err == nil {
 			return decoded, nil
 		}
 		lastErr = err
-		if wait <= 0 || attempt == maxAttempts {
+		if wait <= 0 || attempt == attempts {
 			break
 		}
 		// 1s, 2s, 4s, 8s unless the provider named its own wait.
@@ -161,7 +230,7 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 		case <-time.After(wait):
 		}
 	}
-	return nil, fmt.Errorf("%d attempts failed, last was: %w", maxAttempts, lastErr)
+	return nil, lastErr
 }
 
 // attempt makes one call. A positive wait means the failure is worth retrying
@@ -181,7 +250,14 @@ func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Durat
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout {
-		return nil, retryAfter(resp), fmt.Errorf("provider returned %s", resp.Status)
+		// The body is where the provider says which model, key, or field it
+		// objected to. Discarding it leaves nothing to act on.
+		return nil, retryAfter(resp), fmt.Errorf("provider returned %s: %s", resp.Status, bodySnippet(resp))
+	}
+	if resp.StatusCode >= 400 {
+		// A refusal aimed at this model, such as an unsupported request shape or a
+		// model the key cannot reach. Another model may accept it.
+		return nil, 0, fmt.Errorf("provider refused with %s: %s", resp.Status, bodySnippet(resp))
 	}
 
 	var decoded response
@@ -196,6 +272,16 @@ func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Durat
 		return nil, retryBase, fmt.Errorf("no choices returned (%s)", resp.Status)
 	}
 	return &decoded, 0, nil
+}
+
+// bodySnippet reads a bounded piece of a failing response so the reason travels
+// with the error without dragging a whole page into a log line.
+func bodySnippet(resp *http.Response) string {
+	limited, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySnippet))
+	if err != nil || len(limited) == 0 {
+		return "no detail in the response body"
+	}
+	return strings.Join(strings.Fields(string(limited)), " ")
 }
 
 // retryAfter honours the provider's own wait when it states one, and otherwise
