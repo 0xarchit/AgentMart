@@ -94,13 +94,31 @@ func (e *executor) handle(ctx context.Context, payload string) (any, error) {
 	responseRecorder := &captureResponse{header: make(http.Header)}
 	e.server.Handler().ServeHTTP(responseRecorder, requestHTTP)
 	if responseRecorder.status >= http.StatusMultipleChoices || responseRecorder.status == 0 {
-		return nil, fmt.Errorf("merchant negotiation returned status %d", responseRecorder.status)
+		// The body holds the reason. Reporting only the status leaves the buyer,
+		// and the person reading its transcript, with nothing to act on.
+		return nil, fmt.Errorf("merchant negotiation returned status %d: %s",
+			responseRecorder.status, reasonFrom(responseRecorder.body))
 	}
 	var response any
 	if err := json.Unmarshal(responseRecorder.body, &response); err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+// reasonFrom pulls the merchant's own words out of an error body, falling back
+// to the raw bytes when the body is not the shape it usually is.
+func reasonFrom(body []byte) string {
+	if len(body) == 0 {
+		return "no reason given"
+	}
+	var named struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &named); err == nil && named.Error != "" {
+		return named.Error
+	}
+	return strings.TrimSpace(string(body))
 }
 
 type captureResponse struct {
