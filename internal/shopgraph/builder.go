@@ -486,6 +486,13 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 				s.note("Nothing the shop showed was worth buying, so nothing was bought.")
 				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingWorthBuying.Error()}, nil
 			}
+			// The quote is already in hand, so whatever broke after it, the person
+			// can still decide. Hand the offer over with the reason rather than
+			// losing the run.
+			if offer, ok := lastOutput.(Offer); ok {
+				s.note("The run could not finish, so this offer goes to you.")
+				return s.escalate(offer, "the run could not finish: "+failure.Explain(runErr)), nil
+			}
 			return Result{}, fmt.Errorf("graph run failed after %d events: %w", events, runErr)
 		}
 		events++
@@ -527,14 +534,20 @@ func (s *Service) resultFrom(lastResult *Result, lastOutput any) (Result, error)
 	// yes. Escalation never spends, so this stays money safe.
 	if offer, ok := lastOutput.(Offer); ok {
 		s.note("The negotiation did not settle, so this offer goes to you.")
-		return normalized(Result{
-			Action: ActionAskHuman, ProductID: offer.ProductID, ProductName: offer.ProductName,
-			Quantity: offer.Quantity, FinalPaise: offer.FinalPaise, SessionID: offer.SessionID,
-			Rationale:  joinReason(offer.Reason, "the negotiation did not settle, so it goes to you"),
-			Transcript: offer.ShopTurns,
-		}), nil
+		return s.escalate(offer, "the negotiation did not settle, so it goes to you"), nil
 	}
 	return Result{}, fmt.Errorf("graph finished without a result (last output %T)", lastOutput)
+}
+
+// escalate hands a quote to the person, with why nothing closed it. Escalation
+// never spends, so this stays money safe whatever went wrong upstream.
+func (s *Service) escalate(offer Offer, why string) Result {
+	return normalized(Result{
+		Action: ActionAskHuman, ProductID: offer.ProductID, ProductName: offer.ProductName,
+		Quantity: offer.Quantity, FinalPaise: offer.FinalPaise, SessionID: offer.SessionID,
+		Rationale:  joinReason(offer.Reason, why),
+		Transcript: offer.ShopTurns,
+	})
 }
 
 // normalized fills the defaults a caller can rely on.
