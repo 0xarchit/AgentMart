@@ -241,13 +241,14 @@ func extractAgentText(result a2a.SendMessageResult) (string, error) {
 	case *a2a.Message:
 		parts = value.Parts
 	case *a2a.Task:
+		// A failed task carries the merchant's reason in its status, not in an
+		// artifact. Reading the history instead would replay our own request,
+		// which decodes as a valid empty answer and hides the failure.
+		if value.Status.State == a2a.TaskStateFailed {
+			return "", fmt.Errorf("merchant could not answer: %s", statusText(value.Status))
+		}
 		for _, artifact := range value.Artifacts {
 			parts = append(parts, artifact.Parts...)
-		}
-		if len(parts) == 0 {
-			for _, message := range value.History {
-				parts = append(parts, message.Parts...)
-			}
 		}
 	default:
 		return "", fmt.Errorf("merchant agent returned unsupported result %T", result)
@@ -258,6 +259,19 @@ func extractAgentText(result a2a.SendMessageResult) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("merchant agent response contained no text artifact")
+}
+
+// statusText is the merchant's own words about why a task ended as it did.
+func statusText(status a2a.TaskStatus) string {
+	if status.Message == nil {
+		return "no reason given"
+	}
+	for _, part := range status.Message.Parts {
+		if text := part.Text(); text != "" {
+			return text
+		}
+	}
+	return "no reason given"
 }
 
 func (c *Client) post(ctx context.Context, payload any, destination any) error {
