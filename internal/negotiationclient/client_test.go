@@ -33,7 +33,7 @@ func TestClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	}
 }
 
-func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
+func TestAgentClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	var handler http.Handler
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeHTTP(w, r)
@@ -51,7 +51,7 @@ func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewA2A(t.Context(), server.URL, server.Client())
+	client, err := NewAgentClient(t.Context(), server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}

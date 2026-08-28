@@ -154,7 +154,7 @@ func main() {
 			logger.Error("market access configuration failed", "error", clientErr)
 			return
 		}
-		merchantNegotiation, connectErr := negotiationclient.NewA2A(ctx, negotiationEndpoint, marketHTTP)
+		merchantNegotiation, connectErr := negotiationclient.NewAgentClient(ctx, negotiationEndpoint, marketHTTP)
 		if connectErr != nil {
 			logger.Error("merchant negotiation configuration failed", "error", connectErr)
 			return

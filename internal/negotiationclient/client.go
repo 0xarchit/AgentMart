@@ -20,7 +20,7 @@ import (
 type Client struct {
 	endpoint string
 	http     *http.Client
-	a2a      *a2aclient.Client
+	agent    *a2aclient.Client
 }
 
 // New constructs a merchant negotiation client.
@@ -34,8 +34,9 @@ func New(endpoint string, httpClient *http.Client) (*Client, error) {
 	return &Client{endpoint: strings.TrimRight(endpoint, "/"), http: httpClient}, nil
 }
 
-// NewA2A discovers a merchant agent card and creates a standards-based client.
-func NewA2A(ctx context.Context, endpoint string, httpClient *http.Client) (*Client, error) {
+// NewAgentClient discovers a merchant agent card and creates a client that
+// talks to the merchant as an agent rather than over the plain endpoint.
+func NewAgentClient(ctx context.Context, endpoint string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(endpoint) == "" {
 		return nil, fmt.Errorf("merchant agent endpoint is required")
 	}
@@ -51,15 +52,15 @@ func NewA2A(ctx context.Context, endpoint string, httpClient *http.Client) (*Cli
 	if err != nil {
 		return nil, fmt.Errorf("create merchant agent client: %w", err)
 	}
-	return &Client{endpoint: strings.TrimRight(endpoint, "/"), http: httpClient, a2a: client}, nil
+	return &Client{endpoint: strings.TrimRight(endpoint, "/"), http: httpClient, agent: client}, nil
 }
 
 // Close releases transport resources held by the merchant agent client.
 func (c *Client) Close() error {
-	if c.a2a == nil {
+	if c.agent == nil {
 		return nil
 	}
-	return c.a2a.Destroy()
+	return c.agent.Destroy()
 }
 
 // Proposal is the merchant's counter offer for a product quantity.
@@ -98,8 +99,8 @@ type Resolution struct {
 // may accept (status accepted), re-counter (status countered), or decline.
 func (c *Client) Counter(ctx context.Context, sessionID string, amountPaise int64) (Resolution, error) {
 	payload := map[string]any{"type": "counter", "session_id": sessionID, "counter_amount_paise": amountPaise}
-	if c.a2a != nil {
-		return c.a2aResolution(ctx, payload)
+	if c.agent != nil {
+		return c.agentResolution(ctx, payload)
 	}
 	var result Resolution
 	err := c.post(ctx, payload, &result)
@@ -118,8 +119,8 @@ func (c *Client) ProposeAs(ctx context.Context, productID string, quantity int, 
 	if strings.TrimSpace(accountID) != "" {
 		payload["account_id"] = accountID
 	}
-	if c.a2a != nil {
-		return c.a2aProposal(ctx, payload)
+	if c.agent != nil {
+		return c.agentProposal(ctx, payload)
 	}
 	var result Proposal
 	err := c.post(ctx, payload, &result)
@@ -157,17 +158,17 @@ func (c *Client) Browse(ctx context.Context, brief string, budgetPaise int64, ac
 	if strings.TrimSpace(accountID) != "" {
 		payload["account_id"] = accountID
 	}
-	if c.a2a != nil {
-		return c.a2aShortlist(ctx, payload)
+	if c.agent != nil {
+		return c.agentShortlist(ctx, payload)
 	}
 	var result Shortlist
 	err := c.post(ctx, payload, &result)
 	return result, err
 }
 
-func (c *Client) a2aShortlist(ctx context.Context, request map[string]any) (Shortlist, error) {
+func (c *Client) agentShortlist(ctx context.Context, request map[string]any) (Shortlist, error) {
 	var result Shortlist
-	text, err := c.sendA2A(ctx, request)
+	text, err := c.sendToAgent(ctx, request)
 	if err != nil {
 		return result, err
 	}
@@ -188,8 +189,8 @@ func (c *Client) Decline(ctx context.Context, sessionID, reason string) (Resolut
 }
 
 func (c *Client) resolve(ctx context.Context, sessionID, kind, reason string) (Resolution, error) {
-	if c.a2a != nil {
-		result, err := c.a2aResolution(ctx, map[string]any{"type": kind, "session_id": sessionID, "reason": reason})
+	if c.agent != nil {
+		result, err := c.agentResolution(ctx, map[string]any{"type": kind, "session_id": sessionID, "reason": reason})
 		return result, err
 	}
 	var result Resolution
@@ -197,9 +198,9 @@ func (c *Client) resolve(ctx context.Context, sessionID, kind, reason string) (R
 	return result, err
 }
 
-func (c *Client) a2aProposal(ctx context.Context, request map[string]any) (Proposal, error) {
+func (c *Client) agentProposal(ctx context.Context, request map[string]any) (Proposal, error) {
 	var result Proposal
-	payload, err := c.sendA2A(ctx, request)
+	payload, err := c.sendToAgent(ctx, request)
 	if err != nil {
 		return result, err
 	}
@@ -209,9 +210,9 @@ func (c *Client) a2aProposal(ctx context.Context, request map[string]any) (Propo
 	return result, nil
 }
 
-func (c *Client) a2aResolution(ctx context.Context, request map[string]any) (Resolution, error) {
+func (c *Client) agentResolution(ctx context.Context, request map[string]any) (Resolution, error) {
 	var result Resolution
-	payload, err := c.sendA2A(ctx, request)
+	payload, err := c.sendToAgent(ctx, request)
 	if err != nil {
 		return result, err
 	}
@@ -221,20 +222,20 @@ func (c *Client) a2aResolution(ctx context.Context, request map[string]any) (Res
 	return result, nil
 }
 
-func (c *Client) sendA2A(ctx context.Context, request map[string]any) (string, error) {
+func (c *Client) sendToAgent(ctx context.Context, request map[string]any) (string, error) {
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return "", fmt.Errorf("encode merchant request: %w", err)
 	}
 	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(string(payload)))
-	result, err := c.a2a.SendMessage(ctx, &a2a.SendMessageRequest{Message: message})
+	result, err := c.agent.SendMessage(ctx, &a2a.SendMessageRequest{Message: message})
 	if err != nil {
 		return "", fmt.Errorf("send merchant request: %w", err)
 	}
-	return extractA2AText(result)
+	return extractAgentText(result)
 }
 
-func extractA2AText(result a2a.SendMessageResult) (string, error) {
+func extractAgentText(result a2a.SendMessageResult) (string, error) {
 	var parts []*a2a.Part
 	switch value := result.(type) {
 	case *a2a.Message:
