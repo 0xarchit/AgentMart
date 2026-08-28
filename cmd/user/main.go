@@ -489,7 +489,8 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			return fmt.Errorf("audit agent run: %w", auditErr)
 		}
 	}
-	if len(result.Transcript) > 0 && result.Action != shopgraph.ActionDecline || len(result.Transcript) >= 2 {
+	// The conversation is the evidence, so it is sent once, whatever the outcome.
+	if len(result.Transcript) > 0 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
 			log.Printf("send negotiation transcript failed: %v", docErr)
 		}
@@ -527,13 +528,9 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		}
 		ask := fmt.Sprintf("Your call: %s for INR %.2f. Approval token: %s",
 			product.Name, float64(pending.AmountPaise)/100, pending.ApprovalToken)
+		ask += "\nTap Approve or Decline below, or send /approve " + pending.ApprovalToken
 		ask += "\n\n" + summary.String()
-		if len(result.Transcript) > 0 {
-			if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
-				log.Printf("send negotiation transcript failed: %v", docErr)
-			}
-		}
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, replyMarkupForResponse(ask))
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
 	}
 
 	purchase, err := purchases.Purchase(ctx, purchaseRequest)
@@ -543,21 +540,13 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if purchase.ApprovalRequired {
 		approval := fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(purchase.AmountPaise)/100, purchase.ApprovalToken)
 		approval += "\n\n" + summary.String()
-		if len(result.Transcript) > 0 {
-			_ = client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript))
-		}
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, replyMarkupForResponse(approval))
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
 	}
 	if !purchase.Fulfilled {
 		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
 		return client.SendMessage(ctx, message.Chat.ID, summary.String())
 	}
 	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(purchase.AmountPaise)/100, purchase.RazorpayOrderID))
-	if len(result.Transcript) > 0 {
-		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
-			log.Printf("send negotiation transcript failed: %v", docErr)
-		}
-	}
 	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), replyMarkupForResponse(summary.String()))
 }
 
@@ -586,13 +575,22 @@ func renderTranscript(turns []negotiation.Turn) string {
 	return builder.String()
 }
 
+// approvalMarkup puts the decision one tap away. The token is passed in rather
+// than read back out of the message text, so a reworded prompt cannot silently
+// leave a person holding a token and no way to answer.
+func approvalMarkup(token string) *telegram.InlineKeyboardMarkup {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "Approve", CallbackData: "/approve " + token},
+		{Text: "Decline", CallbackData: "/reject " + token},
+	}}}
+}
+
 func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
 	if prefix := "Human approval required"; strings.HasPrefix(response, prefix) {
-		token := strings.TrimPrefix(response[strings.LastIndex(response, ":")+1:], " ")
-		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-			{Text: "Approve", CallbackData: "/approve " + token},
-			{Text: "Decline", CallbackData: "/reject " + token},
-		}}}
+		return approvalMarkup(strings.TrimSpace(response[strings.LastIndex(response, ":")+1:]))
 	}
 	if marker := "Audit order: "; strings.Contains(response, marker) {
 		orderID := strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0])

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"agentmart/internal/buyer"
 	"agentmart/internal/campaigns"
 	"agentmart/internal/catalog"
 	"agentmart/internal/marketgraph"
@@ -23,6 +25,7 @@ import (
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/shopgraph"
+	"agentmart/internal/telegram"
 )
 
 // demoStock is what the shop holds during the test.
@@ -434,5 +437,98 @@ func TestLiveShoppingRunAgainstTheRealProvider(t *testing.T) {
 	}
 	if len(result.Transcript) < 3 {
 		t.Fatalf("transcript has %d turns, want the browse turns plus the quote", len(result.Transcript))
+	}
+}
+
+// telegramRecorder stands in for Telegram and counts what the bot sends.
+type telegramRecorder struct {
+	documents int
+	markups   []string
+	messages  []string
+}
+
+// recordingBot returns a client wired to a recorder.
+func recordingBot(t *testing.T) (*telegram.Client, *telegramRecorder) {
+	t.Helper()
+	record := &telegramRecorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendDocument"):
+			record.documents++
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			record.messages = append(record.messages, string(body))
+			if strings.Contains(string(body), "reply_markup") {
+				record.markups = append(record.markups, string(body))
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := telegram.NewClient("token", &http.Client{
+		Transport: rewriteTelegramTransport{base: server.URL, next: server.Client().Transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, record
+}
+
+// escalatingAccounts has a spend limit below what the merchant will quote.
+type escalatingAccounts struct{}
+
+func (escalatingAccounts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
+	return buyer.Account{ID: "account-1", WalletBalancePaise: 500000, SpendLimitPaise: 400000}, nil
+}
+
+type stockCatalog struct{}
+
+func (stockCatalog) Get(_ context.Context, id string) (catalog.Product, error) {
+	for _, product := range demoStock() {
+		if product.ID == id {
+			return product, nil
+		}
+	}
+	return catalog.Product{}, fmt.Errorf("not found")
+}
+
+func TestAnEscalationSendsOneTranscriptAndTwoButtons(t *testing.T) {
+	buyerService, _ := shoppingSystem(t)
+	client, record := recordingBot(t)
+
+	err := conversationalBuy(t.Context(), client, fakePurchaser{result: buyer.PurchaseResult{AmountPaise: 418815}},
+		commandServices{
+			loop:         buyerService,
+			accounts:     escalatingAccounts{},
+			catalog:      stockCatalog{},
+			negotiations: fakeNegotiator{},
+		},
+		&telegram.Message{MessageID: 7, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "buy me a good trimmer"})
+	if err != nil {
+		t.Fatalf("escalation must not fail: %v", err)
+	}
+
+	// The conversation is evidence, and evidence is sent once.
+	if record.documents != 1 {
+		t.Fatalf("sent %d transcripts, want exactly one", record.documents)
+	}
+	// A person handed a token with no way to answer it is a dead end.
+	if len(record.markups) == 0 {
+		t.Fatalf("the approval prompt carried no buttons, messages: %v", record.messages)
+	}
+	last := record.markups[len(record.markups)-1]
+	if !strings.Contains(last, `/approve token`) || !strings.Contains(last, `/reject token`) {
+		t.Fatalf("buttons must approve and decline the pending token: %s", last)
+	}
+}
+
+func TestApprovalMarkupNeedsAToken(t *testing.T) {
+	if approvalMarkup("  ") != nil {
+		t.Fatal("no token means no buttons, not buttons that resolve nothing")
+	}
+	markup := approvalMarkup("abc123")
+	if markup == nil || markup.InlineKeyboard[0][0].CallbackData != "/approve abc123" {
+		t.Fatalf("markup = %#v", markup)
 	}
 }
