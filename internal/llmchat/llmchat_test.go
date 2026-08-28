@@ -4,6 +4,10 @@ package llmchat
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -60,7 +64,7 @@ func TestBuildRequestForcesTheAnswerWhenNoToolsExist(t *testing.T) {
 		Model:    "probe-model",
 		Config:   &genai.GenerateContentConfig{ResponseSchema: schema, ResponseMIMEType: "application/json"},
 		Contents: []*genai.Content{genai.NewContentFromText("pick one", genai.RoleUser)},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}
@@ -85,7 +89,7 @@ func TestBuildRequestSendsTheAgentInstruction(t *testing.T) {
 			SystemInstruction: genai.NewContentFromText("You extract purchase intent.", genai.RoleUser),
 		},
 		Contents: []*genai.Content{genai.NewContentFromText("buy me a trimmer", genai.RoleUser)},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}
@@ -116,7 +120,7 @@ func TestBuildRequestLeavesRealToolsCallable(t *testing.T) {
 			}}},
 		},
 		Contents: []*genai.Content{genai.NewContentFromText("negotiate", genai.RoleUser)},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}
@@ -165,5 +169,66 @@ func TestAdaptTurnsTheAnswerCallIntoText(t *testing.T) {
 	out = m.adapt(decoded, true)
 	if len(out.Content.Parts) != 1 || out.Content.Parts[0].FunctionCall == nil {
 		t.Fatalf("parts = %+v, want a function call", out.Content.Parts)
+	}
+}
+
+func TestAProseAnswerIsAskedAgainWithTheShapeForced(t *testing.T) {
+	// The first reply is prose, which a stage expecting a shape cannot use. The
+	// second must arrive through the answer function.
+	var forced []bool
+	replies := []string{
+		`{"choices":[{"message":{"role":"assistant","content":"I would push back on that price."}}]}`,
+		`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"final_answer","arguments":"{\"decision\":\"counter\",\"reason\":\"too high\"}"}}]}}]}`,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		forced = append(forced, strings.Contains(string(body), `"tool_choice"`))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(replies[min(len(forced)-1, len(replies)-1)]))
+	}))
+	defer server.Close()
+
+	shape, err := SchemaFor[probeAnswer]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &model.LLMRequest{
+		Model: "stand-in",
+		Config: &genai.GenerateContentConfig{
+			ResponseSchema: shape,
+			// A real tool alongside the answer is what stops the answer being
+			// forced on the first ask.
+			Tools: []*genai.Tool{{FunctionDeclarations: []*genai.FunctionDeclaration{{
+				Name: "counter", Description: "push back", Parameters: shape,
+			}}}},
+		},
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "they quoted high"}}}},
+	}
+
+	var answer string
+	for response, err := range New("stand-in", "key", server.URL).GenerateContent(t.Context(), request, false) {
+		if err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		for _, part := range response.Content.Parts {
+			answer += part.Text
+		}
+	}
+
+	if len(forced) != 2 {
+		t.Fatalf("made %d calls, want a second with the shape forced", len(forced))
+	}
+	if forced[0] {
+		t.Fatal("the first ask must leave the real tool callable")
+	}
+	if !forced[1] {
+		t.Fatal("the second ask must force the answer")
+	}
+	shaped := map[string]any{}
+	if err := json.Unmarshal([]byte(answer), &shaped); err != nil {
+		t.Fatalf("answer %q is not the shape that was asked for: %v", answer, err)
+	}
+	if shaped["decision"] != "counter" {
+		t.Fatalf("decision = %v", shaped["decision"])
 	}
 }

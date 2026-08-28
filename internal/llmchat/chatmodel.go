@@ -146,7 +146,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 			yield(nil, failure.Reasoning(fmt.Errorf("streaming unsupported")))
 			return
 		}
-		body, err := m.buildRequest(req)
+		body, err := m.buildRequest(req, false)
 		if err != nil {
 			yield(nil, failure.Reasoning(err))
 			return
@@ -156,7 +156,22 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 			yield(nil, failure.Reasoning(err))
 			return
 		}
-		response := m.adapt(decoded, wantsStructuredOutput(req))
+		structured := wantsStructuredOutput(req)
+		response := m.adapt(decoded, structured)
+		// A stage that asked for a shaped answer and got prose has nothing it can
+		// use. That happens when the model also had real tools to call, so the
+		// answer function could not be the only legal move on the first ask. Ask
+		// once more with the answer as the only move left.
+		if structured && answeredInProse(response) {
+			forced, buildErr := m.buildRequest(req, true)
+			if buildErr != nil {
+				yield(nil, failure.Reasoning(buildErr))
+				return
+			}
+			if redecoded, postErr := m.post(ctx, forced); postErr == nil {
+				response = m.adapt(redecoded, true)
+			}
+		}
 		yield(response, nil)
 	}
 }
@@ -340,13 +355,39 @@ func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	return out
 }
 
-// buildRequest converts the framework conversation into chat-completions messages.
+// answeredInProse reports that a shaped answer was asked for and prose came
+// back: no function call to run, and text that is not the shaped answer itself.
+func answeredInProse(response *model.LLMResponse) bool {
+	if response == nil || response.ErrorMessage != "" || response.Content == nil {
+		return false
+	}
+	text := ""
+	for _, part := range response.Content.Parts {
+		if part == nil {
+			continue
+		}
+		if part.FunctionCall != nil {
+			// Mid-conversation tool use, which is a legitimate turn.
+			return false
+		}
+		text += part.Text
+	}
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	shaped := map[string]any{}
+	return json.Unmarshal([]byte(strings.TrimSpace(text)), &shaped) != nil
+}
+
+// buildRequest converts the framework conversation into chat-completions
+// messages. When forceAnswer is set, the shaped answer is the only move the
+// model is allowed, used to recover a turn that came back as prose.
 //
 // The framework delivers tool results as genai.Contents whose Parts carry
 // FunctionResponse (role is typically "user"), and model turns carry
 // FunctionCall parts (role "model"). Both MUST reach the provider: results as
 // role:"tool" messages echoing the call ID, calls inside assistant messages.
-func (m *Model) buildRequest(req *model.LLMRequest) ([]byte, error) {
+func (m *Model) buildRequest(req *model.LLMRequest, forceAnswer bool) ([]byte, error) {
 	out := request{Model: req.Model}
 	if req.Config != nil {
 		// The agent's instruction arrives here, not in the conversation. Dropping
@@ -376,8 +417,8 @@ func (m *Model) buildRequest(req *model.LLMRequest) ([]byte, error) {
 		}}
 		hadOtherTools := len(out.Tools) > 0
 		out.Tools = append(out.Tools, answer)
-		if !hadOtherTools {
-			// Nothing else to call, so the answer is the only legal move.
+		if !hadOtherTools || forceAnswer {
+			// Nothing else worth calling, so the answer is the only legal move.
 			out.ToolChoice = map[string]any{
 				"type":     "function",
 				"function": map[string]any{"name": structuredOutputTool},

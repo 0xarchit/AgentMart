@@ -149,11 +149,12 @@ base_amount_paise) plus wallet facts and premium_band_pct=%d. Decide:
 - Otherwise call counter_offer(session_id, amount_paise) ONCE at about 85%% of
   the ask. Then judge the response: accept_offer if it now fits, decline_offer
   otherwise. Never exceed wallet_balance_paise or budget_paise.
-- When merchant_agent is available you may consult it first: ask why the price
+- When the merchant is reachable you may consult it first: ask why the price
   holds, what the bundle adds, or whether a loyalty deal applies. Use its
   answer in your reasoning, but only counter_offer/accept_offer/decline_offer
   change the deal.
-Finish with a short summary of what you did and why.`, AutoBuyPremiumMaxPct)
+Every turn is a function call. Settle the deal first, then report what you did
+through the final answer function. Never reply in prose.`, AutoBuyPremiumMaxPct)
 )
 
 // Per-node time bounds.
