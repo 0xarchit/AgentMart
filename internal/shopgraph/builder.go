@@ -453,18 +453,9 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	if err != nil {
 		return Result{}, err
 	}
-	facts := map[string]any{
-		"request":              request,
-		"wallet_balance_paise": wallet.BalancePaise,
-		"spend_limit_paise":    wallet.SpendLimitPaise,
-		"budget_paise":         wallet.BudgetPaise,
-		"premium_band_pct":     AutoBuyPremiumMaxPct,
-	}
-	payload, err := jsonMarshal(facts)
-	if err != nil {
-		return Result{}, err
-	}
-
+	// The graph's first stop is the shop, and what the shop needs is the person's
+	// own words. The money facts are read from the wallet at the node that needs
+	// them, so they never travel as prose.
 	runCtx, cancel := context.WithTimeout(parent, graphRunDeadline)
 	defer cancel()
 
@@ -472,7 +463,7 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	var lastResult *Result
 	events := 0
 	for event, runErr := range runner.Run(runCtx, "user", fmt.Sprintf("run-%d", time.Now().UnixNano()),
-		textContent(string(payload)), defaultRunConfig()) {
+		textContent(request), defaultRunConfig()) {
 		if runErr != nil {
 			return Result{}, fmt.Errorf("graph run failed after %d events: %w", events, runErr)
 		}

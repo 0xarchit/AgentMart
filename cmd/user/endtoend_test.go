@@ -74,6 +74,16 @@ func standInProvider(t *testing.T, seen map[string]int, refuse ...string) *httpt
 			return
 		}
 		seen[stage]++
+		// The shop must hear the person's own words, not an envelope of facts
+		// meant for other stages.
+		if stage == "shopfront" {
+			if !strings.Contains(facts, "buy me a good trimmer") {
+				t.Errorf("the shop was not told what was asked for: %s", facts)
+			}
+			if strings.Contains(facts, "wallet_balance_paise") {
+				t.Errorf("the shop was handed the buyer's wallet facts: %s", facts)
+			}
+		}
 		for _, refused := range refuse {
 			if refused == stage {
 				w.Header().Set("Content-Type", "application/json")
