@@ -2,17 +2,19 @@
 //
 // Layout (workflow engine):
 //
-//	START  to  intent(LLM)  to  search(catalog)  to  select(LLM)  to  offer(propose)
-//	    offer --ACCEPT---> accept -------------
-//	    offer --NEGOTIATE> negotiate(reasoning loop) -+-> finalize(verify)  to  END
-//	    offer --DECLINE--> declined(outcome) --------> END
+//	START  to  ask_shop(conversation)  to  choose_option(reasoning)  to  fetch_offer(quote)
+//	    decide_offer --ACCEPT----> accept -------------
+//	    decide_offer --NEGOTIATE-> negotiate(reasoning) -+-> finalize(verify)  to  END
+//	    decide_offer --ASK_HUMAN-> ask_human ----------/
+//	    decide_offer --DECLINE---> declined -----------/
 //
-// Every judgment node is an LLM agent; routing/floors/caps are deterministic.
+// Every judgement is an agent's; routing, floors, and caps are deterministic.
 package shopgraph
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -157,6 +159,11 @@ Every turn is a function call. Settle the deal first, then report what you did
 through the final answer function. Never reply in prose.`, AutoBuyPremiumMaxPct)
 )
 
+// errNothingToShow means the shop had nothing inside the budget. A shop with an
+// empty shelf is an answer, not a fault, so a run ending this way declines
+// rather than failing.
+var errNothingToShow = errors.New("the shop had nothing within the budget")
+
 // Per-node time bounds.
 const (
 	nodeTimeout      = 90 * time.Second
@@ -233,7 +240,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				return negotiationclient.Shortlist{}, err
 			}
 			if len(shortlist.Options) == 0 {
-				return negotiationclient.Shortlist{}, fmt.Errorf("the shop had nothing to show for %q", brief)
+				return negotiationclient.Shortlist{}, fmt.Errorf("%w for %q", errNothingToShow, brief)
 			}
 			return shortlist, nil
 		}, workflow.NodeConfig{Timeout: negotiateTimeout})
@@ -466,6 +473,10 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	for event, runErr := range runner.Run(runCtx, "user", fmt.Sprintf("run-%d", time.Now().UnixNano()),
 		textContent(request), defaultRunConfig()) {
 		if runErr != nil {
+			if errors.Is(runErr, errNothingToShow) {
+				s.note("The shop had nothing within the budget, so nothing was bought.")
+				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingToShow.Error()}, nil
+			}
 			return Result{}, fmt.Errorf("graph run failed after %d events: %w", events, runErr)
 		}
 		events++

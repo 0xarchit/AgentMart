@@ -67,7 +67,19 @@ func (s *Server) browse(ctx context.Context, request negotiationRequest) (map[st
 		return nil, fmt.Errorf("look through stock: %w", err)
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("nothing in stock is within the budget")
+		// An empty shelf is a real answer from a shop owner, not a fault. Saying so
+		// costs nothing and lets the buyer end the conversation cleanly.
+		now := time.Now().UTC()
+		greeting := "Nothing I have right now fits that budget."
+		return map[string]any{
+			"type":     "shortlist",
+			"greeting": greeting,
+			"options":  []BrowseOption{},
+			"transcript": []Turn{
+				{Actor: "buyer", Message: buyerOpening(brief, request.BudgetPaise), At: now},
+				{Actor: "merchant", Message: greeting, At: now},
+			},
+		}, nil
 	}
 
 	shortlist, err := s.shopfront.Shortlist(ctx, BrowseInput{
