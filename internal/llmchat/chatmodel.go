@@ -158,11 +158,11 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 		}
 		structured := wantsStructuredOutput(req)
 		response := m.adapt(decoded, structured)
-		// A stage that asked for a shaped answer and got prose has nothing it can
-		// use. That happens when the model also had real tools to call, so the
-		// answer function could not be the only legal move on the first ask. Ask
-		// once more with the answer as the only move left.
-		if structured && answeredInProse(response) {
+		// A stage that asked for a shaped answer has nothing it can use without
+		// one. Prose or an empty turn both happen when the model also had real
+		// tools to call, so the answer function could not be the only legal move
+		// on the first ask. Ask once more with the answer as the only move left.
+		if structured && answeredWithoutTheShape(response) {
 			forced, buildErr := m.buildRequest(req, true)
 			if buildErr != nil {
 				yield(nil, failure.Reasoning(buildErr))
@@ -355,9 +355,10 @@ func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	return out
 }
 
-// answeredInProse reports that a shaped answer was asked for and prose came
-// back: no function call to run, and text that is not the shaped answer itself.
-func answeredInProse(response *model.LLMResponse) bool {
+// answeredWithoutTheShape reports that a shaped answer was asked for and did not
+// arrive: no function call to run, and no text carrying the shape. An empty turn
+// counts, since a stage waiting on a shape cannot use silence either.
+func answeredWithoutTheShape(response *model.LLMResponse) bool {
 	if response == nil || response.ErrorMessage != "" || response.Content == nil {
 		return false
 	}
@@ -371,9 +372,6 @@ func answeredInProse(response *model.LLMResponse) bool {
 			return false
 		}
 		text += part.Text
-	}
-	if strings.TrimSpace(text) == "" {
-		return false
 	}
 	shaped := map[string]any{}
 	return json.Unmarshal([]byte(strings.TrimSpace(text)), &shaped) != nil

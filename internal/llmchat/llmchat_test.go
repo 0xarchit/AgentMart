@@ -172,7 +172,7 @@ func TestAdaptTurnsTheAnswerCallIntoText(t *testing.T) {
 	}
 }
 
-func TestAProseAnswerIsAskedAgainWithTheShapeForced(t *testing.T) {
+func TestAnAnswerWithoutTheShapeIsAskedAgainForced(t *testing.T) {
 	// The first reply is prose, which a stage expecting a shape cannot use. The
 	// second must arrive through the answer function.
 	var forced []bool

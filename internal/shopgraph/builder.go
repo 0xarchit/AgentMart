@@ -482,21 +482,39 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 			}
 		}
 	}
+	return s.resultFrom(lastResult, lastOutput)
+}
+
+// resultFrom turns what the graph finished holding into a result. A settled
+// outcome is used as is; a quote that nothing settled becomes the person's call
+// rather than a lost run.
+func (s *Service) resultFrom(lastResult *Result, lastOutput any) (Result, error) {
 	if lastResult != nil {
 		return normalized(*lastResult), nil
 	}
-	outcome, ok := lastOutput.(Outcome)
-	if !ok {
-		return Result{}, fmt.Errorf("graph finished without a result (last output %T)", lastOutput)
+	if outcome, ok := lastOutput.(Outcome); ok {
+		return normalized(Result{
+			Action: Action(outcome.Action), ProductID: outcome.ProductID,
+			ProductName: outcome.ProductName, Quantity: outcome.Quantity,
+			FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
+			Steps: outcome.Steps, SessionID: outcome.SessionID,
+			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
+			NeedsApproval: Action(outcome.Action) == ActionAskHuman,
+		}), nil
 	}
-	return normalized(Result{
-		Action: Action(outcome.Action), ProductID: outcome.ProductID,
-		ProductName: outcome.ProductName, Quantity: outcome.Quantity,
-		FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
-		Steps: outcome.Steps, SessionID: outcome.SessionID,
-		Transcript: outcome.Transcript, Accepted: outcome.Accepted,
-		NeedsApproval: Action(outcome.Action) == ActionAskHuman,
-	}), nil
+	// The quote is in hand but nothing settled it. Losing the negotiation is not
+	// a reason to lose the run: hand the offer to the person, who can still say
+	// yes. Escalation never spends, so this stays money safe.
+	if offer, ok := lastOutput.(Offer); ok {
+		s.note("The negotiation did not settle, so this offer goes to you.")
+		return normalized(Result{
+			Action: ActionAskHuman, ProductID: offer.ProductID, ProductName: offer.ProductName,
+			Quantity: offer.Quantity, FinalPaise: offer.FinalPaise, SessionID: offer.SessionID,
+			Rationale:  joinReason(offer.Reason, "the negotiation did not settle, so it goes to you"),
+			Transcript: offer.ShopTurns,
+		}), nil
+	}
+	return Result{}, fmt.Errorf("graph finished without a result (last output %T)", lastOutput)
 }
 
 // normalized fills the defaults a caller can rely on.

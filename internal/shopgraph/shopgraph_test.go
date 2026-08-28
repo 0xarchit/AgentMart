@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 )
 
@@ -105,5 +106,33 @@ func TestRouteForUnclearDecisionAsksHuman(t *testing.T) {
 		Wallet{BalancePaise: 500000, SpendLimitPaise: 500000})
 	if got != RouteAskHuman || note == "" {
 		t.Fatalf("unclear decision: route = %s note = %q", got, note)
+	}
+}
+
+func TestAnUnsettledNegotiationGoesToThePersonInsteadOfLosingTheRun(t *testing.T) {
+	// The graph ended holding a quote that nothing settled. That is the person's
+	// call, not an error, and it must not spend.
+	service := &Service{}
+	offer := Offer{
+		SessionID: "session-1", ProductID: "product-1", ProductName: "Trimmer",
+		Quantity: 1, BasePaise: 180000, FinalPaise: 233815, Reason: "extended warranty",
+		ShopTurns: []negotiation.Turn{{Actor: "merchant", Message: "Welcome in"}},
+	}
+
+	result, err := service.resultFrom(nil, offer)
+	if err != nil {
+		t.Fatalf("an unsettled negotiation must not fail the run: %v", err)
+	}
+	if result.Action != ActionAskHuman || !result.NeedsApproval {
+		t.Fatalf("action = %q needsApproval = %v, want the person asked", result.Action, result.NeedsApproval)
+	}
+	if result.FinalPaise != 233815 || result.SessionID != "session-1" {
+		t.Fatalf("the quote must survive: %+v", result)
+	}
+	if len(result.Transcript) == 0 {
+		t.Fatal("the person needs the conversation to judge the offer")
+	}
+	if _, err := service.resultFrom(nil, "not an outcome"); err == nil {
+		t.Fatal("an unrecognised final output is still a failure")
 	}
 }
