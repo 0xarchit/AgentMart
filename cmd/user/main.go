@@ -154,7 +154,8 @@ func main() {
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
-	reasoningService, err := buyerreasoning.New(ctx, buyerreasoning.FromEnv())
+	buyerModel := buyerreasoning.FromEnv("USER")
+	reasoningService, err := buyerreasoning.New(ctx, buyerModel)
 	if err != nil {
 		logger.Error("user reasoning configuration failed", "error", err)
 		return
@@ -218,9 +219,9 @@ func main() {
 			logger.Error("merchant remote agent unavailable", "error", merchantErr)
 		}
 		loopService, err = shopgraph.New(ctx, shopgraph.Config{
-			APIKey:        os.Getenv("OPENAI_API_KEY"),
-			BaseURL:       os.Getenv("OPENAI_BASE_URL"),
-			Model:         os.Getenv("ADK_MODEL_NAME"),
+			APIKey:        buyerModel.APIKey,
+			BaseURL:       buyerModel.BaseURL,
+			Model:         buyerModel.Model,
 			MerchantAgent: merchantAgent,
 		}, loopTools)
 		if err != nil {
@@ -633,13 +634,12 @@ func conversationProbe(endpoint string) func(context.Context) error {
 // reasoningProbe asks the model provider for one trivial structured answer. This
 // is the layer that fails most often, so it is worth a real call.
 func reasoningProbe() func(context.Context) error {
-	name := strings.TrimSpace(os.Getenv("ADK_MODEL_NAME"))
-	key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	if name == "" || key == "" {
+	model := buyerreasoning.FromEnv("USER")
+	if model.Model == "" || model.APIKey == "" {
 		return nil
 	}
 	return func(ctx context.Context) error {
-		reasoner := llmchat.New(name, key, os.Getenv("OPENAI_BASE_URL"))
+		reasoner := llmchat.New(model.Model, model.APIKey, model.BaseURL)
 		_, err := reasoner.CompleteJSON(ctx, llmchat.CompleteRequest{
 			System:       "Answer with the word ready.",
 			User:         `{"check":"are you reachable"}`,

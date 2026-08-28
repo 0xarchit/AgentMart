@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"agentmart/internal/failure"
 	"agentmart/internal/llmchat"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
@@ -108,11 +109,6 @@ func (s *Service) note(line string) {
 func (s *Service) decisionModel() model.LLM { return s.model }
 
 var (
-	intentInstruction = `Extract purchase intent from the user's message.
-Return keywords that name the product or category (e.g. ["trimmer"]), and
-budget_paise parsed from phrases like "under 2500" (rupees -> x100). Use 0 when
-no budget was stated.`
-
 	selectInstruction = `The shop has shown you what it has. Each option carries
 the shop's own pitch, its price in paise, stock, warranty, and trust score.
 
@@ -180,10 +176,6 @@ const (
 func (s *Service) buildGraph() (agent.Agent, error) {
 	// Each reasoning node answers in the shape of its result type. Without this
 	// the provider replies in prose and the node's own validation rejects it.
-	intentSchema, err := llmchat.SchemaFor[Intent]()
-	if err != nil {
-		return nil, err
-	}
 	selectionSchema, err := llmchat.SchemaFor[Selection]()
 	if err != nil {
 		return nil, err
@@ -197,13 +189,6 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 		return nil, err
 	}
 
-	intentAgent, err := llmagent.New(llmagent.Config{
-		Name: "intent-agent", Model: s.decisionModel(), Instruction: intentInstruction,
-		OutputSchema: intentSchema,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("intent agent: %w", err)
-	}
 	selectAgent, err := llmagent.New(llmagent.Config{
 		Name: "select-agent", Model: s.decisionModel(), Instruction: selectInstruction,
 		OutputSchema: selectionSchema,
@@ -231,24 +216,17 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	}
 	s.assessAgent = assessAgent
 
-	intentNode, err := workflow.NewAgentNodeTyped[string, Intent](intentAgent, workflow.NodeConfig{Timeout: nodeTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("intent node: %w", err)
-	}
 	// The shop conversation opens here: the buyer says what it wants and the
 	// merchant answers with its own pick of stock, pitched in its own words.
-	askShopNode := workflow.NewFunctionNode[Intent, negotiationclient.Shortlist]("ask_shop",
-		func(ctx agent.Context, in Intent) (negotiationclient.Shortlist, error) {
+	askShopNode := workflow.NewFunctionNode[string, negotiationclient.Shortlist]("ask_shop",
+		func(ctx agent.Context, request string) (negotiationclient.Shortlist, error) {
 			wallet := s.walletSnapshot()
 			budget := wallet.SpendLimitPaise
-			if in.BudgetPaise > 0 {
-				budget = in.BudgetPaise
-			}
-			brief := strings.TrimSpace(strings.Join(in.Keywords, " "))
+			brief := strings.TrimSpace(request)
 			if brief == "" {
 				return negotiationclient.Shortlist{}, fmt.Errorf("nothing to ask the shop for")
 			}
-			s.note(fmt.Sprintf("Asking the shop for %s, up to INR %.2f", brief, float64(budget)/100))
+			s.note(fmt.Sprintf("Asking the shop about %q, up to INR %.2f", brief, float64(budget)/100))
 			shortlist, err := s.tools.Browse(ctx, brief, budget, wallet.AccountID)
 			if err != nil {
 				return negotiationclient.Shortlist{}, err
@@ -328,7 +306,15 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				view.ProductName, float64(view.FinalPaise)/100, view.Offer.Reason))
 			assessment, err := s.assess(ctx, view)
 			if err != nil {
-				return nil, err
+				// The quote is already in hand. Losing the judgement is not a
+				// reason to lose the run: hand the offer to the person, and say
+				// which layer failed rather than hiding it behind a guess.
+				explanation := failure.Explain(err)
+				s.note("Could not judge this offer, so it goes to you. " + explanation)
+				assessment = Assessment{
+					Decision: "ask_human",
+					Reason:   "the buyer agent could not judge this offer: " + firstLine(explanation),
+				}
 			}
 			offer := view.Offer
 			route, note := routeFor(assessment, offer, s.walletSnapshot())
@@ -390,8 +376,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 
 	builder := workflow.NewEdgeBuilder()
 	builder.
-		Add(workflow.Start, intentNode).
-		Add(intentNode, askShopNode).
+		Add(workflow.Start, askShopNode).
 		Add(askShopNode, chooseNode).
 		Add(chooseNode, offerNode).
 		Add(offerNode, decideNode)
@@ -687,6 +672,14 @@ func routeFor(assessment Assessment, offer Offer, wallet Wallet) (string, string
 	default:
 		return RouteAccept, ""
 	}
+}
+
+// firstLine keeps an explanation short enough to sit inside a reason.
+func firstLine(text string) string {
+	if index := strings.IndexByte(text, byte('\n')); index >= 0 {
+		return strings.TrimSpace(text[:index])
+	}
+	return strings.TrimSpace(text)
 }
 
 // joinReason strings together the non-empty parts of an explanation.

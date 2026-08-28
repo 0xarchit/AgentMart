@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"iter"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,15 @@ import (
 // entire agent-run budget. Free-tier reasoning models can take 30-90s before
 // their first byte.
 const providerTimeout = 120 * time.Second
+
+// Retry budget for a shared free pool. A rate limit there usually clears in a
+// second or two, so the first retry is quick and each later one waits longer.
+// The provider's own stated wait wins when it sends one.
+const (
+	maxAttempts  = 5
+	retryBase    = time.Second
+	maxRetryWait = 20 * time.Second
+)
 
 // structuredOutputTool is the function a schema-shaped answer arrives through.
 // Function calling is the one structured-output mechanism every gateway in this
@@ -126,47 +136,81 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 }
 
+// post calls the provider, retrying the failures a shared free pool produces
+// constantly: rate limits, gateway errors, and dropped connections. It waits as
+// long as the provider asks when it says so, and backs off otherwise.
 func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		decoded, wait, err := m.attempt(ctx, body)
+		if err == nil {
+			return decoded, nil
+		}
+		lastErr = err
+		if wait <= 0 || attempt == maxAttempts {
+			break
+		}
+		// 1s, 2s, 4s, 8s unless the provider named its own wait.
+		wait *= 1 << (attempt - 1)
+		if wait > maxRetryWait {
+			wait = maxRetryWait
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, fmt.Errorf("%d attempts failed, last was: %w", maxAttempts, lastErr)
+}
+
+// attempt makes one call. A positive wait means the failure is worth retrying
+// after that long; zero means stop.
+func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Duration, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, postErr := m.http.Do(httpReq)
-	if postErr != nil || (resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests) {
-		status := "transport error"
-		if postErr == nil {
-			status = fmt.Sprintf("HTTP %d", resp.StatusCode)
-			resp.Body.Close()
-		}
-		// Free-tier providers hiccup constantly; one bounded retry.
-		time.Sleep(2 * time.Second)
-		retryReq, rerr := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/chat/completions", bytes.NewReader(body))
-		if rerr != nil {
-			return nil, fmt.Errorf("rebuild retry request: %w", rerr)
-		}
-		retryReq.Header.Set("Authorization", "Bearer "+m.apiKey)
-		retryReq.Header.Set("Content-Type", "application/json")
-		resp, postErr = m.http.Do(retryReq)
-		if postErr != nil {
-			return nil, fmt.Errorf("call failed twice (%s then %v)", status, postErr)
-		}
+	resp, err := m.http.Do(httpReq)
+	if err != nil {
+		return nil, retryBase, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout {
+		return nil, retryAfter(resp), fmt.Errorf("provider returned %s", resp.Status)
+	}
+
 	var decoded response
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("decode response (%s): %w", resp.Status, err)
+		return nil, retryBase, fmt.Errorf("decode response (%s): %w", resp.Status, err)
 	}
 	if decoded.Error != nil {
-		return nil, fmt.Errorf("provider error (%s): %s", resp.Status, decoded.Error.Message)
+		return nil, 0, fmt.Errorf("provider error (%s): %s", resp.Status, decoded.Error.Message)
 	}
 	if len(decoded.Choices) == 0 {
-		return nil, fmt.Errorf("no choices returned (%s)", resp.Status)
+		// An empty body with a success status is a pool hiccup, not an answer.
+		return nil, retryBase, fmt.Errorf("no choices returned (%s)", resp.Status)
 	}
-	return &decoded, nil
+	return &decoded, 0, nil
+}
+
+// retryAfter honours the provider's own wait when it states one, and otherwise
+// backs off by a fixed step so a rate-limited pool gets time to reset.
+func retryAfter(resp *http.Response) time.Duration {
+	header := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if header != "" {
+		if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
+			if wait := time.Duration(seconds) * time.Second; wait <= maxRetryWait {
+				return wait
+			}
+			return maxRetryWait
+		}
+	}
+	return retryBase
 }
 
 // adapt converts the provider choice into a framework response. Tool results

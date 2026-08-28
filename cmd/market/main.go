@@ -53,7 +53,7 @@ func main() {
 	if !strings.HasSuffix(agentEndpoint, "/") {
 		agentEndpoint += "/"
 	}
-	merchantConfig := buyerreasoning.FromEnv()
+	merchantConfig := buyerreasoning.FromEnv("MARKET")
 	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
 		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
 	}, campaigns.NewProvider(db), marketaudit.New(db))

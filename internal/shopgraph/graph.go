@@ -92,12 +92,6 @@ type Pick struct {
 	ShopTranscript []negotiation.Turn `json:"-"`
 }
 
-// Intent is the parsed user request produced by the intent node.
-type Intent struct {
-	Keywords    []string `json:"keywords"`
-	BudgetPaise int64    `json:"budget_paise"`
-}
-
 // Selection is the product chosen by the selection node.
 type Selection struct {
 	ProductID string `json:"product_id"`

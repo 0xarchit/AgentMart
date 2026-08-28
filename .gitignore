@@ -11,3 +11,4 @@ tsconfig.tsbuildinfo
 .pi
 .mcp.json
 bin/
+*.exe

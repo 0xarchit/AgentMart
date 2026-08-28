@@ -68,9 +68,20 @@ type Config struct {
 	Model   string
 }
 
-// FromEnv loads the model configuration without selecting a provider-specific default.
-func FromEnv() Config {
-	return Config{APIKey: strings.TrimSpace(os.Getenv("OPENAI_API_KEY")), BaseURL: strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), Model: strings.TrimSpace(os.Getenv("ADK_MODEL_NAME"))}
+// FromEnv loads the model configuration for one process. Each side of the
+// conversation may hold its own key, so a shared pool's per-key rate limit is
+// not spent twice on one shopping run. Role is MARKET or USER; when no key is
+// set for the role, the shared key is used.
+func FromEnv(role string) Config {
+	key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY_" + role))
+	if key == "" {
+		key = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	}
+	return Config{
+		APIKey:  key,
+		BaseURL: strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
+		Model:   strings.TrimSpace(os.Getenv("ADK_MODEL_NAME")),
+	}
 }
 
 // Service decides bounded intent and falls back to deterministic policy when disabled.

@@ -36,7 +36,7 @@ func demoStock() []catalog.Product {
 // instruction it was sent and returns the shape that stage expects, which also
 // asserts that every stage really does send its instruction and ask for a
 // structured answer.
-func standInProvider(t *testing.T, seen map[string]int) *httptest.Server {
+func standInProvider(t *testing.T, seen map[string]int, refuse ...string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
@@ -74,6 +74,15 @@ func standInProvider(t *testing.T, seen map[string]int) *httptest.Server {
 			return
 		}
 		seen[stage]++
+		for _, refused := range refuse {
+			if refused == stage {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{"message": "rate limit reached for this key"},
+				})
+				return
+			}
+		}
 
 		function := "final_answer"
 		if len(request.Tools) > 0 {
@@ -102,12 +111,6 @@ func standInProvider(t *testing.T, seen map[string]int) *httptest.Server {
 // stage must return.
 func stageAnswer(instruction, facts string) (string, any) {
 	switch {
-	case strings.Contains(instruction, "Extract purchase intent"):
-		budget := int64(0)
-		if strings.Contains(facts, "under 4000") {
-			budget = 400000
-		}
-		return "intent", map[string]any{"keywords": []string{"trimmer"}, "budget_paise": budget}
 	case strings.Contains(instruction, "You own this shop"):
 		// The shop pitches two real products and one it does not stock, to prove
 		// the invented one is dropped before anyone sees a price.
@@ -186,10 +189,10 @@ func marketProcess(t *testing.T, providerURL string) *httptest.Server {
 }
 
 // shoppingSystem wires both processes and returns a buyer ready to run.
-func shoppingSystem(t *testing.T) (*shopgraph.Service, map[string]int) {
+func shoppingSystem(t *testing.T, refuse ...string) (*shopgraph.Service, map[string]int) {
 	t.Helper()
 	seen := map[string]int{}
-	provider := standInProvider(t, seen)
+	provider := standInProvider(t, seen, refuse...)
 	t.Cleanup(provider.Close)
 
 	market := marketProcess(t, provider.URL)
@@ -263,12 +266,12 @@ func TestAShoppingRequestTravelsTheWholeSystem(t *testing.T) {
 	}
 
 	// Every reasoning stage on both sides was actually consulted.
-	for _, stage := range []string{"intent", "shopfront", "choose", "assess"} {
+	for _, stage := range []string{"shopfront", "choose", "assess"} {
 		if seen[stage] == 0 {
 			t.Fatalf("stage %q never ran, stages seen: %v", stage, seen)
 		}
 	}
-	if len(stages) < 4 {
+	if len(stages) < 3 {
 		t.Fatalf("progress reported %d stages, want the conversation narrated: %v", len(stages), stages)
 	}
 }
@@ -276,7 +279,7 @@ func TestAShoppingRequestTravelsTheWholeSystem(t *testing.T) {
 func TestAnOfferOverTheLimitGoesToThePerson(t *testing.T) {
 	buyer, _ := shoppingSystem(t)
 
-	result, err := buyer.Run(t.Context(), "buy me a good trimmer under 4000",
+	result, err := buyer.Run(t.Context(), "buy me a good trimmer",
 		shopgraph.Wallet{BalancePaise: 500000, SpendLimitPaise: 400000, AccountID: "account-1"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -295,5 +298,36 @@ func TestAnOfferOverTheLimitGoesToThePerson(t *testing.T) {
 	}
 	if len(result.Transcript) < 3 {
 		t.Fatalf("transcript has %d turns, want the conversation that led here", len(result.Transcript))
+	}
+}
+
+func TestALostJudgementGoesToThePersonInsteadOfLosingTheRun(t *testing.T) {
+	// The provider refuses the last call of the run, after the shop has already
+	// pitched, the buyer has chosen, and a price is on the table.
+	buyer, seen := shoppingSystem(t, "assess")
+
+	var stages []string
+	result, err := buyer.RunWithProgress(t.Context(), "buy me a good trimmer",
+		shopgraph.Wallet{BalancePaise: 700000, SpendLimitPaise: 600000, AccountID: "account-1"},
+		func(line string) { stages = append(stages, line) })
+	if err != nil {
+		t.Fatalf("a lost judgement must not lose the run: %v", err)
+	}
+
+	if result.Action != shopgraph.ActionAskHuman || !result.NeedsApproval {
+		t.Fatalf("action = %q approval = %v, want the person asked", result.Action, result.NeedsApproval)
+	}
+	if !strings.Contains(result.Rationale, "could not judge") {
+		t.Fatalf("rationale = %q, want it to say the judgement was lost", result.Rationale)
+	}
+	// The person is told which layer failed, not just that something did.
+	if !strings.Contains(strings.Join(stages, " "), "reasoning layer") {
+		t.Fatalf("stages must name the failing layer: %v", stages)
+	}
+	if result.FinalPaise == 0 || len(result.Transcript) < 3 {
+		t.Fatalf("the person needs the quote and the conversation: %d paise, %d turns", result.FinalPaise, len(result.Transcript))
+	}
+	if seen["assess"] == 0 {
+		t.Fatal("the judgement was never attempted")
 	}
 }
