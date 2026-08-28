@@ -16,6 +16,7 @@ import (
 	"google.golang.org/genai"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/failure"
 	"agentmart/internal/llmchat"
 	"agentmart/internal/negotiation"
 )
@@ -93,7 +94,7 @@ func buildShopfront(cfg Config) (agent.Agent, error) {
 // how to sell it, and the catalog decides what everything costs.
 func (n *Negotiator) Shortlist(parent context.Context, input negotiation.BrowseInput) (negotiation.BrowseOutput, error) {
 	if n == nil || n.shopfront == nil {
-		return negotiation.BrowseOutput{}, fmt.Errorf("shop owner reasoning is not configured")
+		return negotiation.BrowseOutput{}, failure.Reasoning(fmt.Errorf("shop owner reasoning is not configured"))
 	}
 	if len(input.Candidates) == 0 {
 		return negotiation.BrowseOutput{}, fmt.Errorf("no stock to show")
@@ -172,7 +173,7 @@ func (n *Negotiator) runShopfront(parent context.Context, payload string) (shopf
 	for event, runErr := range run.Run(ctx, "merchant",
 		fmt.Sprintf("shopfront-%d", n.sessions.Add(1)), genai.NewContentFromText(payload, genai.RoleUser), agent.RunConfig{}) {
 		if runErr != nil {
-			return shopfrontAnswer{}, runErr
+			return shopfrontAnswer{}, failure.Reasoning(runErr)
 		}
 		if event != nil {
 			last = event

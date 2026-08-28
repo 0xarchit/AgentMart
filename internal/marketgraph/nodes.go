@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"agentmart/internal/failure"
 	"agentmart/internal/llmchat"
 	"agentmart/internal/negotiation"
 
@@ -59,7 +60,7 @@ func New(cfg Config, campaigns CampaignProvider, auditor Auditor) (*Negotiator, 
 }
 
 const strategyInstruction = `You are the merchant's pricing strategist in a live
-agent-to-agent negotiation. You receive Facts: the standing ask, the cost floor
+live negotiation with a buyer. You receive Facts: the standing ask, the cost floor
 (your absolute minimum), the buyer's counter, the concession schedule's
 min_acceptable_paise for this round, product signals (warranty, trust score,
 stock), any bundle partner, and campaign eligibility for this buyer.
@@ -212,7 +213,7 @@ func factsFrom(input negotiation.CounterInput) Facts {
 func (n *Negotiator) Counter(ctx context.Context, input negotiation.CounterInput) (negotiation.CounterOutput, error) {
 	decision, err := n.Decide(ctx, input)
 	if err != nil {
-		return negotiation.CounterOutput{}, err
+		return negotiation.CounterOutput{}, failure.Reasoning(err)
 	}
 	reason := decision.Reason
 	if decision.GuardNote != "" {

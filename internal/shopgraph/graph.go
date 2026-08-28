@@ -116,6 +116,10 @@ type Offer struct {
 	Reason      string             `json:"reason"`
 	Route       string             `json:"-"`
 	Transcript  []negotiation.Turn `json:"transcript,omitempty"`
+	// ShopTurns are the opening turns from browsing. They are ours, not the
+	// merchant's session, so they must be carried separately or a settlement
+	// that returns the session transcript would erase them.
+	ShopTurns []negotiation.Turn `json:"-"`
 }
 
 // Outcome is the settled negotiation state flowing into finalize.

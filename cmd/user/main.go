@@ -17,8 +17,11 @@ import (
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/catalog"
+	"agentmart/internal/failure"
 	"agentmart/internal/gate"
+	"agentmart/internal/health"
 	"agentmart/internal/linking"
+	"agentmart/internal/llmchat"
 	"agentmart/internal/marketauth"
 	"agentmart/internal/marketclient"
 	"agentmart/internal/negotiation"
@@ -30,6 +33,15 @@ import (
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
 	"agentmart/internal/wallet"
+)
+
+// Each channel gets the patience its work needs. The conversation channel waits
+// on the merchant's reasoning, the tool channel only on a database read.
+const (
+	recordsTimeout      = 15 * time.Second
+	catalogToolTimeout  = 45 * time.Second
+	conversationTimeout = 300 * time.Second
+	paymentTimeout      = 30 * time.Second
 )
 
 type linkRedeemer interface {
@@ -77,6 +89,7 @@ type productFactsReader interface {
 
 type commandServices struct {
 	negotiations negotiator
+	health       func(context.Context) string
 	reasoning    decisionMaker
 	audit        reasoningAuditor
 	accounts     accountFactsReader
@@ -93,7 +106,7 @@ func main() {
 		logger.Error("user configuration failed", "error", err)
 		return
 	}
-	db, err := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_SECRET_KEY"), &http.Client{Timeout: 10 * time.Second})
+	db, err := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_SECRET_KEY"), &http.Client{Timeout: recordsTimeout})
 	if err != nil {
 		logger.Error("user database configuration failed", "error", err)
 		return
@@ -106,7 +119,7 @@ func main() {
 	var closeCatalog func() error
 	marketEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_MCP_ENDPOINT"))
 	if marketEndpoint != "" {
-		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: catalogToolTimeout})
 		if clientErr != nil {
 			logger.Error("market access configuration failed", "error", clientErr)
 			return
@@ -134,7 +147,7 @@ func main() {
 		logger.Error("user gate configuration failed", "error", err)
 		return
 	}
-	artifactClient, err := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: 10 * time.Second})
+	artifactClient, err := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: paymentTimeout})
 	if err != nil {
 		logger.Error("user payment configuration failed", "error", err)
 		return
@@ -149,7 +162,7 @@ func main() {
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
-		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: conversationTimeout})
 		if clientErr != nil {
 			logger.Error("market access configuration failed", "error", clientErr)
 			return
@@ -170,19 +183,29 @@ func main() {
 	if negotiationService != nil {
 		loopTools := shopgraph.Tools{
 			Browse: func(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error) {
-				return negotiationService.Browse(ctx, brief, budgetPaise, accountID)
+				shortlist, browseErr := negotiationService.Browse(ctx, brief, budgetPaise, accountID)
+				return shortlist, failure.Conversation(browseErr)
 			},
 			Get: func(ctx context.Context, id string) (catalog.Product, error) {
-				return catalogReader.Get(ctx, id)
+				product, getErr := catalogReader.Get(ctx, id)
+				return product, failure.Catalog(getErr)
 			},
 			Offers: func(ctx context.Context, id string, qty int, accountID string) (negotiationclient.Proposal, error) {
-				return negotiationService.ProposeAs(ctx, id, qty, accountID)
+				proposal, offerErr := negotiationService.ProposeAs(ctx, id, qty, accountID)
+				return proposal, failure.Conversation(offerErr)
 			},
 			Counter: func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error) {
-				return negotiationService.Counter(ctx, sessionID, paise)
+				resolution, counterErr := negotiationService.Counter(ctx, sessionID, paise)
+				return resolution, failure.Conversation(counterErr)
 			},
-			Accept:  negotiationService.Accept,
-			Decline: negotiationService.Decline,
+			Accept: func(ctx context.Context, sessionID string) (negotiationclient.Resolution, error) {
+				resolution, acceptErr := negotiationService.Accept(ctx, sessionID)
+				return resolution, failure.Conversation(acceptErr)
+			},
+			Decline: func(ctx context.Context, sessionID string, reason string) (negotiationclient.Resolution, error) {
+				resolution, declineErr := negotiationService.Decline(ctx, sessionID, reason)
+				return resolution, failure.Conversation(declineErr)
+			},
 		}
 		// Reach the merchant as a native remote agent when its card is
 		// published: the negotiating agent then delegates to a real agent instead
@@ -236,6 +259,26 @@ func main() {
 		}()
 		logger.Info("buyer agent published", "addr", addr, "card", cardURL+".well-known/agent-card.json")
 	}
+	// One command that says which layer is down, so a failed run never needs a
+	// log dive to explain itself.
+	layerReport := func(probeCtx context.Context) string {
+		return health.Format(health.Run(probeCtx, []health.Probe{
+			{Name: "records database", Layer: failure.LayerRecords, Check: func(ctx context.Context) error {
+				_, probeErr := store.AccountForTelegram(ctx, 0)
+				if probeErr != nil && strings.Contains(strings.ToLower(probeErr.Error()), "not found") {
+					return nil
+				}
+				return probeErr
+			}},
+			{Name: "catalog tool channel", Layer: failure.LayerCatalog, Check: func(ctx context.Context) error {
+				_, probeErr := catalogReader.Search(ctx, catalog.SearchRequest{})
+				return probeErr
+			}},
+			{Name: "merchant conversation channel", Layer: failure.LayerConversation, Check: conversationProbe(negotiationEndpoint)},
+			{Name: "reasoning layer", Layer: failure.LayerReasoning, Check: reasoningProbe()},
+		}))
+	}
+
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
@@ -266,7 +309,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService, health: layerReport}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, "We could not process that request. It was recorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -417,15 +460,21 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
-	result, runErr := services.loop.Run(ctx, message.Text, shopgraph.Wallet{
+	result, runErr := services.loop.RunWithProgress(ctx, message.Text, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 		AccountID:       account.ID,
+	}, func(line string) {
+		// The person watches the conversation happen. A stalled run then shows
+		// which step it stalled on.
+		if noteErr := client.SendMessage(ctx, message.Chat.ID, line); noteErr != nil {
+			log.Printf("send progress note failed: %v", noteErr)
+		}
 	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent
 		// scripted purchase.
-		return client.SendMessage(ctx, message.Chat.ID, "Agent could not complete the request: "+runErr.Error())
+		return client.SendMessage(ctx, message.Chat.ID, failure.Explain(runErr))
 	}
 	// Explainability: persist the graph's decision and node trace before any
 	// money moves, so the dashboard can justify the purchase afterwards.
@@ -553,6 +602,59 @@ func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
 	return nil
 }
 
+// conversationProbe checks the merchant answers on its conversation address and
+// accepts our shared token, without spending a model call.
+func conversationProbe(endpoint string) func(context.Context) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		client, err := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 15 * time.Second})
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode >= http.StatusBadRequest {
+			return fmt.Errorf("merchant answered %s", response.Status)
+		}
+		return nil
+	}
+}
+
+// reasoningProbe asks the model provider for one trivial structured answer. This
+// is the layer that fails most often, so it is worth a real call.
+func reasoningProbe() func(context.Context) error {
+	name := strings.TrimSpace(os.Getenv("ADK_MODEL_NAME"))
+	key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if name == "" || key == "" {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		reasoner := llmchat.New(name, key, os.Getenv("OPENAI_BASE_URL"))
+		_, err := reasoner.CompleteJSON(ctx, llmchat.CompleteRequest{
+			System:       "Answer with the word ready.",
+			User:         `{"check":"are you reachable"}`,
+			FunctionName: "report_ready",
+			Description:  "Report that you can answer.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"status": map[string]any{"type": "string"}},
+				"required":   []string{"status"},
+			},
+		})
+		return err
+	}
+}
+
 func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, negotiationServices ...negotiator) (string, error) {
 	var services commandServices
 	if len(negotiationServices) > 0 {
@@ -568,7 +670,12 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 	negotiations := services.negotiations
 	switch command[0] {
 	case "/start", "/help":
-		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON.", nil
+		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON, /diag.", nil
+	case "/diag":
+		if services.health == nil {
+			return "Layer checks are not configured in this build.", nil
+		}
+		return services.health(ctx), nil
 	case "/link":
 		if len(command) != 2 {
 			return "Use /link TOKEN after generating a token in the dashboard.", nil

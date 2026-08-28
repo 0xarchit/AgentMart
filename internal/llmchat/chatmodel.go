@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"agentmart/internal/failure"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -106,17 +108,17 @@ type response struct {
 func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		if stream {
-			yield(nil, fmt.Errorf("llmchat: streaming unsupported"))
+			yield(nil, failure.Reasoning(fmt.Errorf("streaming unsupported")))
 			return
 		}
 		body, err := m.buildRequest(req)
 		if err != nil {
-			yield(nil, err)
+			yield(nil, failure.Reasoning(err))
 			return
 		}
 		decoded, err := m.post(ctx, body)
 		if err != nil {
-			yield(nil, err)
+			yield(nil, failure.Reasoning(err))
 			return
 		}
 		response := m.adapt(decoded, wantsStructuredOutput(req))
@@ -127,7 +129,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("llmchat: build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -143,26 +145,26 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 		time.Sleep(2 * time.Second)
 		retryReq, rerr := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/chat/completions", bytes.NewReader(body))
 		if rerr != nil {
-			return nil, fmt.Errorf("llmchat: rebuild retry request: %w", rerr)
+			return nil, fmt.Errorf("rebuild retry request: %w", rerr)
 		}
 		retryReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 		retryReq.Header.Set("Content-Type", "application/json")
 		resp, postErr = m.http.Do(retryReq)
 		if postErr != nil {
-			return nil, fmt.Errorf("llmchat: call failed twice (%s then %v)", status, postErr)
+			return nil, fmt.Errorf("call failed twice (%s then %v)", status, postErr)
 		}
 	}
 	defer resp.Body.Close()
 
 	var decoded response
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("llmchat: decode response (%s): %w", resp.Status, err)
+		return nil, fmt.Errorf("decode response (%s): %w", resp.Status, err)
 	}
 	if decoded.Error != nil {
-		return nil, fmt.Errorf("llmchat: provider error (%s): %s", resp.Status, decoded.Error.Message)
+		return nil, fmt.Errorf("provider error (%s): %s", resp.Status, decoded.Error.Message)
 	}
 	if len(decoded.Choices) == 0 {
-		return nil, fmt.Errorf("llmchat: no choices returned (%s)", resp.Status)
+		return nil, fmt.Errorf("no choices returned (%s)", resp.Status)
 	}
 	return &decoded, nil
 }
@@ -278,7 +280,7 @@ func (m *Model) buildRequest(req *model.LLMRequest) ([]byte, error) {
 				}
 				encoded, err := json.Marshal(payload)
 				if err != nil {
-					return nil, fmt.Errorf("llmchat: encode function response: %w", err)
+					return nil, fmt.Errorf("encode function response: %w", err)
 				}
 				results = append(results, message{
 					Role: "tool", ToolCallID: tracker.responseID(part.FunctionResponse),

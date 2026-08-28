@@ -46,14 +46,14 @@ func (m *Model) CompleteJSON(ctx context.Context, req CompleteRequest) (map[stri
 
 	body, err := json.Marshal(out)
 	if err != nil {
-		return nil, fmt.Errorf("llmchat: encode completion: %w", err)
+		return nil, fmt.Errorf("encode completion: %w", err)
 	}
 	decoded, err := m.post(ctx, body)
 	if err != nil {
 		return nil, err
 	}
 	if len(decoded.Choices) == 0 {
-		return nil, fmt.Errorf("llmchat: no choices")
+		return nil, fmt.Errorf("no choices")
 	}
 	for _, call := range decoded.Choices[0].Message.ToolCalls {
 		if call.Function.Name != fnName || strings.TrimSpace(call.Function.Arguments) == "" {
@@ -61,7 +61,7 @@ func (m *Model) CompleteJSON(ctx context.Context, req CompleteRequest) (map[stri
 		}
 		args := map[string]any{}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return nil, fmt.Errorf("llmchat: decode %s args: %w", fnName, err)
+			return nil, fmt.Errorf("decode %s args: %w", fnName, err)
 		}
 		return args, nil
 	}
@@ -78,5 +78,5 @@ func (m *Model) CompleteJSON(ctx context.Context, req CompleteRequest) (map[stri
 			return args, nil
 		}
 	}
-	return nil, fmt.Errorf("llmchat: %s was not called and no JSON content returned", fnName)
+	return nil, fmt.Errorf("%s was not called and no JSON content returned", fnName)
 }

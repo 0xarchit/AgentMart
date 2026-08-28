@@ -46,7 +46,7 @@ type Config struct {
 	Model   string
 	// MerchantAgent, when set, is the merchant's own agent reached as a remote agent.
 	// The negotiating agent gets it as a delegate tool, so the deal is struck
-	// agent-to-agent through the framework instead of bespoke RPC glue.
+	// as one agent talking to another instead of bespoke request glue.
 	MerchantAgent agent.Agent
 }
 
@@ -60,6 +60,7 @@ type Service struct {
 	assessAgent agent.Agent
 	mu          sync.Mutex
 	wallet      Wallet
+	progress    func(string)
 	wfAgent     agent.Agent
 }
 
@@ -84,10 +85,24 @@ func (s *Service) walletSnapshot() Wallet {
 	return s.wallet
 }
 
-func (s *Service) setWallet(w Wallet) {
+// ponytail: one run at a time per service, which is what the message loop does.
+// Give each run its own service if concurrent shoppers ever share one.
+func (s *Service) setRun(w Wallet, progress func(string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.wallet = w
+	s.progress = progress
+}
+
+// note reports which stage the run reached, so a slow or stuck step is visible
+// while it happens rather than only in the final error.
+func (s *Service) note(line string) {
+	s.mu.Lock()
+	report := s.progress
+	s.mu.Unlock()
+	if report != nil {
+		report(line)
+	}
 }
 
 func (s *Service) decisionModel() model.LLM { return s.model }
@@ -233,6 +248,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if brief == "" {
 				return negotiationclient.Shortlist{}, fmt.Errorf("nothing to ask the shop for")
 			}
+			s.note(fmt.Sprintf("Asking the shop for %s, up to INR %.2f", brief, float64(budget)/100))
 			shortlist, err := s.tools.Browse(ctx, brief, budget, wallet.AccountID)
 			if err != nil {
 				return negotiationclient.Shortlist{}, err
@@ -246,6 +262,11 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	// Choosing runs inline so the opening turns keep travelling with the choice.
 	chooseNode := workflow.NewFunctionNode[negotiationclient.Shortlist, Pick]("choose_option",
 		func(ctx agent.Context, shortlist negotiationclient.Shortlist) (Pick, error) {
+			names := make([]string, 0, len(shortlist.Options))
+			for _, option := range shortlist.Options {
+				names = append(names, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
+			}
+			s.note("The shop showed: " + strings.Join(names, "; "))
 			selection, err := s.choose(ctx, shortlist)
 			if err != nil {
 				return Pick{}, err
@@ -256,12 +277,14 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if selection.Quantity <= 0 {
 				selection.Quantity = 1
 			}
+			s.note(fmt.Sprintf("Chose %s: %s", selection.ProductID, selection.Rationale))
 			return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
 		}, workflow.NodeConfig{Timeout: assessTimeout})
 
 	offerNode := workflow.NewFunctionNode[Pick, OfferView]("fetch_offer",
 		func(ctx agent.Context, pick Pick) (OfferView, error) {
 			wallet := s.walletSnapshot()
+			s.note("Asking the shop to price it")
 			proposal, err := s.tools.Offers(ctx, pick.ProductID, pick.Quantity, wallet.AccountID)
 			if err != nil {
 				return OfferView{}, err
@@ -270,9 +293,9 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				SessionID: proposal.SessionID, ProductID: proposal.ProductID,
 				ProductName: proposal.Name, Quantity: proposal.Quantity,
 				BasePaise: proposal.BaseAmountPaise, FinalPaise: proposal.FinalAmountPaise,
-				Reason: proposal.Reason,
-				// The transcript starts where the talking started.
-				Transcript: append(append([]negotiation.Turn{}, pick.ShopTranscript...), proposal.Transcript...),
+				Reason:     proposal.Reason,
+				Transcript: proposal.Transcript,
+				ShopTurns:  pick.ShopTranscript,
 			}
 			premium := offer.FinalPaise - offer.BasePaise
 			view := OfferView{
@@ -292,26 +315,33 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	// One node judges and routes. The offer and the judgement stay in the same
 	// scope, so nothing has to look up what an earlier node left behind. The
 	// judgement itself is the agent's: the only override here is a money guard.
-	decideNode := workflow.NewEmittingFunctionNode[OfferView, Offer]("decide_offer",
-		func(ctx agent.Context, view OfferView, emit func(*session.Event) error) (Offer, error) {
+	//
+	// The output type is any because only a genuinely nil return suppresses the
+	// node's own terminal event, and the routed event we emit already carries the
+	// offer. Returning a zero Offer would count as a second output value.
+	decideNode := workflow.NewEmittingFunctionNode[OfferView, any]("decide_offer",
+		func(ctx agent.Context, view OfferView, emit func(*session.Event) error) (any, error) {
 			if view.SessionID == "" {
-				return Offer{}, fmt.Errorf("merchant returned no negotiation session for %q", view.ProductID)
+				return nil, fmt.Errorf("merchant returned no negotiation session for %q", view.ProductID)
 			}
+			s.note(fmt.Sprintf("The shop quoted %s at INR %.2f: %s",
+				view.ProductName, float64(view.FinalPaise)/100, view.Offer.Reason))
 			assessment, err := s.assess(ctx, view)
 			if err != nil {
-				return Offer{}, err
+				return nil, err
 			}
 			offer := view.Offer
 			route, note := routeFor(assessment, offer, s.walletSnapshot())
+			s.note("Decision: " + route + ". " + joinReason(assessment.Reason, note))
 			offer.Route = route
 			offer.Reason = joinReason(assessment.Reason, note, offer.Reason)
 			ev := session.NewEvent(ctx, ctx.InvocationID())
 			ev.Routes = []string{route}
 			ev.Output = offer
 			if err := emit(ev); err != nil {
-				return Offer{}, err
+				return nil, err
 			}
-			return Offer{}, nil // the routed edge carries ev.Output forward
+			return nil, nil // the routed edge carries ev.Output forward
 		}, workflow.NodeConfig{Timeout: nodeTimeout + assessTimeout})
 
 	acceptNode := workflow.NewFunctionNode[Offer, Outcome]("accept_offer",
@@ -332,7 +362,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	askHumanNode := workflow.NewFunctionNode[Offer, Outcome]("ask_human",
 		func(ctx agent.Context, offer Offer) (Outcome, error) {
 			out := outcomeFrom(offer, negotiationclient.Resolution{
-				SessionID: offer.SessionID, FinalAmountPaise: offer.FinalPaise, Transcript: offer.Transcript,
+				SessionID: offer.SessionID, FinalAmountPaise: offer.FinalPaise,
 			})
 			out.Action = string(ActionAskHuman)
 			out.Status = "needs_human"
@@ -394,11 +424,12 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			}
 			baseMain := product.PricePaise * int64(qty)
 			premium := outcome.FinalPaise - baseMain
-			needsApproval := baseMain > 0 && premium > 0 && premium*100 > baseMain*AutoBuyPremiumMaxPct
 			action := Action(outcome.Action)
 			if action == "" {
 				action = ActionBuy
 			}
+			bandCrossed := baseMain > 0 && premium > 0 && premium*100 > baseMain*AutoBuyPremiumMaxPct
+			needsApproval := action == ActionAskHuman || bandCrossed
 			return Result{
 				Action: action, ProductID: product.ID, ProductName: product.Name,
 				Quantity: qty, FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
@@ -422,10 +453,16 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 // Run executes the graph for one natural-language request and returns the
 // verified result. Errors surface the real cause, strict mode.
 func (s *Service) Run(parent context.Context, request string, wallet Wallet) (Result, error) {
+	return s.RunWithProgress(parent, request, wallet, nil)
+}
+
+// RunWithProgress runs the graph and reports each stage as it starts. The
+// progress function may be nil.
+func (s *Service) RunWithProgress(parent context.Context, request string, wallet Wallet, progress func(string)) (Result, error) {
 	if s.wfAgent == nil {
 		return Result{}, fmt.Errorf("shop graph is not built")
 	}
-	s.setWallet(wallet)
+	s.setRun(wallet, progress)
 
 	runner, err := runnerFor("shop", s.wfAgent)
 	if err != nil {
@@ -447,6 +484,7 @@ func (s *Service) Run(parent context.Context, request string, wallet Wallet) (Re
 	defer cancel()
 
 	var lastOutput any
+	var lastResult *Result
 	events := 0
 	for event, runErr := range runner.Run(runCtx, "user", fmt.Sprintf("run-%d", time.Now().UnixNano()),
 		textContent(string(payload)), defaultRunConfig()) {
@@ -459,27 +497,43 @@ func (s *Service) Run(parent context.Context, request string, wallet Wallet) (Re
 		}
 		if event != nil && event.Output != nil {
 			lastOutput = event.Output
+			// The last node verifies the product against the catalog and decides
+			// whether a person must be asked. Prefer its answer: rebuilding one
+			// here would drop both.
+			if finalized, ok := event.Output.(Result); ok {
+				lastResult = &finalized
+			}
 		}
+	}
+	if lastResult != nil {
+		return normalized(*lastResult), nil
 	}
 	outcome, ok := lastOutput.(Outcome)
 	if !ok {
-		return Result{}, fmt.Errorf("graph finished without an Outcome (last output %T)", lastOutput)
+		return Result{}, fmt.Errorf("graph finished without a result (last output %T)", lastOutput)
 	}
-
-	result := Result{
+	return normalized(Result{
 		Action: Action(outcome.Action), ProductID: outcome.ProductID,
 		ProductName: outcome.ProductName, Quantity: outcome.Quantity,
 		FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
 		Steps: outcome.Steps, SessionID: outcome.SessionID,
 		Transcript: outcome.Transcript, Accepted: outcome.Accepted,
-	}
+		NeedsApproval: Action(outcome.Action) == ActionAskHuman,
+	}), nil
+}
+
+// normalized fills the defaults a caller can rely on.
+func normalized(result Result) Result {
 	if result.Quantity <= 0 {
 		result.Quantity = 1
 	}
 	if result.Action == "" {
 		result.Action = ActionBuy
 	}
-	return result, nil
+	if result.Action == ActionAskHuman {
+		result.NeedsApproval = true
+	}
+	return result
 }
 
 // outcomeFromAny extracts an Outcome from a JoinNode aggregate (keyed by
@@ -508,6 +562,10 @@ func outcomeFromAny(raw any) (Outcome, bool) {
 
 // outcomeFrom projects a merchant resolution onto the stage contract.
 func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
+	settled := resolution.Transcript
+	if len(settled) == 0 {
+		settled = offer.Transcript
+	}
 	out := Outcome{
 		Status:      resolution.Status,
 		ProductID:   offer.ProductID,
@@ -515,7 +573,7 @@ func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
 		Quantity:    offer.Quantity,
 		SessionID:   resolution.SessionID,
 		FinalPaise:  resolution.FinalAmountPaise,
-		Transcript:  resolution.Transcript,
+		Transcript:  append(append([]negotiation.Turn{}, offer.ShopTurns...), settled...),
 	}
 	if out.FinalPaise == 0 {
 		out.FinalPaise = offer.FinalPaise
@@ -528,7 +586,7 @@ func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
 
 // Per-run caps.
 const (
-	graphRunDeadline = 240 * time.Second
+	graphRunDeadline = 600 * time.Second
 	maxGraphEvents   = 200
 )
 
