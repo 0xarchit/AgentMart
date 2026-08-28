@@ -157,3 +157,44 @@ func TestBrowseNeedsABrief(t *testing.T) {
 		t.Fatal("expected a refusal without a brief")
 	}
 }
+
+func TestBrowseAsksStockWithoutTreatingTheBriefAsASearchTerm(t *testing.T) {
+	// A person says "buy me one trimmer". No product is named that, so passing the
+	// sentence to the catalog as a search term finds nothing and the shop appears
+	// empty. The owner must be shown their stock and left to read the brief.
+	var asked catalog.SearchRequest
+	server, err := NewCatalogServerWithStore(func(_ context.Context, id string) (catalog.Product, error) {
+		return catalog.Product{}, fmt.Errorf("not needed: %s", id)
+	}, NewMemorySessionStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = server.WithShopfront(&fakeShopfront{answer: BrowseOutput{
+		Greeting: "come in",
+		Options:  []BrowseOption{{ProductID: "titan", Pitch: "our best build"}},
+		Closing:  "say the word",
+	}},
+		func(_ context.Context, request catalog.SearchRequest) ([]catalog.Product, error) {
+			asked = request
+			if strings.TrimSpace(request.Query) != "" {
+				return nil, nil
+			}
+			return trimmerStock(), nil
+		})
+
+	out, err := server.browse(context.Background(), negotiationRequest{
+		Type: "browse", Brief: "buy me one trimmer", BudgetPaise: 250000,
+	})
+	if err != nil {
+		t.Fatalf("a plain sentence must still reach the shop: %v", err)
+	}
+	if asked.Query != "" {
+		t.Fatalf("the catalog was queried for %q instead of being listed", asked.Query)
+	}
+	if asked.MaxPricePaise != 250000 {
+		t.Fatalf("stock must stay inside the budget, got %d", asked.MaxPricePaise)
+	}
+	if options, ok := out["options"].([]BrowseOption); !ok || len(options) == 0 {
+		t.Fatalf("expected a pitched shortlist, got %v", out["options"])
+	}
+}

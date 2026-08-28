@@ -56,15 +56,18 @@ func (s *Server) browse(ctx context.Context, request negotiationRequest) (map[st
 		return nil, fmt.Errorf("this merchant cannot show a shortlist")
 	}
 
+	// A shop owner knows their own stock. Searching the catalog for the person's
+	// sentence only matches products whose name or category happens to contain it,
+	// so "buy me one trimmer" finds nothing while "trimmer" finds everything. The
+	// owner is shown all affordable stock and picks what suits the brief.
 	candidates, err := s.search(ctx, catalog.SearchRequest{
-		Query:         brief,
 		MaxPricePaise: request.BudgetPaise,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("look through stock: %w", err)
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("nothing in stock matches %q within the budget", brief)
+		return nil, fmt.Errorf("nothing in stock is within the budget")
 	}
 
 	shortlist, err := s.shopfront.Shortlist(ctx, BrowseInput{
