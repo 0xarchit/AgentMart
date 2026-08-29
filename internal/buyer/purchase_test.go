@@ -199,3 +199,58 @@ func TestApprovalResumesWithFreshPurchaseService(t *testing.T) {
 		t.Fatalf("result = %+v, fulfillment = %+v", result, walletService.request)
 	}
 }
+
+// recordingSettlement stands in for whatever moves the money once the gate has
+// approved an amount.
+type recordingSettlement struct {
+	calls   int
+	request SettleRequest
+}
+
+func (r *recordingSettlement) Settle(_ context.Context, request SettleRequest) (SettleResult, error) {
+	r.calls++
+	r.request = request
+	return SettleResult{OrderID: "order-9", GatewayOrderID: "gateway-9", Method: "settled_against_a_mandate"}, nil
+}
+
+func TestPurchaseSettlesThroughWhateverIsBehindTheGate(t *testing.T) {
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	settlement := &recordingSettlement{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService)
+	service.UseSettlement(settlement)
+
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Fulfilled || result.OrderID != "order-9" || result.RazorpayOrderID != "gateway-9" {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Reason != "settled_against_a_mandate" {
+		t.Fatalf("reason = %q, the purchase should report what settled it", result.Reason)
+	}
+	if settlement.calls != 1 {
+		t.Fatalf("settlement calls = %d", settlement.calls)
+	}
+	if artifacts.calls != 0 || walletService.calls != 0 {
+		t.Fatalf("the allowance path ran anyway: artifacts=%d wallet=%d", artifacts.calls, walletService.calls)
+	}
+	if settlement.request.FinalAmountPaise != 140 || settlement.request.BaseAmountPaise != 100 {
+		t.Fatalf("settlement saw %+v, not the amounts the gate validated", settlement.request)
+	}
+}
+
+func TestNothingSettlesWhenTheGateRefuses(t *testing.T) {
+	settlement := &recordingSettlement{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{}, &fakeArtifacts{}, &fakeWallet{})
+	service.UseSettlement(settlement)
+
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Fulfilled || settlement.calls != 0 {
+		t.Fatalf("result = %+v, settlement calls = %d", result, settlement.calls)
+	}
+}

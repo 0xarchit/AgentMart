@@ -65,21 +65,30 @@ type PurchaseService struct {
 	catalog   catalogReader
 	accounts  accountReader
 	gate      gateEvaluator
-	artifacts artifactCreator
-	wallet    walletFulfiller
+	settle    Settlement
 	approvals approvalCreator
 	resolver  approvalResolver
 	now       func() time.Time
 }
 
-// NewPurchaseService constructs the straight-through buyer workflow.
+// NewPurchaseService constructs the straight-through buyer workflow, settling
+// through the prepaid allowance.
 func NewPurchaseService(catalog catalogReader, accounts accountReader, gateService gateEvaluator, artifacts artifactCreator, walletService walletFulfiller, approvalStores ...approvalCreator) *PurchaseService {
 	var approvals approvalCreator
 	if len(approvalStores) > 0 {
 		approvals = approvalStores[0]
 	}
 	resolver, _ := approvals.(approvalResolver)
-	return &PurchaseService{catalog: catalog, accounts: accounts, gate: gateService, artifacts: artifacts, wallet: walletService, approvals: approvals, resolver: resolver, now: time.Now}
+	return &PurchaseService{catalog: catalog, accounts: accounts, gate: gateService, settle: NewWalletSettlement(artifacts, walletService), approvals: approvals, resolver: resolver, now: time.Now}
+}
+
+// UseSettlement replaces what moves the money once the gate has approved an
+// amount. The rest of the sequence, including every bound the gate applies, is
+// unchanged by the swap.
+func (s *PurchaseService) UseSettlement(settlement Settlement) {
+	if settlement != nil {
+		s.settle = settlement
+	}
 }
 
 // Purchase evaluates and fulfills one wallet-backed order.
@@ -129,19 +138,11 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		}
 		return PurchaseResult{Reason: decision.Reason, AmountPaise: finalAmount}, nil
 	}
-	receipt := "wallet_" + request.IdempotencyKey
-	if len(receipt) > 40 {
-		receipt = receipt[:40]
-	}
-	artifact, err := s.artifacts.CreateWalletArtifact(ctx, finalAmount, receipt, map[string]string{"account_id": account.ID, "product_id": product.ID, "fulfillment": "wallet"})
+	settled, err := s.settle.Settle(ctx, SettleRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, IdempotencyKey: request.IdempotencyKey})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
-	orderID, err := s.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
-	if err != nil {
-		return PurchaseResult{}, err
-	}
-	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: finalAmount, RazorpayOrderID: artifact.ID, OrderID: orderID}, nil
+	return PurchaseResult{Fulfilled: true, Reason: settled.Method, AmountPaise: finalAmount, RazorpayOrderID: settled.GatewayOrderID, OrderID: settled.OrderID}, nil
 }
 
 // RequestApproval records a pending approval without evaluating the Gate for an
