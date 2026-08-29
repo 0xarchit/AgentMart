@@ -27,7 +27,7 @@ type artifactCreator interface {
 	CreateWalletArtifact(context.Context, int64, string, map[string]string) (razorpay.Order, error)
 }
 type walletFulfiller interface {
-	Fulfill(context.Context, wallet.FulfillRequest) error
+	Fulfill(context.Context, wallet.FulfillRequest) (string, error)
 }
 type approvalCreator interface {
 	Create(context.Context, ApprovalRequest) (ApprovalResult, error)
@@ -55,6 +55,9 @@ type PurchaseResult struct {
 	Reason           string
 	AmountPaise      int64
 	RazorpayOrderID  string
+	// OrderID is the order row this purchase created, which is what a
+	// cancellation is keyed on.
+	OrderID string
 }
 
 // PurchaseService executes the trusted purchase sequence.
@@ -134,11 +137,11 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 	if err != nil {
 		return PurchaseResult{}, err
 	}
-	err = s.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
+	orderID, err := s.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
-	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: finalAmount, RazorpayOrderID: artifact.ID}, nil
+	return PurchaseResult{Fulfilled: true, Reason: "fulfilled_via_wallet", AmountPaise: finalAmount, RazorpayOrderID: artifact.ID, OrderID: orderID}, nil
 }
 
 // RequestApproval records a pending approval without evaluating the Gate for an

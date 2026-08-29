@@ -64,10 +64,10 @@ func (f *fakeApprovals) Resolve(_ context.Context, _ int64, _ string, decision s
 	return ApprovalResolution{Resolved: true, Approved: decision == "approve", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 140, IdempotencyKey: "key"}, nil
 }
 
-func (f *fakeWallet) Fulfill(_ context.Context, request wallet.FulfillRequest) error {
+func (f *fakeWallet) Fulfill(_ context.Context, request wallet.FulfillRequest) (string, error) {
 	f.calls++
 	f.request = request
-	return nil
+	return "order-1", nil
 }
 
 func TestPurchaseFulfillsAfterApproval(t *testing.T) {

@@ -27,19 +27,20 @@ func (s *Service) TopUp(ctx context.Context, request TopUpRequest) error {
 	return s.db.RPC(ctx, "credit_wallet_topup", request, nil)
 }
 
-// Fulfill debits the wallet and records a fulfilled-via-wallet order atomically.
-func (s *Service) Fulfill(ctx context.Context, request FulfillRequest) error {
+// Fulfill debits the wallet and records a fulfilled-via-wallet order
+// atomically, returning the order id the refund path is keyed on.
+func (s *Service) Fulfill(ctx context.Context, request FulfillRequest) (string, error) {
 	if err := request.validate(); err != nil {
-		return err
+		return "", err
 	}
 	var result FulfillResult
 	if err := s.db.RPC(ctx, "fulfill_wallet_order", request, &result); err != nil {
-		return err
+		return "", err
 	}
 	if !result.Approved {
-		return fmt.Errorf("wallet fulfillment rejected: %s", result.Reason)
+		return "", fmt.Errorf("wallet fulfillment rejected: %s", result.Reason)
 	}
-	return nil
+	return result.OrderID, nil
 }
 
 type FulfillResult struct {

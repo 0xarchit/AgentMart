@@ -137,9 +137,9 @@ func TestLinkCommand(t *testing.T) {
 }
 
 func TestBuyCommand(t *testing.T) {
-	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 45000, RazorpayOrderID: "order"}}
+	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 45000, OrderID: "order"}}
 	got, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/buy", "product", "1"})
-	if got != "Purchase fulfilled via wallet for INR 450.00. Audit order: order" {
+	if got != "Purchase fulfilled via wallet for INR 450.00. Order: order" {
 		t.Fatalf("response = %q", got)
 	}
 }
@@ -166,7 +166,7 @@ func TestHandleMessageApprovalResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := &telegram.Message{MessageID: 7, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "/approve approval-token"}
-	err = handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 1250, RazorpayOrderID: "order"}}, fakeRefunder{}, commandServices{}, message)
+	err = handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 1250, OrderID: "order"}}, fakeRefunder{}, commandServices{}, message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +177,19 @@ func TestReplyMarkupForApprovalAndOrder(t *testing.T) {
 	if approval == nil || approval.InlineKeyboard[0][0].CallbackData != "/approve token" || approval.InlineKeyboard[0][1].CallbackData != "/reject token" {
 		t.Fatalf("approval markup = %#v", approval)
 	}
-	order := replyMarkupForResponse("Purchase fulfilled via wallet for INR 12.50. Audit order: order-1")
+	order := replyMarkupForResponse("Purchase fulfilled via wallet for INR 12.50. Order: order-1")
 	if order == nil || order.InlineKeyboard[0][0].CallbackData != "/refund order-1 Cancelled by user" {
 		t.Fatalf("order markup = %#v", order)
+	}
+}
+
+func TestCancelMarkupCarriesTheOrderID(t *testing.T) {
+	if markup := cancelMarkup("  "); markup != nil {
+		t.Fatalf("blank order id should offer no button, got %#v", markup)
+	}
+	markup := cancelMarkup("11111111-2222-3333-4444-555555555555")
+	if markup == nil || markup.InlineKeyboard[0][0].CallbackData != "/refund 11111111-2222-3333-4444-555555555555 Cancelled by user" {
+		t.Fatalf("cancel markup = %#v", markup)
 	}
 }
 
@@ -203,22 +213,22 @@ func TestNegotiationCommands(t *testing.T) {
 	if proposal != "Merchant counter offer: INR 1.40 for 1 unit(s). Reason: three-year warranty. Session: session. Use /accept session or /decline session." {
 		t.Fatalf("proposal = %q", proposal)
 	}
-	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
+	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, OrderID: "order"}}
 	accepted, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/accept", "session"}, negotiator)
-	if accepted != "Negotiated purchase fulfilled via wallet for INR 1.40. Audit order: order" {
+	if accepted != "Negotiated purchase fulfilled via wallet for INR 1.40. Order: order" {
 		t.Fatalf("accepted = %q", accepted)
 	}
 }
 
 func TestShopCommandUsesReasoningBeforePurchase(t *testing.T) {
-	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, RazorpayOrderID: "order"}}
+	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, OrderID: "order"}}
 	auditor := &fakeReasoningAuditor{}
 	services := commandServices{negotiations: fakeNegotiator{}, reasoning: fakeDecisionMaker{decision: buyerreasoning.Decision{Action: buyerreasoning.ActionBuy, Rationale: "within budget"}}, audit: auditor, accounts: fakeAccountFacts{}, catalog: fakeProductFacts{}}
 	got, err := responseForCommandWithServices(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/shop", "product", "1", "200"}, services)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Decision: within budget. Audit order: order" {
+	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Decision: within budget. Order: order" {
 		t.Fatalf("response = %q", got)
 	}
 	if auditor.input.BaseAmountPaise != 100 || auditor.input.FinalAmountPaise != 140 || auditor.input.PricePaise != 100 || auditor.input.TotalPaise != 140 || auditor.input.WalletPaise != 500 || auditor.input.SpendLimitPaise != 200 || auditor.input.TrustScore != 92 || auditor.decision.Rationale != "within budget" {

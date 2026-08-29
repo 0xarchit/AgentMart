@@ -546,8 +546,8 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
 		return client.SendMessage(ctx, message.Chat.ID, summary.String())
 	}
-	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(purchase.AmountPaise)/100, purchase.RazorpayOrderID))
-	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), replyMarkupForResponse(summary.String()))
+	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
+	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
 }
 
 func short(id string) string {
@@ -588,15 +588,24 @@ func approvalMarkup(token string) *telegram.InlineKeyboardMarkup {
 	}}}
 }
 
+// cancelMarkup puts cancellation one tap away. It takes the order id the
+// refund path is keyed on, never a payment reference and never text scraped
+// back out of a message.
+func cancelMarkup(orderID string) *telegram.InlineKeyboardMarkup {
+	if strings.TrimSpace(orderID) == "" {
+		return nil
+	}
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "Cancel Order", CallbackData: "/refund " + orderID + " Cancelled by user"},
+	}}}
+}
+
 func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
 	if prefix := "Human approval required"; strings.HasPrefix(response, prefix) {
 		return approvalMarkup(strings.TrimSpace(response[strings.LastIndex(response, ":")+1:]))
 	}
-	if marker := "Audit order: "; strings.Contains(response, marker) {
-		orderID := strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0])
-		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-			{Text: "Cancel Order", CallbackData: "/refund " + orderID + " Cancelled by user"},
-		}}}
+	if marker := "Order: "; strings.Contains(response, marker) {
+		return cancelMarkup(strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0]))
 	}
 	return nil
 }
@@ -700,7 +709,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 			}
 			return "Purchase rejected: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/negotiate":
 		if negotiations == nil {
 			return "Merchant negotiation is unavailable.", nil
@@ -747,7 +756,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Negotiated purchase rejected: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/approve", "/reject":
 		if len(command) != 2 {
 			return "Use /approve TOKEN or /reject TOKEN.", nil
@@ -764,7 +773,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Approval result: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/shop":
 		return shopWithReasoning(ctx, purchases, services, telegramID, messageID, command)
 	case "/refund":
@@ -848,7 +857,7 @@ func shopWithReasoning(ctx context.Context, purchases purchaser, services comman
 	if !result.Fulfilled {
 		return "Purchase was not fulfilled.", nil
 	}
-	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Audit order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.RazorpayOrderID), nil
+	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.OrderID), nil
 }
 
 func stringValue(value *string) string {
