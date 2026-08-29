@@ -312,7 +312,7 @@ func main() {
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
 			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService, health: layerReport}, message)
 			if err != nil {
-				_ = client.SendMessage(ctx, message.Chat.ID, "We could not process that request. It was recorded for review.")
+				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
 			}
 			return nil
