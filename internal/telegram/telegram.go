@@ -116,8 +116,11 @@ func (c *Client) SendMessageWithMarkup(ctx context.Context, chatID int64, text s
 	return nil
 }
 
+// AnswerCallbackQuery clears the pending spinner on a tapped button. The API
+// answers this one with a bare true rather than an object, so the result is
+// taken as raw JSON and ignored.
 func (c *Client) AnswerCallbackQuery(ctx context.Context, id string) error {
-	var response apiResponse[struct{}]
+	var response apiResponse[json.RawMessage]
 	if err := c.call(ctx, "answerCallbackQuery", url.Values{}, map[string]any{"callback_query_id": id}, &response); err != nil {
 		return err
 	}

@@ -114,7 +114,10 @@ export default async function DashboardPage() {
               <Link className="text-moss hover:underline" href="/">
                 Storefront
               </Link>
-              <Link className="text-moss hover:underline" href="/dashboard/runs">
+              <Link
+                className="text-moss hover:underline"
+                href="/dashboard/runs"
+              >
                 Deal room
               </Link>
               <Link className="text-moss hover:underline" href="/admin">
