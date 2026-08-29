@@ -9,6 +9,7 @@ import (
 
 	"agentmart/internal/gate"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/runid"
 	"agentmart/internal/supabase"
 )
 
@@ -50,6 +51,16 @@ func (s *Store) AccountForTelegram(ctx context.Context, telegramID int64) (Accou
 	return accounts[0], nil
 }
 
+// insertTrail writes one trail row, tagged with the run it belongs to when the
+// work is running inside one. Correlation is applied here so no caller can
+// forget it.
+func (s *Store) insertTrail(ctx context.Context, row map[string]any) error {
+	if id := runid.From(ctx); id != "" {
+		row["run_id"] = id
+	}
+	return s.db.Insert(ctx, "audit_log", row, nil)
+}
+
 // RecordGateDecision persists every purchase approval and rejection.
 func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) error {
 	action := "gate_rejected"
@@ -58,7 +69,7 @@ func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) 
 	}
 	payload := map[string]any{"product_id": decision.Request.ProductID, "quantity": decision.Request.Quantity, "amount_paise": decision.Request.FinalAmountPaise}
 	row := map[string]any{"account_id": decision.Request.AccountID, "actor": "gate", "action": action, "reason": decision.Reason, "payload": payload}
-	return s.db.Insert(ctx, "audit_log", row, nil)
+	return s.insertTrail(ctx, row)
 }
 
 // RecordReasoningDecision persists the buyer's bounded decision and rationale.
@@ -78,7 +89,7 @@ func (s *Store) RecordReasoningDecision(ctx context.Context, telegramID int64, i
 			"input": input,
 		},
 	}
-	return s.db.Insert(ctx, "audit_log", row, nil)
+	return s.insertTrail(ctx, row)
 }
 
 // AgentRun is one completed buyer-graph run, recorded for explainability: what
@@ -102,13 +113,13 @@ func (s *Store) RecordAgentRun(ctx context.Context, telegramID int64, request st
 	if err != nil {
 		return err
 	}
-	return s.db.Insert(ctx, "audit_log", map[string]any{
+	return s.insertTrail(ctx, map[string]any{
 		"account_id": account.ID,
 		"actor":      "buyer_agent",
 		"action":     "agent_run",
 		"reason":     run.Rationale,
 		"payload":    map[string]any{"request": request, "run": run},
-	}, nil)
+	})
 }
 
 func (s *Store) RecordUpdateDeadLetter(ctx context.Context, telegramID int64, text string, cause error) error {
@@ -116,8 +127,8 @@ func (s *Store) RecordUpdateDeadLetter(ctx context.Context, telegramID int64, te
 	if err != nil {
 		return err
 	}
-	return s.db.Insert(ctx, "audit_log", map[string]any{
+	return s.insertTrail(ctx, map[string]any{
 		"account_id": account.ID, "actor": "user", "action": "update_dead_letter",
 		"reason": cause.Error(), "payload": map[string]any{"text": text},
-	}, nil)
+	})
 }

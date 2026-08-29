@@ -29,6 +29,7 @@ import (
 	"agentmart/internal/razorpay"
 	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/remotemerchant"
+	"agentmart/internal/runid"
 	"agentmart/internal/shopgraph"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
@@ -420,6 +421,9 @@ func (n loggingNegotiator) Counter(ctx context.Context, sessionID string, amount
 }
 
 func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, services commandServices, message *telegram.Message) error {
+	// One message from the person is one run. Everything either side records
+	// while answering it carries the same id, so the trail reads as one story.
+	ctx = runid.With(ctx, runid.New())
 	linker = loggingLinker{inner: linker}
 	purchases = loggingPurchaser{inner: purchases}
 	refunds = loggingRefunder{inner: refunds}
