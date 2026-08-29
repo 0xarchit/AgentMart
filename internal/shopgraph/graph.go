@@ -101,15 +101,18 @@ type Selection struct {
 
 // Offer is the merchant's opening quote for the selected product.
 type Offer struct {
-	SessionID   string             `json:"session_id"`
-	ProductID   string             `json:"product_id"`
-	ProductName string             `json:"product_name"`
-	Quantity    int                `json:"quantity"`
-	BasePaise   int64              `json:"base_amount_paise"`
-	FinalPaise  int64              `json:"final_amount_paise"`
-	Reason      string             `json:"reason"`
-	Route       string             `json:"-"`
-	Transcript  []negotiation.Turn `json:"transcript,omitempty"`
+	SessionID   string `json:"session_id"`
+	ProductID   string `json:"product_id"`
+	ProductName string `json:"product_name"`
+	Quantity    int    `json:"quantity"`
+	BasePaise   int64  `json:"base_amount_paise"`
+	FinalPaise  int64  `json:"final_amount_paise"`
+	// BundledPaise is what the ask charges for goods attached to the main
+	// product. It is list value the buyer receives, not markup on the product.
+	BundledPaise int64              `json:"bundled_paise,omitempty"`
+	Reason       string             `json:"reason"`
+	Route        string             `json:"-"`
+	Transcript   []negotiation.Turn `json:"transcript,omitempty"`
 	// ShopTurns are the opening turns from browsing. They are ours, not the
 	// merchant's session, so they must be carried separately or a settlement
 	// that returns the session transcript would erase them.
@@ -118,15 +121,18 @@ type Offer struct {
 
 // Outcome is the settled negotiation state flowing into finalize.
 type Outcome struct {
-	Action      string             `json:"action"`
-	Status      string             `json:"status"` // accepted | countered | declined | needs_human
-	ProductID   string             `json:"product_id"`
-	ProductName string             `json:"product_name"`
-	Quantity    int                `json:"quantity"`
-	FinalPaise  int64              `json:"final_amount_paise"`
-	Rationale   string             `json:"rationale"`
-	Steps       []string           `json:"steps,omitempty"`
-	SessionID   string             `json:"session_id"`
-	Accepted    bool               `json:"accepted"`
-	Transcript  []negotiation.Turn `json:"transcript,omitempty"`
+	Action      string `json:"action"`
+	Status      string `json:"status"` // accepted | countered | declined | needs_human
+	ProductID   string `json:"product_id"`
+	ProductName string `json:"product_name"`
+	Quantity    int    `json:"quantity"`
+	FinalPaise  int64  `json:"final_amount_paise"`
+	// BundledPaise carries the attached goods forward so the settled amount is
+	// still measured against everything the buyer receives.
+	BundledPaise int64              `json:"bundled_paise,omitempty"`
+	Rationale    string             `json:"rationale"`
+	Steps        []string           `json:"steps,omitempty"`
+	SessionID    string             `json:"session_id"`
+	Accepted     bool               `json:"accepted"`
+	Transcript   []negotiation.Turn `json:"transcript,omitempty"`
 }

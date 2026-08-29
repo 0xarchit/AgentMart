@@ -180,6 +180,18 @@ func nameFor(shortlist negotiationclient.Shortlist, productID string) string {
 	return productID
 }
 
+// premiumOver reports what an ask adds over the list value of everything it
+// includes. The list value is the main product plus any attached goods, because
+// measuring against the main product alone counts a whole second product as
+// markup and sends fair bundles to the person for no reason.
+func premiumOver(finalPaise, listPaise int64) (paise int64, pct int) {
+	paise = finalPaise - listPaise
+	if listPaise > 0 {
+		pct = int(paise * 100 / listPaise)
+	}
+	return paise, pct
+}
+
 // Per-node time bounds.
 const (
 	nodeTimeout      = 90 * time.Second
@@ -299,17 +311,18 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				Transcript: proposal.Transcript,
 				ShopTurns:  pick.ShopTranscript,
 			}
-			premium := offer.FinalPaise - offer.BasePaise
+			if proposal.Bundle != nil {
+				offer.BundledPaise = proposal.Bundle.PricePaise * int64(offer.Quantity)
+			}
+			premium, pct := premiumOver(offer.FinalPaise, offer.BasePaise+offer.BundledPaise)
 			view := OfferView{
 				Offer:              offer,
 				WalletBalancePaise: wallet.BalancePaise,
 				SpendLimitPaise:    wallet.SpendLimitPaise,
 				BudgetPaise:        wallet.BudgetPaise,
 				PremiumPaise:       premium,
+				PremiumPct:         pct,
 				AdvisoryBandPct:    AutoBuyPremiumMaxPct,
-			}
-			if offer.BasePaise > 0 {
-				view.PremiumPct = int(premium * 100 / offer.BasePaise)
 			}
 			return view, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
@@ -431,13 +444,13 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if qty <= 0 {
 				qty = 1
 			}
-			baseMain := product.PricePaise * int64(qty)
-			premium := outcome.FinalPaise - baseMain
+			listPaise := product.PricePaise*int64(qty) + outcome.BundledPaise
+			premium, _ := premiumOver(outcome.FinalPaise, listPaise)
 			action := Action(outcome.Action)
 			if action == "" {
 				action = ActionBuy
 			}
-			bandCrossed := baseMain > 0 && premium > 0 && premium*100 > baseMain*AutoBuyPremiumMaxPct
+			bandCrossed := listPaise > 0 && premium > 0 && premium*100 > listPaise*AutoBuyPremiumMaxPct
 			needsApproval := action == ActionAskHuman || bandCrossed
 			return Result{
 				Action: action, ProductID: product.ID, ProductName: product.Name,
@@ -606,13 +619,14 @@ func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
 		settled = offer.Transcript
 	}
 	out := Outcome{
-		Status:      resolution.Status,
-		ProductID:   offer.ProductID,
-		ProductName: offer.ProductName,
-		Quantity:    offer.Quantity,
-		SessionID:   resolution.SessionID,
-		FinalPaise:  resolution.FinalAmountPaise,
-		Transcript:  append(append([]negotiation.Turn{}, offer.ShopTurns...), settled...),
+		Status:       resolution.Status,
+		ProductID:    offer.ProductID,
+		ProductName:  offer.ProductName,
+		Quantity:     offer.Quantity,
+		BundledPaise: offer.BundledPaise,
+		SessionID:    resolution.SessionID,
+		FinalPaise:   resolution.FinalAmountPaise,
+		Transcript:   append(append([]negotiation.Turn{}, offer.ShopTurns...), settled...),
 	}
 	if out.FinalPaise == 0 {
 		out.FinalPaise = offer.FinalPaise

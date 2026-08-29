@@ -63,6 +63,15 @@ func (c *Client) Close() error {
 	return c.agent.Destroy()
 }
 
+// BundledItem is a cross-sell attachment the merchant included in its ask, at
+// the discounted price the ask actually charges for it.
+type BundledItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	PricePaise  int64  `json:"price_paise"`
+	DiscountPct int    `json:"discount_pct"`
+}
+
 // Proposal is the merchant's counter offer for a product quantity.
 type Proposal struct {
 	SessionID        string             `json:"session_id"`
@@ -80,6 +89,7 @@ type Proposal struct {
 	TrustScore       int                `json:"trust_score,omitempty"`
 	ComboWith        string             `json:"combo_with,omitempty"`
 	ComboDiscountPct int                `json:"combo_discount_pct,omitempty"`
+	Bundle           *BundledItem       `json:"bundle,omitempty"`
 	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
 }
 

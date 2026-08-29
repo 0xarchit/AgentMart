@@ -100,6 +100,34 @@ func TestRouteForEscalatesUnaffordableAccept(t *testing.T) {
 	}
 }
 
+func TestAFairBundleIsNotJudgedAsMarkupOnTheMainProduct(t *testing.T) {
+	// A real quote: list 2400, warranty 300, trust handling 50, and a partner
+	// cream at 399.20 included in the ask. Measured against the main product
+	// alone the second product reads as markup and the run escalates for nothing.
+	const (
+		mainList = int64(240000)
+		bundled  = int64(39920)
+		ask      = int64(314920)
+	)
+
+	_, mainOnlyPct := premiumOver(ask, mainList)
+	if mainOnlyPct <= AutoBuyPremiumMaxPct {
+		t.Fatalf("the defect this guards is gone: main-only premium = %d%%", mainOnlyPct)
+	}
+
+	paise, pct := premiumOver(ask, mainList+bundled)
+	if paise != 35000 {
+		t.Fatalf("premium over everything included = %d, want 35000", paise)
+	}
+	if pct > AutoBuyPremiumMaxPct {
+		t.Fatalf("a fair bundle must stay inside the band: %d%% over %d%%", pct, AutoBuyPremiumMaxPct)
+	}
+
+	if _, pct := premiumOver(ask, 0); pct != 0 {
+		t.Fatalf("an unknown list value has no percentage to report, got %d", pct)
+	}
+}
+
 func TestRouteForUnclearDecisionAsksHuman(t *testing.T) {
 	got, note := routeFor(Assessment{Decision: "maybe?"},
 		Offer{BasePaise: 240000, FinalPaise: 250000},
