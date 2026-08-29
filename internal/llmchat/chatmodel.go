@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"agentmart/internal/failure"
@@ -41,6 +42,10 @@ const (
 	attemptsPerFallback = 2
 	// maxBodySnippet bounds how much of a failing response is quoted back.
 	maxBodySnippet = 600
+	// allowanceCooldown keeps a model whose free allowance is spent out of the
+	// chain for a while. That refusal does not clear in seconds, so retrying it
+	// or re-probing it on the next stage spends requests that cannot succeed.
+	allowanceCooldown = 10 * time.Minute
 )
 
 // structuredOutputTool is the function a schema-shaped answer arrives through.
@@ -61,6 +66,9 @@ type Model struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+
+	mu        sync.Mutex
+	coolUntil map[string]time.Time
 }
 
 // New builds a chat-completions-backed model. Name may be a comma-separated
@@ -78,12 +86,55 @@ func New(name, apiKey, baseURL string) *Model {
 		models = []string{strings.TrimSpace(name)}
 	}
 	return &Model{
-		name:    models[0],
-		models:  models,
-		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: providerTimeout},
+		name:      models[0],
+		models:    models,
+		apiKey:    apiKey,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		http:      &http.Client{Timeout: providerTimeout},
+		coolUntil: map[string]time.Time{},
 	}
+}
+
+// allowanceSpent reports a refusal that no retry can clear: the free allowance
+// or credit for that model is gone until the provider's own window resets.
+func allowanceSpent(detail string) bool {
+	lowered := strings.ToLower(detail)
+	for _, marker := range []string{"freeusagelimit", "usage limit", "quota", "credit", "insufficient_", "billing"} {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// benchModel puts one model out of the chain until its allowance window passes.
+func (m *Model) benchModel(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.coolUntil == nil {
+		m.coolUntil = map[string]time.Time{}
+	}
+	m.coolUntil[name] = time.Now().Add(allowanceCooldown)
+}
+
+// callable lists the models worth calling now. When every model is benched they
+// are all returned anyway, so a spent pool degrades to the old behaviour rather
+// than refusing to call anything at all.
+func (m *Model) callable() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	ready := make([]string, 0, len(m.models))
+	for _, name := range m.models {
+		if until, benched := m.coolUntil[name]; benched && now.Before(until) {
+			continue
+		}
+		ready = append(ready, name)
+	}
+	if len(ready) == 0 {
+		return m.models
+	}
+	return ready
 }
 
 func (m *Model) Name() string { return m.name }
@@ -176,9 +227,10 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 }
 
-// post works down the model chain. Each model gets a few bounded attempts for
-// the transient failures a shared pool produces constantly; when a model is
-// simply unavailable or out of free quota, the next one is tried.
+// post works down the model chain, skipping any model whose free allowance is
+// known to be spent. Each model gets a few bounded attempts for the transient
+// failures a shared pool produces constantly; when a model is simply
+// unavailable or out of free quota, the next one is tried.
 func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 	attempts := maxAttempts
 	if len(m.models) > 1 {
@@ -186,7 +238,7 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 		attempts = attemptsPerFallback
 	}
 	var reasons []string
-	for _, name := range m.models {
+	for _, name := range m.callable() {
 		aimed, err := withModel(body, name)
 		if err != nil {
 			return nil, err
@@ -197,6 +249,9 @@ func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
 		}
 		if ctx.Err() != nil {
 			return nil, err
+		}
+		if allowanceSpent(err.Error()) {
+			m.benchModel(name)
 		}
 		reasons = append(reasons, name+" -> "+err.Error())
 	}
@@ -267,7 +322,14 @@ func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Durat
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout {
 		// The body is where the provider says which model, key, or field it
 		// objected to. Discarding it leaves nothing to act on.
-		return nil, retryAfter(resp), fmt.Errorf("provider returned %s: %s", resp.Status, bodySnippet(resp))
+		detail := bodySnippet(resp)
+		wait := retryAfter(resp)
+		if allowanceSpent(detail) {
+			// A spent allowance does not clear in seconds. Waiting on it only
+			// spends requests that cannot succeed, so move on instead.
+			wait = 0
+		}
+		return nil, wait, fmt.Errorf("provider returned %s: %s", resp.Status, detail)
 	}
 	if resp.StatusCode >= 400 {
 		// A refusal aimed at this model, such as an unsupported request shape or a

@@ -3,6 +3,7 @@
 package llmchat
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -230,5 +231,40 @@ func TestAnAnswerWithoutTheShapeIsAskedAgainForced(t *testing.T) {
 	}
 	if shaped["decision"] != "counter" {
 		t.Fatalf("decision = %v", shaped["decision"])
+	}
+}
+
+func TestASpentModelLeavesTheChainInsteadOfBeingAskedAgain(t *testing.T) {
+	asked := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var sent struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		asked[sent.Model]++
+		if sent.Model == "spent-model" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"type":"FreeUsageLimitError","message":"free usage limit reached"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	m := New("spent-model,working-model", "key", server.URL)
+	for call := 1; call <= 3; call++ {
+		if _, err := m.post(context.Background(), []byte(`{"model":"spent-model","messages":[]}`)); err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+	}
+
+	if asked["spent-model"] != 1 {
+		t.Fatalf("asked the spent model %d times, want 1: a spent allowance must not be retried or re-probed", asked["spent-model"])
+	}
+	if asked["working-model"] != 3 {
+		t.Fatalf("asked the working model %d times, want 3", asked["working-model"])
 	}
 }
