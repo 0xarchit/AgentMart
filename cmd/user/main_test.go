@@ -244,7 +244,9 @@ func TestRefundCommand(t *testing.T) {
 	}
 }
 
-func TestRefundCommandDuplicate(t *testing.T) {
+// TestASecondTapOnCancelSaysTheRefundWasAlreadyApplied locks the wording the
+// person sees when the money layer reports a repeated refund.
+func TestASecondTapOnCancelSaysTheRefundWasAlreadyApplied(t *testing.T) {
 	refund := fakeRefunder{result: buyer.RefundResult{Duplicate: true, OrderID: "order"}}
 	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refund, 10, 5, []string{"/refund", "order", "changed", "mind"})
 	if got != "Refund already applied for order order." {
