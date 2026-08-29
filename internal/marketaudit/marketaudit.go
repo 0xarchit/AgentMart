@@ -10,6 +10,7 @@ import (
 
 	"agentmart/internal/marketgraph"
 	"agentmart/internal/negotiation"
+	"agentmart/internal/runid"
 	"agentmart/internal/supabase"
 )
 
@@ -63,6 +64,11 @@ func (s *Store) RecordOfferDecision(ctx context.Context, in negotiation.CounterI
 	// merchant-side trail, just without buyer attribution.
 	if in.BuyerAccountID != "" {
 		row["account_id"] = in.BuyerAccountID
+	}
+	// The buyer named the run on the wire, so the shop's pricing explanation
+	// joins the same story rather than sitting in the trail unattached.
+	if id := runid.From(ctx); id != "" {
+		row["run_id"] = id
 	}
 	return s.db.Insert(ctx, "audit_log", row, nil)
 }
