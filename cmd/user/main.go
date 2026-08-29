@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -16,17 +17,31 @@ import (
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/catalog"
+	"agentmart/internal/failure"
 	"agentmart/internal/gate"
+	"agentmart/internal/health"
 	"agentmart/internal/linking"
+	"agentmart/internal/llmchat"
 	"agentmart/internal/marketauth"
 	"agentmart/internal/marketclient"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/remotemerchant"
+	"agentmart/internal/shopgraph"
 	"agentmart/internal/supabase"
 	"agentmart/internal/telegram"
 	"agentmart/internal/wallet"
+)
+
+// Each channel gets the patience its work needs. The conversation channel waits
+// on the merchant's reasoning, the tool channel only on a database read.
+const (
+	recordsTimeout      = 15 * time.Second
+	catalogToolTimeout  = 45 * time.Second
+	conversationTimeout = 300 * time.Second
+	paymentTimeout      = 30 * time.Second
 )
 
 type linkRedeemer interface {
@@ -35,6 +50,7 @@ type linkRedeemer interface {
 
 type purchaser interface {
 	Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error)
+	RequestApproval(context.Context, buyer.PurchaseRequest, string) (buyer.PurchaseResult, error)
 }
 
 type refunder interface {
@@ -46,9 +62,12 @@ type approvalResolver interface {
 }
 
 type negotiator interface {
+	Browse(context.Context, string, int64, string) (negotiationclient.Shortlist, error)
 	Propose(context.Context, string, int) (negotiationclient.Proposal, error)
+	ProposeAs(context.Context, string, int, string) (negotiationclient.Proposal, error)
 	Accept(context.Context, string) (negotiationclient.Resolution, error)
 	Decline(context.Context, string, string) (negotiationclient.Resolution, error)
+	Counter(context.Context, string, int64) (negotiationclient.Resolution, error)
 }
 
 type decisionMaker interface {
@@ -57,6 +76,7 @@ type decisionMaker interface {
 
 type reasoningAuditor interface {
 	RecordReasoningDecision(context.Context, int64, buyerreasoning.Input, buyerreasoning.Decision) error
+	RecordAgentRun(context.Context, int64, string, buyer.AgentRun) error
 }
 
 type accountFactsReader interface {
@@ -69,10 +89,12 @@ type productFactsReader interface {
 
 type commandServices struct {
 	negotiations negotiator
+	health       func(context.Context) string
 	reasoning    decisionMaker
 	audit        reasoningAuditor
 	accounts     accountFactsReader
 	catalog      productFactsReader
+	loop         *shopgraph.Service
 }
 
 func main() {
@@ -84,7 +106,7 @@ func main() {
 		logger.Error("user configuration failed", "error", err)
 		return
 	}
-	db, err := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_SECRET_KEY"), &http.Client{Timeout: 10 * time.Second})
+	db, err := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_SECRET_KEY"), &http.Client{Timeout: recordsTimeout})
 	if err != nil {
 		logger.Error("user database configuration failed", "error", err)
 		return
@@ -92,11 +114,12 @@ func main() {
 	linker := linking.NewService(db)
 	var catalogReader interface {
 		Get(context.Context, string) (catalog.Product, error)
+		Search(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
 	}
 	var closeCatalog func() error
 	marketEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_MCP_ENDPOINT"))
 	if marketEndpoint != "" {
-		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: catalogToolTimeout})
 		if clientErr != nil {
 			logger.Error("market access configuration failed", "error", clientErr)
 			return
@@ -124,14 +147,15 @@ func main() {
 		logger.Error("user gate configuration failed", "error", err)
 		return
 	}
-	artifactClient, err := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: 10 * time.Second})
+	artifactClient, err := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: paymentTimeout})
 	if err != nil {
 		logger.Error("user payment configuration failed", "error", err)
 		return
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
-	reasoningService, err := buyerreasoning.New(ctx, buyerreasoning.FromEnv())
+	buyerModel := buyerreasoning.FromEnv("USER")
+	reasoningService, err := buyerreasoning.New(ctx, buyerModel)
 	if err != nil {
 		logger.Error("user reasoning configuration failed", "error", err)
 		return
@@ -139,12 +163,12 @@ func main() {
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
-		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 10 * time.Second})
+		marketHTTP, clientErr := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: conversationTimeout})
 		if clientErr != nil {
 			logger.Error("market access configuration failed", "error", clientErr)
 			return
 		}
-		merchantNegotiation, connectErr := negotiationclient.NewA2A(ctx, negotiationEndpoint, marketHTTP)
+		merchantNegotiation, connectErr := negotiationclient.NewAgentClient(ctx, negotiationEndpoint, marketHTTP)
 		if connectErr != nil {
 			logger.Error("merchant negotiation configuration failed", "error", connectErr)
 			return
@@ -156,6 +180,106 @@ func main() {
 		}()
 		negotiationService = merchantNegotiation
 	}
+	var loopService *shopgraph.Service
+	if negotiationService != nil {
+		loopTools := shopgraph.Tools{
+			Browse: func(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error) {
+				shortlist, browseErr := negotiationService.Browse(ctx, brief, budgetPaise, accountID)
+				return shortlist, failure.Conversation(browseErr)
+			},
+			Get: func(ctx context.Context, id string) (catalog.Product, error) {
+				product, getErr := catalogReader.Get(ctx, id)
+				return product, failure.Catalog(getErr)
+			},
+			Offers: func(ctx context.Context, id string, qty int, accountID string) (negotiationclient.Proposal, error) {
+				proposal, offerErr := negotiationService.ProposeAs(ctx, id, qty, accountID)
+				return proposal, failure.Conversation(offerErr)
+			},
+			Counter: func(ctx context.Context, sessionID string, paise int64) (negotiationclient.Resolution, error) {
+				resolution, counterErr := negotiationService.Counter(ctx, sessionID, paise)
+				return resolution, failure.Conversation(counterErr)
+			},
+			Accept: func(ctx context.Context, sessionID string) (negotiationclient.Resolution, error) {
+				resolution, acceptErr := negotiationService.Accept(ctx, sessionID)
+				return resolution, failure.Conversation(acceptErr)
+			},
+			Decline: func(ctx context.Context, sessionID string, reason string) (negotiationclient.Resolution, error) {
+				resolution, declineErr := negotiationService.Decline(ctx, sessionID, reason)
+				return resolution, failure.Conversation(declineErr)
+			},
+		}
+		// Reach the merchant as a native remote agent when its card is
+		// published: the negotiating agent then delegates to a real agent instead
+		// of only calling RPC tools.
+		merchantAgent, merchantErr := remotemerchant.New(ctx, remotemerchant.Config{
+			Endpoint:    negotiationEndpoint,
+			SharedToken: os.Getenv("MARKET_SHARED_TOKEN"),
+		})
+		if merchantErr != nil {
+			logger.Error("merchant remote agent unavailable", "error", merchantErr)
+		}
+		loopService, err = shopgraph.New(ctx, shopgraph.Config{
+			APIKey:        buyerModel.APIKey,
+			BaseURL:       buyerModel.BaseURL,
+			Model:         buyerModel.Model,
+			MerchantAgent: merchantAgent,
+		}, loopTools)
+		if err != nil {
+			logger.Error("buyer agent loop configuration failed", "error", err)
+			return
+		}
+	}
+	// Publish the buyer as a discoverable agent when a token is configured.
+	// Quote-only by design: the skill negotiates and returns terms, never debits.
+	if token := strings.TrimSpace(os.Getenv("USER_AGENT_TOKEN")); token != "" && loopService != nil {
+		addr := strings.TrimSpace(os.Getenv("USER_AGENT_ADDR"))
+		if addr == "" {
+			addr = ":8082"
+		}
+		cardURL := strings.TrimSpace(os.Getenv("USER_AGENT_CARD_URL"))
+		if cardURL == "" {
+			cardURL = "http://localhost" + addr + "/a2a/"
+		}
+		buyerHandler, handlerErr := newBuyerAgentHandler(shopperFunc(loopService.Run), cardURL, token)
+		if handlerErr != nil {
+			logger.Error("buyer agent service configuration failed", "error", handlerErr)
+			return
+		}
+		buyerServer := &http.Server{Addr: addr, Handler: buyerHandler}
+		go func() {
+			if serveErr := buyerServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				logger.Error("buyer agent service stopped", "error", serveErr)
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if shutErr := buyerServer.Shutdown(shutdownCtx); shutErr != nil {
+				logger.Error("buyer agent service shutdown failed", "error", shutErr)
+			}
+		}()
+		logger.Info("buyer agent published", "addr", addr, "card", cardURL+".well-known/agent-card.json")
+	}
+	// One command that says which layer is down, so a failed run never needs a
+	// log dive to explain itself.
+	layerReport := func(probeCtx context.Context) string {
+		return health.Format(health.Run(probeCtx, []health.Probe{
+			{Name: "records database", Layer: failure.LayerRecords, Check: func(ctx context.Context) error {
+				_, probeErr := store.AccountForTelegram(ctx, 0)
+				if probeErr != nil && strings.Contains(strings.ToLower(probeErr.Error()), "not found") {
+					return nil
+				}
+				return probeErr
+			}},
+			{Name: "catalog tool channel", Layer: failure.LayerCatalog, Check: func(ctx context.Context) error {
+				_, probeErr := catalogReader.Search(ctx, catalog.SearchRequest{})
+				return probeErr
+			}},
+			{Name: "merchant conversation channel", Layer: failure.LayerConversation, Check: conversationProbe(negotiationEndpoint)},
+			{Name: "reasoning layer", Layer: failure.LayerReasoning, Check: reasoningProbe()},
+		}))
+	}
+
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
@@ -186,9 +310,9 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService, health: layerReport}, message)
 			if err != nil {
-				_ = client.SendMessage(ctx, message.Chat.ID, "We could not process that request. It was recorded for review.")
+				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
 			}
 			return nil
@@ -219,6 +343,14 @@ func (p loggingPurchaser) Purchase(ctx context.Context, request buyer.PurchaseRe
 	return result, err
 }
 
+func (p loggingPurchaser) RequestApproval(ctx context.Context, request buyer.PurchaseRequest, reason string) (buyer.PurchaseResult, error) {
+	result, err := p.inner.RequestApproval(ctx, request, reason)
+	if err != nil {
+		log.Printf("approval request error: %v", err)
+	}
+	return result, err
+}
+
 func (p loggingPurchaser) ResolveApproval(ctx context.Context, telegramID int64, token, decision string) (buyer.PurchaseResult, error) {
 	result, err := p.inner.(approvalResolver).ResolveApproval(ctx, telegramID, token, decision)
 	if err != nil {
@@ -239,8 +371,24 @@ func (r loggingRefunder) Refund(ctx context.Context, request buyer.RefundRequest
 
 type loggingNegotiator struct{ inner negotiator }
 
+func (n loggingNegotiator) Browse(ctx context.Context, brief string, budgetPaise int64, accountID string) (negotiationclient.Shortlist, error) {
+	result, err := n.inner.Browse(ctx, brief, budgetPaise, accountID)
+	if err != nil {
+		log.Printf("shop browse error: %v", err)
+	}
+	return result, err
+}
+
 func (n loggingNegotiator) Propose(ctx context.Context, productID string, quantity int) (negotiationclient.Proposal, error) {
 	result, err := n.inner.Propose(ctx, productID, quantity)
+	if err != nil {
+		log.Printf("negotiation propose error: %v", err)
+	}
+	return result, err
+}
+
+func (n loggingNegotiator) ProposeAs(ctx context.Context, productID string, quantity int, accountID string) (negotiationclient.Proposal, error) {
+	result, err := n.inner.ProposeAs(ctx, productID, quantity, accountID)
 	if err != nil {
 		log.Printf("negotiation propose error: %v", err)
 	}
@@ -263,6 +411,14 @@ func (n loggingNegotiator) Decline(ctx context.Context, sessionID, reason string
 	return result, err
 }
 
+func (n loggingNegotiator) Counter(ctx context.Context, sessionID string, amountPaise int64) (negotiationclient.Resolution, error) {
+	result, err := n.inner.Counter(ctx, sessionID, amountPaise)
+	if err != nil {
+		log.Printf("negotiation counter error: %v", err)
+	}
+	return result, err
+}
+
 func handleMessage(ctx context.Context, client *telegram.Client, linker linkRedeemer, purchases purchaser, refunds refunder, services commandServices, message *telegram.Message) error {
 	linker = loggingLinker{inner: linker}
 	purchases = loggingPurchaser{inner: purchases}
@@ -270,7 +426,11 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 	if services.negotiations != nil {
 		services.negotiations = loggingNegotiator{inner: services.negotiations}
 	}
-	command := strings.Fields(strings.TrimSpace(message.Text))
+	text := strings.TrimSpace(message.Text)
+	if text != "" && !strings.HasPrefix(text, "/") {
+		return conversationalBuy(ctx, client, purchases, services, message)
+	}
+	command := strings.Fields(text)
 	if len(command) == 0 {
 		return nil
 	}
@@ -286,21 +446,220 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
 }
 
+// conversationalBuy routes free-text requests ("buy me a trimmer under 2500")
+// through the bounded agent loop, then executes the settled decision through
+// the same Gate-guarded purchase path as every other command.
+func conversationalBuy(ctx context.Context, client *telegram.Client, purchases purchaser, services commandServices, message *telegram.Message) error {
+	if services.loop == nil || services.accounts == nil || services.catalog == nil || services.negotiations == nil {
+		return client.SendMessage(ctx, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.")
+	}
+	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
+	if accountErr != nil {
+		log.Printf("agent loop account lookup failed: %v", accountErr)
+		return client.SendMessage(ctx, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.")
+	}
+	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
+		return fmt.Errorf("send agent ack failed: %w", err)
+	}
+	result, runErr := services.loop.RunWithProgress(ctx, message.Text, shopgraph.Wallet{
+		BalancePaise:    account.WalletBalancePaise,
+		SpendLimitPaise: account.SpendLimitPaise,
+		AccountID:       account.ID,
+	}, func(line string) {
+		// The person watches the conversation happen. A stalled run then shows
+		// which step it stalled on.
+		if noteErr := client.SendMessage(ctx, message.Chat.ID, line); noteErr != nil {
+			log.Printf("send progress note failed: %v", noteErr)
+		}
+	})
+	if runErr != nil {
+		// Strict mode: the human sees the real failure instead of a silent
+		// scripted purchase.
+		return client.SendMessage(ctx, message.Chat.ID, failure.Explain(runErr))
+	}
+	// Explainability: persist the graph's decision and node trace before any
+	// money moves, so the dashboard can justify the purchase afterwards.
+	if services.audit != nil {
+		if auditErr := services.audit.RecordAgentRun(ctx, message.From.ID, message.Text, buyer.AgentRun{
+			Action: string(result.Action), ProductID: result.ProductID, ProductName: result.ProductName,
+			Quantity: result.Quantity, FinalPaise: result.FinalPaise, SessionID: result.SessionID,
+			Accepted: result.Accepted, NeedsHuman: result.NeedsApproval,
+			Rationale: result.Rationale, Steps: result.Steps,
+		}); auditErr != nil {
+			return fmt.Errorf("audit agent run: %w", auditErr)
+		}
+	}
+	// The conversation is the evidence, so it is sent once, whatever the outcome.
+	if len(result.Transcript) > 0 {
+		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
+			log.Printf("send negotiation transcript failed: %v", docErr)
+		}
+	}
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Agent decision: %s\n%s", result.Action, result.Rationale)
+	for i, step := range result.Steps {
+		if i >= len(result.Steps)-3 && i < len(result.Steps) {
+			fmt.Fprintf(&summary, "\n- %s", step)
+		}
+	}
+	if result.Action == shopgraph.ActionDecline {
+		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+	}
+	product, perr := services.catalog.Get(ctx, result.ProductID)
+	if perr != nil {
+		return client.SendMessage(ctx, message.Chat.ID, "The selected product is no longer available.")
+	}
+	baseAmount := product.PricePaise * int64(result.Quantity)
+	purchaseRequest := buyer.PurchaseRequest{
+		TelegramID:       message.From.ID,
+		ProductID:        result.ProductID,
+		Quantity:         result.Quantity,
+		BaseAmountPaise:  baseAmount,
+		FinalAmountPaise: result.FinalPaise,
+		IdempotencyKey:   fmt.Sprintf("telegram:nl:%d:%d", message.From.ID, message.MessageID),
+	}
+
+	// The buyer agent itself asked for the human: record a pending approval and
+	// hand the decision over instead of spending.
+	if result.Action == shopgraph.ActionAskHuman {
+		pending, approvalErr := purchases.RequestApproval(ctx, purchaseRequest, result.Rationale)
+		if approvalErr != nil {
+			return fmt.Errorf("request human approval: %w", approvalErr)
+		}
+		ask := fmt.Sprintf("Your call: %s for INR %.2f. Approval token: %s",
+			product.Name, float64(pending.AmountPaise)/100, pending.ApprovalToken)
+		ask += "\nTap Approve or Decline below, or send /approve " + pending.ApprovalToken
+		ask += "\n\n" + summary.String()
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
+	}
+
+	purchase, err := purchases.Purchase(ctx, purchaseRequest)
+	if err != nil {
+		return fmt.Errorf("agentic purchase failed: %w", err)
+	}
+	if purchase.ApprovalRequired {
+		approval := fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(purchase.AmountPaise)/100, purchase.ApprovalToken)
+		approval += "\n\n" + summary.String()
+		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
+	}
+	if !purchase.Fulfilled {
+		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
+		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+	}
+	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
+	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
+}
+
+func short(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func transcriptFileName(sessionID string) string {
+	return fmt.Sprintf("negotiation_%s.txt", short(sessionID))
+}
+
+func renderTranscript(turns []negotiation.Turn) string {
+	var builder strings.Builder
+	builder.WriteString("AgentMart negotiation transcript\n")
+	for _, turn := range turns {
+		builder.WriteString(turn.At.Format("15:04:05"))
+		builder.WriteString(" [")
+		builder.WriteString(turn.Actor)
+		builder.WriteString("] ")
+		builder.WriteString(turn.Message)
+		builder.WriteString("\n")
+	}
+	return builder.String()
+}
+
+// approvalMarkup puts the decision one tap away. The token is passed in rather
+// than read back out of the message text, so a reworded prompt cannot silently
+// leave a person holding a token and no way to answer.
+func approvalMarkup(token string) *telegram.InlineKeyboardMarkup {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "Approve", CallbackData: "/approve " + token},
+		{Text: "Decline", CallbackData: "/reject " + token},
+	}}}
+}
+
+// cancelMarkup puts cancellation one tap away. It takes the order id the
+// refund path is keyed on, never a payment reference and never text scraped
+// back out of a message.
+func cancelMarkup(orderID string) *telegram.InlineKeyboardMarkup {
+	if strings.TrimSpace(orderID) == "" {
+		return nil
+	}
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "Cancel Order", CallbackData: "/refund " + orderID + " Cancelled by user"},
+	}}}
+}
+
 func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
 	if prefix := "Human approval required"; strings.HasPrefix(response, prefix) {
-		token := strings.TrimPrefix(response[strings.LastIndex(response, ":")+1:], " ")
-		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-			{Text: "Approve", CallbackData: "/approve " + token},
-			{Text: "Decline", CallbackData: "/reject " + token},
-		}}}
+		return approvalMarkup(strings.TrimSpace(response[strings.LastIndex(response, ":")+1:]))
 	}
-	if marker := "Audit order: "; strings.Contains(response, marker) {
-		orderID := strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0])
-		return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-			{Text: "Cancel Order", CallbackData: "/refund " + orderID + " Cancelled by user"},
-		}}}
+	if marker := "Order: "; strings.Contains(response, marker) {
+		return cancelMarkup(strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0]))
 	}
 	return nil
+}
+
+// conversationProbe checks the merchant answers on its conversation address and
+// accepts our shared token, without spending a model call.
+func conversationProbe(endpoint string) func(context.Context) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		client, err := marketauth.NewClient(os.Getenv("MARKET_SHARED_TOKEN"), &http.Client{Timeout: 15 * time.Second})
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode >= http.StatusBadRequest {
+			return fmt.Errorf("merchant answered %s", response.Status)
+		}
+		return nil
+	}
+}
+
+// reasoningProbe asks the model provider for one trivial structured answer. This
+// is the layer that fails most often, so it is worth a real call.
+func reasoningProbe() func(context.Context) error {
+	model := buyerreasoning.FromEnv("USER")
+	if model.Model == "" || model.APIKey == "" {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		reasoner := llmchat.New(model.Model, model.APIKey, model.BaseURL)
+		_, err := reasoner.CompleteJSON(ctx, llmchat.CompleteRequest{
+			System:       "Answer with the word ready.",
+			User:         `{"check":"are you reachable"}`,
+			FunctionName: "report_ready",
+			Description:  "Report that you can answer.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"status": map[string]any{"type": "string"}},
+				"required":   []string{"status"},
+			},
+		})
+		return err
+	}
 }
 
 func responseForCommand(ctx context.Context, linker linkRedeemer, purchases purchaser, refunds refunder, telegramID int64, messageID int, command []string, negotiationServices ...negotiator) (string, error) {
@@ -317,8 +676,13 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 	}
 	negotiations := services.negotiations
 	switch command[0] {
-	case "/start":
-		return "Welcome to AgentMart. Use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, or /refund ORDER_ID REASON.", nil
+	case "/start", "/help":
+		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON, /diag.", nil
+	case "/diag":
+		if services.health == nil {
+			return "Layer checks are not configured in this build.", nil
+		}
+		return services.health(ctx), nil
 	case "/link":
 		if len(command) != 2 {
 			return "Use /link TOKEN after generating a token in the dashboard.", nil
@@ -345,7 +709,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 			}
 			return "Purchase rejected: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/negotiate":
 		if negotiations == nil {
 			return "Merchant negotiation is unavailable.", nil
@@ -392,7 +756,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Negotiated purchase rejected: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/approve", "/reject":
 		if len(command) != 2 {
 			return "Use /approve TOKEN or /reject TOKEN.", nil
@@ -409,7 +773,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Approval result: " + result.Reason, nil
 		}
-		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Audit order: %s", float64(result.AmountPaise)/100, result.RazorpayOrderID), nil
+		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/shop":
 		return shopWithReasoning(ctx, purchases, services, telegramID, messageID, command)
 	case "/refund":
@@ -428,7 +792,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		}
 		return fmt.Sprintf("Refund approved via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	default:
-		return "Use /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, or /refund ORDER_ID REASON.", nil
+		return "Use plain sentences like 'buy me a trimmer under 2500', or /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, /shop, or /refund ORDER_ID REASON.", nil
 	}
 }
 
@@ -493,7 +857,7 @@ func shopWithReasoning(ctx context.Context, purchases purchaser, services comman
 	if !result.Fulfilled {
 		return "Purchase was not fulfilled.", nil
 	}
-	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Audit order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.RazorpayOrderID), nil
+	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.OrderID), nil
 }
 
 func stringValue(value *string) string {

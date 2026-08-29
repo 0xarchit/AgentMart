@@ -10,14 +10,19 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"agentmart/internal/campaigns"
 	"agentmart/internal/catalog"
+	"agentmart/internal/marketaudit"
 	"agentmart/internal/marketauth"
+	"agentmart/internal/marketgraph"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
+	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -41,11 +46,29 @@ func main() {
 	if addr == "" {
 		addr = ":8081"
 	}
-	agentEndpoint := os.Getenv("MARKET_AGENT_CARD_URL")
+	agentEndpoint := strings.TrimSuffix(os.Getenv("MARKET_AGENT_CARD_URL"), "/.well-known/agent-card.json")
 	if agentEndpoint == "" {
-		agentEndpoint = "http://localhost" + addr + "/a2a"
+		agentEndpoint = "http://localhost" + addr + "/a2a/"
 	}
-	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"))
+	if !strings.HasSuffix(agentEndpoint, "/") {
+		agentEndpoint += "/"
+	}
+	merchantConfig := buyerreasoning.FromEnv("MARKET")
+	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
+		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
+	}, campaigns.NewProvider(db), marketaudit.New(db))
+	if nerr != nil {
+		logger.Error("merchant negotiator configuration failed", "error", nerr)
+		return
+	}
+	// marketgraph.New returns a nil pointer when no model is configured. Assign
+	// through the interface only when it is real, otherwise the interface value
+	// is non-nil while the pointer inside it is not.
+	var merchant merchantBrain
+	if merchantNegotiator != nil {
+		merchant = merchantNegotiator
+	}
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant)
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -73,22 +96,50 @@ func main() {
 type catalogReader interface {
 	Search(context.Context, catalog.SearchRequest) ([]catalog.Product, error)
 	Get(context.Context, string) (catalog.Product, error)
+	GetWithCost(context.Context, string) (catalog.Product, error)
 	CheckStock(context.Context, string, int) (catalog.StockResult, error)
 }
 
-func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string) (http.Handler, error) {
+// merchantBrain is the merchant's reasoning: the shop-owner voice that shows
+// stock and the strategist that prices it.
+type merchantBrain interface {
+	negotiation.Negotiator
+	negotiation.Shopfront
+}
+
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain) (http.Handler, error) {
 	privateMux := http.NewServeMux()
-	negotiationServer, err := negotiation.NewCatalogServerWithStore(service.Get, store)
+	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
+		product, err := service.GetWithCost(ctx, id)
+		if err != nil {
+			return catalog.Product{}, 0, err
+		}
+		return product, product.CostPaise, nil
+	}
+	negotiationServer, err := negotiation.NewOrchestratedServer(service.Get, getPriced, store)
 	if err != nil {
 		return nil, err
+	}
+	if merchantNegotiator != nil {
+		negotiationServer.UseNegotiator(merchantNegotiator)
+		// One merchant, one brain: the shop-owner voice answers browse turns
+		// through the same server that quotes and negotiates.
+		negotiationServer.WithShopfront(merchantNegotiator, service.Search)
 	}
 	privateMux.Handle("POST /negotiation", negotiationServer.Handler())
-	agentHandler, err := merchantagent.NewHandler(service.Get, store, agentEndpoint)
+	// The agent surface shares that server, so a buyer talking agent to agent
+	// reaches the same reasoning and the same cost floor as a direct caller.
+	agentHandler, err := merchantagent.NewHandler(negotiationServer, agentEndpoint)
 	if err != nil {
 		return nil, err
 	}
+	// Register both spellings: a POST to the bare "/a2a" would otherwise hit
+	// ServeMux's 301 redirect, which rewrites POST to GET and yields a confusing
+	// 405 Method Not Allowed from the JSON-RPC handler.
+	privateMux.Handle("/a2a", http.StripPrefix("/a2a", agentHandler))
 	privateMux.Handle("/a2a/", http.StripPrefix("/a2a", agentHandler))
 	mcpServer := markettools.NewServer(service)
+	markettools.AddOffersTool(mcpServer, service)
 	privateMux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{JSONResponse: true, PropagateRequestCancellation: true}))
 	privateMux.HandleFunc("GET /catalog/search", func(w http.ResponseWriter, r *http.Request) {
 		maxPrice, err := parseInt64(r.URL.Query().Get("max_price_paise"))

@@ -21,12 +21,16 @@ func (testCatalog) Get(context.Context, string) (catalog.Product, error) {
 	return catalog.Product{ID: "product", PricePaise: 100, Stock: 2}, nil
 }
 
+func (testCatalog) GetWithCost(context.Context, string) (catalog.Product, error) {
+	return catalog.Product{ID: "product", PricePaise: 100, CostPaise: 70, Stock: 2}, nil
+}
+
 func (testCatalog) CheckStock(context.Context, string, int) (catalog.StockResult, error) {
 	return catalog.StockResult{Available: true, Stock: 2}, nil
 }
 
 func TestProtectedMarketRoutes(t *testing.T) {
-	handler, err := newHandler(testCatalog{}, negotiation.NewMemorySessionStore(), "http://merchant.test/a2a", "secret")
+	handler, err := newHandler(testCatalog{}, negotiation.NewMemorySessionStore(), "http://merchant.test/a2a", "secret", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

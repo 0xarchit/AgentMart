@@ -74,7 +74,7 @@ func TestFulfillRejectsDatabaseDecision(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := FulfillRequest{AccountID: "account", ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 100, RazorpayOrderID: "artifact", IdempotencyKey: "purchase", RefundWindowMinutes: 60}
-			err = NewService(db).Fulfill(t.Context(), request)
+			_, err = NewService(db).Fulfill(t.Context(), request)
 			if err == nil || !strings.Contains(err.Error(), reason) {
 				t.Fatalf("expected rejection %q, got %v", reason, err)
 			}
@@ -134,7 +134,7 @@ func TestFulfillUsesAtomicWalletRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewService(db).Fulfill(t.Context(), request); err != nil {
+	if _, err := NewService(db).Fulfill(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
 }

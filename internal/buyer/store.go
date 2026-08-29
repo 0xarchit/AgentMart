@@ -81,6 +81,36 @@ func (s *Store) RecordReasoningDecision(ctx context.Context, telegramID int64, i
 	return s.db.Insert(ctx, "audit_log", row, nil)
 }
 
+// AgentRun is one completed buyer-graph run, recorded for explainability: what
+// the agent decided, at what price, and the node trace that led there.
+type AgentRun struct {
+	Action      string   `json:"action"`
+	ProductID   string   `json:"product_id"`
+	ProductName string   `json:"product_name,omitempty"`
+	Quantity    int      `json:"quantity"`
+	FinalPaise  int64    `json:"final_amount_paise"`
+	SessionID   string   `json:"session_id,omitempty"`
+	Accepted    bool     `json:"a2a_accepted"`
+	NeedsHuman  bool     `json:"needs_human"`
+	Rationale   string   `json:"-"`
+	Steps       []string `json:"steps,omitempty"`
+}
+
+// RecordAgentRun persists the buyer graph's decision and trace.
+func (s *Store) RecordAgentRun(ctx context.Context, telegramID int64, request string, run AgentRun) error {
+	account, err := s.AccountForTelegram(ctx, telegramID)
+	if err != nil {
+		return err
+	}
+	return s.db.Insert(ctx, "audit_log", map[string]any{
+		"account_id": account.ID,
+		"actor":      "buyer_agent",
+		"action":     "agent_run",
+		"reason":     run.Rationale,
+		"payload":    map[string]any{"request": request, "run": run},
+	}, nil)
+}
+
 func (s *Store) RecordUpdateDeadLetter(ctx context.Context, telegramID int64, text string, cause error) error {
 	account, err := s.AccountForTelegram(ctx, telegramID)
 	if err != nil {

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { TopUpButton } from "@/app/dashboard/topup-button";
 import { LinkTelegram } from "@/app/dashboard/link-telegram";
+import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
 
 type Account = {
@@ -250,6 +251,9 @@ export default async function DashboardPage() {
         </div>
         <div className="mt-8">
           <TopUpButton />
+        </div>
+        <div className="mt-8">
+          <SpendLimitEditor currentPaise={account?.spend_limit_paise ?? 0} />
         </div>
         <div className="mt-8">
           <LinkTelegram />

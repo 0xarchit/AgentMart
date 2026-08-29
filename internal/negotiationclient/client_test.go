@@ -5,7 +5,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/merchantagent"
@@ -33,7 +36,7 @@ func TestClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	}
 }
 
-func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
+func TestAgentClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	var handler http.Handler
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeHTTP(w, r)
@@ -41,13 +44,17 @@ func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	defer server.Close()
 
 	var err error
-	handler, err = merchantagent.NewHandler(func(context.Context, string) (catalog.Product, error) {
+	merchantServer, err := negotiation.NewCatalogServerWithStore(func(context.Context, string) (catalog.Product, error) {
 		return catalog.Product{ID: "product", PricePaise: 100, Stock: 3, WarrantyYears: 2, TrustScore: 90}, nil
-	}, negotiation.NewMemorySessionStore(), server.URL)
+	}, negotiation.NewMemorySessionStore())
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewA2A(t.Context(), server.URL, server.Client())
+	handler, err = merchantagent.NewHandler(merchantServer, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewAgentClient(t.Context(), server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,5 +67,28 @@ func TestA2AClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	resolution, err := client.Accept(t.Context(), proposal.SessionID)
 	if err != nil || resolution.Status != "accepted" || resolution.ProductID != "product" || resolution.Quantity != 1 {
 		t.Fatalf("resolution = %+v, err = %v", resolution, err)
+	}
+}
+
+func TestAFailedMerchantTaskIsNotReadAsAnEmptyAnswer(t *testing.T) {
+	// A failed task carries its reason in the status. Falling back to the task
+	// history would hand back our own request, which decodes as a valid answer
+	// with nothing in it, so a broken shop would look like an empty shelf.
+	request := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(`{"type":"browse","brief":"a trimmer"}`))
+	failed := &a2a.Task{
+		ID:      "task-1",
+		History: []*a2a.Message{request},
+		Status: a2a.TaskStatus{
+			State:   a2a.TaskStateFailed,
+			Message: a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("shop owner could not answer: provider returned 503")),
+		},
+	}
+
+	text, err := extractAgentText(failed)
+	if err == nil {
+		t.Fatalf("a failed task must be an error, got text %q", text)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("the merchant's own reason must survive: %v", err)
 	}
 }

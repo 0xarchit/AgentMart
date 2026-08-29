@@ -1,4 +1,4 @@
-// Package merchantagent exposes the merchant negotiation agent over A2A.
+// Package merchantagent exposes the merchant negotiation agent to other agents.
 package merchantagent
 
 import (
@@ -9,17 +9,15 @@ import (
 	"net/http"
 	"strings"
 
-	"agentmart/internal/catalog"
 	"agentmart/internal/negotiation"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
 // NewHandler constructs the merchant agent card and JSON-RPC handler.
-func NewHandler(getProduct func(context.Context, string) (catalog.Product, error), store negotiation.SessionStore, endpoint string) (http.Handler, error) {
-	server, err := negotiation.NewCatalogServerWithStore(getProduct, store)
-	if err != nil {
-		return nil, err
+func NewHandler(server *negotiation.Server, endpoint string) (http.Handler, error) {
+	if server == nil {
+		return nil, fmt.Errorf("negotiation server is required")
 	}
 	executor := &executor{server: server}
 	handler := a2asrv.NewHandler(executor)
@@ -31,7 +29,10 @@ func NewHandler(getProduct func(context.Context, string) (catalog.Product, error
 		Capabilities:        a2a.AgentCapabilities{Streaming: false},
 		DefaultInputModes:   []string{"application/json"},
 		DefaultOutputModes:  []string{"application/json"},
-		Skills:              []a2a.AgentSkill{{ID: "negotiation", Name: "Catalog negotiation", Description: "Propose, accept, or decline a merchant counter offer.", Tags: []string{"catalog", "negotiation", "commerce"}}},
+		Skills: []a2a.AgentSkill{
+			{ID: "shopfront", Name: "Show what is in stock", Description: "Answer a shopping brief with a pitched shortlist of what this merchant holds.", Tags: []string{"catalog", "commerce"}},
+			{ID: "negotiation", Name: "Catalog negotiation", Description: "Quote, counter, accept, or decline an offer on a chosen product.", Tags: []string{"catalog", "negotiation", "commerce"}},
+		},
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
@@ -53,18 +54,14 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			return
 		}
 		payload := strings.TrimSpace(execCtx.Message.Parts[0].Text())
-		var request struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id,omitempty"`
-			ProductID string `json:"product_id,omitempty"`
-			Quantity  int    `json:"qty,omitempty"`
-			Reason    string `json:"reason,omitempty"`
+		var probe struct {
+			Type string `json:"type"`
 		}
-		if err := json.Unmarshal([]byte(payload), &request); err != nil {
+		if err := json.Unmarshal([]byte(payload), &probe); err != nil || probe.Type == "" {
 			yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("invalid negotiation payload"))), nil)
 			return
 		}
-		response, err := e.handle(ctx, request)
+		response, err := e.handle(ctx, payload)
 		if err != nil {
 			yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))), nil)
 			return
@@ -87,18 +84,8 @@ func (e *executor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) it
 	}
 }
 
-func (e *executor) handle(ctx context.Context, request struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id,omitempty"`
-	ProductID string `json:"product_id,omitempty"`
-	Quantity  int    `json:"qty,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-}) (any, error) {
-	body, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	requestReader := strings.NewReader(string(body))
+func (e *executor) handle(ctx context.Context, payload string) (any, error) {
+	requestReader := strings.NewReader(payload)
 	requestHTTP, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://merchant.internal/negotiation", requestReader)
 	if err != nil {
 		return nil, err
@@ -107,13 +94,31 @@ func (e *executor) handle(ctx context.Context, request struct {
 	responseRecorder := &captureResponse{header: make(http.Header)}
 	e.server.Handler().ServeHTTP(responseRecorder, requestHTTP)
 	if responseRecorder.status >= http.StatusMultipleChoices || responseRecorder.status == 0 {
-		return nil, fmt.Errorf("merchant negotiation returned status %d", responseRecorder.status)
+		// The body holds the reason. Reporting only the status leaves the buyer,
+		// and the person reading its transcript, with nothing to act on.
+		return nil, fmt.Errorf("merchant negotiation returned status %d: %s",
+			responseRecorder.status, reasonFrom(responseRecorder.body))
 	}
 	var response any
 	if err := json.Unmarshal(responseRecorder.body, &response); err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+// reasonFrom pulls the merchant's own words out of an error body, falling back
+// to the raw bytes when the body is not the shape it usually is.
+func reasonFrom(body []byte) string {
+	if len(body) == 0 {
+		return "no reason given"
+	}
+	var named struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &named); err == nil && named.Error != "" {
+		return named.Error
+	}
+	return strings.TrimSpace(string(body))
 }
 
 type captureResponse struct {

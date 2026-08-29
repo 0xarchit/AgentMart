@@ -4,6 +4,7 @@ package negotiation
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrInvalidProposal is returned when quantity or price cannot form a proposal.
@@ -32,11 +33,27 @@ type Counter struct {
 	Reason           string
 }
 
+// MaxRounds caps merchant counters after the opening offer.
+const MaxRounds = 3
+
+// Turn records one side of the negotiation conversation for transcript export.
+type Turn struct {
+	Actor   string    `json:"actor"` // buyer | merchant
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+}
+
 // Session is an in-memory negotiation task for one purchase attempt.
 type Session struct {
-	Proposal Proposal
-	Counter  Counter
-	Status   Status
+	Proposal   Proposal
+	Counter    Counter
+	Status     Status
+	Round      int // number of merchant counters so far (opening = 1)
+	Transcript []Turn
+	// BuyerAccountID is recorded at propose time when the buyer agent
+	// identifies itself, so later rounds can personalise campaign offers
+	// without the buyer resending identity on every message.
+	BuyerAccountID string `json:"buyer_account_id,omitempty"`
 }
 
 // New creates a proposed negotiation session.
@@ -52,15 +69,51 @@ func (s *Session) CounterOffer(counter Counter) error {
 	if s.Status != StatusProposed {
 		return fmt.Errorf("counter offer requires proposed state")
 	}
+	if err := validateCounter(s, counter); err != nil {
+		return err
+	}
+	s.Counter = counter
+	s.Status = StatusCountered
+	s.Round = 1
+	s.appendTurn("merchant", fmt.Sprintf("Offer INR %.2f: %s", float64(counter.FinalAmountPaise)/100, counter.Reason))
+	return nil
+}
+
+// Renegotiate replaces the pending counter during an in-progress negotiation.
+// It enforces the orchestrator's round cap; the caller computes the new amount.
+func (s *Session) Renegotiate(counter Counter) error {
+	if s.Status != StatusCountered {
+		return fmt.Errorf("renegotiation requires countered state")
+	}
+	if s.Round >= MaxRounds {
+		return fmt.Errorf("negotiation round limit reached")
+	}
+	if err := validateCounter(s, counter); err != nil {
+		return err
+	}
+	s.Counter = counter
+	s.Round++
+	s.appendTurn("merchant", fmt.Sprintf("Counter INR %.2f: %s", float64(counter.FinalAmountPaise)/100, counter.Reason))
+	return nil
+}
+
+func validateCounter(s *Session, counter Counter) error {
 	if counter.FinalAmountPaise < s.Proposal.BaseAmountPaise {
 		return fmt.Errorf("counter amount cannot be below proposal")
 	}
 	if strings.TrimSpace(counter.Reason) == "" {
 		return fmt.Errorf("counter reason is required")
 	}
-	s.Counter = counter
-	s.Status = StatusCountered
 	return nil
+}
+
+// RecordBuyer appends a buyer-side turn (counter proposal, accept, or decline).
+func (s *Session) RecordBuyer(message string) {
+	s.appendTurn("buyer", message)
+}
+
+func (s *Session) appendTurn(actor, message string) {
+	s.Transcript = append(s.Transcript, Turn{Actor: actor, Message: message, At: time.Now().UTC()})
 }
 
 // Accept records buyer acceptance of the merchant counter.
@@ -69,6 +122,7 @@ func (s *Session) Accept() error {
 		return fmt.Errorf("accept requires countered state")
 	}
 	s.Status = StatusAccepted
+	s.appendTurn("buyer", fmt.Sprintf("Accepted INR %.2f", float64(s.Counter.FinalAmountPaise)/100))
 	return nil
 }
 
@@ -81,6 +135,7 @@ func (s *Session) Decline(reason string) error {
 		return fmt.Errorf("decline reason is required")
 	}
 	s.Status = StatusDeclined
+	s.appendTurn("buyer", fmt.Sprintf("Declined: %s", reason))
 	return nil
 }
 

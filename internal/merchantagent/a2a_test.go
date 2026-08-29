@@ -1,4 +1,4 @@
-// Tests for the merchant A2A negotiation boundary.
+// Tests for the merchant negotiation boundary.
 package merchantagent
 
 import (
@@ -22,9 +22,13 @@ func TestMerchantAgentCardIsDiscoverable(t *testing.T) {
 	}))
 	defer httpServer.Close()
 	var err error
-	handler, err = NewHandler(func(context.Context, string) (catalog.Product, error) {
+	server, err := negotiation.NewCatalogServerWithStore(func(context.Context, string) (catalog.Product, error) {
 		return catalog.Product{ID: "product", PricePaise: 100, Stock: 3, WarrantyYears: 2, TrustScore: 90}, nil
-	}, negotiation.NewMemorySessionStore(), httpServer.URL)
+	}, negotiation.NewMemorySessionStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err = NewHandler(server, httpServer.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +36,7 @@ func TestMerchantAgentCardIsDiscoverable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if card.Name != "merchant-negotiation" || len(card.Skills) != 1 {
+	if card.Name != "merchant-negotiation" || len(card.Skills) != 2 {
 		t.Fatalf("card = %+v", card)
 	}
 	client, err := a2aclient.NewFromCard(t.Context(), card)
@@ -46,6 +50,6 @@ func TestMerchantAgentCardIsDiscoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result == nil {
-		t.Fatal("expected A2A result")
+		t.Fatal("expected an agent result")
 	}
 }

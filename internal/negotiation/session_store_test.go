@@ -79,7 +79,7 @@ func TestRedisSessionStoreResumesWithFreshStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Session{Proposal: Proposal{ProductID: "product", Quantity: 2, BaseAmountPaise: 200}, Status: StatusCountered}
+	want := Session{Proposal: Proposal{ProductID: "product", Quantity: 2, BaseAmountPaise: 200}, Status: StatusCountered, Round: 1, Transcript: []Turn{{Actor: "merchant", Message: "Offer INR 2.00"}}}
 	if err := first.Put(t.Context(), "restart-session", want); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestRedisSessionStoreResumesWithFreshStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || got != want {
+	if !ok || got.Proposal != want.Proposal || got.Status != want.Status || got.Round != want.Round || len(got.Transcript) != len(want.Transcript) || got.Transcript[0].Message != want.Transcript[0].Message {
 		t.Fatalf("loaded = %+v, found = %v", got, ok)
 	}
 }
