@@ -112,7 +112,8 @@ export default async function RunsPage({
           </h2>
           {runs.length === 0 ? (
             <p className="px-4 py-6 text-sm text-ink/50">
-              No runs recorded yet. Ask the shopping agent for something in chat.
+              No runs recorded yet. Ask the shopping agent for something in
+              chat.
             </p>
           ) : (
             <ul className="divide-y divide-ink/10">
