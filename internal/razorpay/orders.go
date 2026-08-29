@@ -38,6 +38,11 @@ func NewClient(keyID, keySecret string, httpClient *http.Client) (*Client, error
 	return &Client{keyID: keyID, keySecret: keySecret, http: httpClient, baseURL: "https://api.razorpay.com/v1"}, nil
 }
 
+// basicAuth encodes the API credentials for one request.
+func (c *Client) basicAuth() string {
+	return base64.StdEncoding.EncodeToString([]byte(c.keyID + ":" + c.keySecret))
+}
+
 // CreateWalletArtifact creates an unpaid order used only as an audit artifact.
 func (c *Client) CreateWalletArtifact(ctx context.Context, amountPaise int64, receipt string, notes map[string]string) (Order, error) {
 	if amountPaise <= 0 || strings.TrimSpace(receipt) == "" {
@@ -51,8 +56,7 @@ func (c *Client) CreateWalletArtifact(ctx context.Context, amountPaise int64, re
 	if err != nil {
 		return Order{}, err
 	}
-	auth := base64.StdEncoding.EncodeToString([]byte(c.keyID + ":" + c.keySecret))
-	req.Header.Set("Authorization", "Basic "+auth)
+	req.Header.Set("Authorization", "Basic "+c.basicAuth())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
