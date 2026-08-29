@@ -169,6 +169,17 @@ var errNothingToShow = errors.New("the shop had nothing within the budget")
 // a run ending this way declines rather than failing.
 var errNothingWorthBuying = errors.New("nothing on the shelf was worth buying")
 
+// nameFor resolves a chosen product id to the name the shop showed, so progress
+// notes read as a product rather than an identifier.
+func nameFor(shortlist negotiationclient.Shortlist, productID string) string {
+	for _, option := range shortlist.Options {
+		if option.ProductID == productID {
+			return option.Name
+		}
+	}
+	return productID
+}
+
 // Per-node time bounds.
 const (
 	nodeTimeout      = 90 * time.Second
@@ -268,7 +279,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if selection.Quantity <= 0 {
 				selection.Quantity = 1
 			}
-			s.note(fmt.Sprintf("Chose %s: %s", selection.ProductID, selection.Rationale))
+			s.note(fmt.Sprintf("Chose %s: %s", nameFor(shortlist, selection.ProductID), selection.Rationale))
 			return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
 		}, workflow.NodeConfig{Timeout: assessTimeout})
 
