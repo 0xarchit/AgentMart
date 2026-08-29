@@ -1,10 +1,8 @@
-// Read-only dashboard shell backed by the seeded catalog.
+// Read-only storefront backed by the seeded catalog. Everything shown here is a
+// product row, including what each item pairs with and on what terms.
 import { loadPublicProducts } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
-
-function formatRupees(paise: number): string {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
+import { money } from "./ui";
 
 export default async function HomePage() {
   const [products, supabase] = [
@@ -16,6 +14,7 @@ export default async function HomePage() {
   } = await supabase.auth.getUser();
   const buyHref = user ? "/dashboard#telegram" : "/login";
   const buyLabel = user ? "Buy via Telegram agent" : "Sign in to buy";
+  const nameById = new Map(products.map((product) => [product.id, product.name]));
   return (
     <main className="min-h-screen bg-paper">
       <header className="border-b border-ink/10 bg-ink text-paper">
@@ -94,8 +93,8 @@ export default async function HomePage() {
               </h2>
             </div>
             <div className="text-right text-sm text-ink/60">
-              <p>{products.length} seeded products</p>
-              <p className="mt-1">Stock and pricing from Supabase</p>
+              <p>{products.length} products on the shelf</p>
+              <p className="mt-1">Price, stock and pairing as the agents see them</p>
             </div>
           </div>
 
@@ -106,50 +105,74 @@ export default async function HomePage() {
             </div>
           ) : (
             <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {products.map((product) => (
-                <article
-                  key={product.id}
-                  className="border border-ink/10 bg-white p-5 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-moss">
-                        {product.category}
-                      </p>
-                      <h3 className="mt-2 text-lg font-semibold">
-                        {product.name}
-                      </h3>
+              {products.map((product) => {
+                const partner = product.combo_with
+                  ? nameById.get(product.combo_with)
+                  : undefined;
+                return (
+                  <article
+                    key={product.id}
+                    className="flex flex-col border border-ink/10 bg-white p-5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-moss">
+                          {product.category}
+                        </p>
+                        <h3 className="mt-2 text-lg font-semibold">
+                          {product.name}
+                        </h3>
+                        <p className="mt-1 text-xs text-ink/60">
+                          {product.warranty_years} year warranty
+                        </p>
+                      </div>
+                      <span className="bg-mint px-2 py-1 text-xs font-semibold text-moss">
+                        Trust {product.trust_score}
+                      </span>
                     </div>
-                    <span className="bg-mint px-2 py-1 text-xs font-semibold text-moss">
-                      Trust {product.trust_score}
-                    </span>
-                  </div>
-                  <div className="mt-6 flex items-end justify-between border-t border-ink/10 pt-4">
-                    <div>
-                      <p className="text-xl font-semibold">
-                        {formatRupees(product.price_paise)}
+
+                    {partner ? (
+                      <p className="mt-4 bg-paper px-3 py-2 text-xs text-ink/70">
+                        Pairs with {partner}
+                        {product.combo_discount_pct
+                          ? `, ${product.combo_discount_pct}% off the pair`
+                          : ""}
                       </p>
-                      <a
-                        href={buyHref}
-                        className="mt-3 inline-block text-sm font-semibold text-moss hover:underline"
-                      >
-                        {buyLabel}
-                      </a>
+                    ) : null}
+
+                    <div className="mt-6 flex items-end justify-between border-t border-ink/10 pt-4">
+                      <div>
+                        <p className="text-xl font-semibold">
+                          {money(product.price_paise)}
+                        </p>
+                        <a
+                          href={buyHref}
+                          className="mt-3 inline-block text-sm font-semibold text-moss hover:underline"
+                        >
+                          {buyLabel}
+                        </a>
+                      </div>
+                      <div className="text-right">
+                        <code
+                          className="text-xs text-ink/50"
+                          title="Use this ID with /buy in Telegram"
+                        >
+                          {product.id.slice(0, 8)}
+                        </code>
+                        <p
+                          className={
+                            product.stock <= 3
+                              ? "text-sm font-semibold text-coral"
+                              : "text-sm text-ink/60"
+                          }
+                        >
+                          {product.stock} in stock
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <code
-                        className="text-xs text-ink/50"
-                        title="Use this ID with /buy in Telegram"
-                      >
-                        {product.id.slice(0, 8)}
-                      </code>
-                      <p className="text-sm text-ink/60">
-                        {product.stock} in stock
-                      </p>
-                    </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>

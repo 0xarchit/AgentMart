@@ -7,6 +7,7 @@ import { TopUpButton } from "@/app/dashboard/topup-button";
 import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
+import { Card, Rows, Stat, money } from "@/app/ui";
 
 type Account = {
   wallet_balance_paise: number;
@@ -28,6 +29,15 @@ type LedgerEntry = {
   created_at: string;
 };
 
+type Run = {
+  run_id: string;
+  request: string | null;
+  product_name: string | null;
+  outcome: string | null;
+  final_amount_paise: number | null;
+  started_at: string;
+};
+
 type Revenue = {
   order_id: string;
   base_amount_paise: number;
@@ -35,10 +45,6 @@ type Revenue = {
   uplift_paise: number;
   credited_at: string;
 };
-
-function formatRupees(paise: number): string {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(
@@ -58,6 +64,7 @@ export default async function DashboardPage() {
     ledgerResult,
     revenueResult,
     auditResult,
+    runsResult,
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -89,12 +96,18 @@ export default async function DashboardPage() {
       .eq("account_id", user.id)
       .order("created_at", { ascending: false })
       .limit(100),
+    supabase
+      .from("run_summary")
+      .select("run_id,request,product_name,outcome,final_amount_paise,started_at")
+      .order("started_at", { ascending: false })
+      .limit(5),
   ]);
   const account = accountResult.data as Account | null;
   const orders = (ordersResult.data ?? []) as Order[];
   const ledger = (ledgerResult.data ?? []) as LedgerEntry[];
   const revenue = (revenueResult.data ?? []) as Revenue[];
   const auditEvents = (auditResult.data ?? []) as AuditEvent[];
+  const runs = (runsResult.data ?? []) as Run[];
   const upliftTotal = revenue.reduce((sum, row) => sum + row.uplift_paise, 0);
   return (
     <main className="min-h-screen bg-paper px-6 py-10">
@@ -135,29 +148,59 @@ export default async function DashboardPage() {
           </div>
         </div>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
-          <section className="border border-ink/10 bg-white p-5">
-            <p className="text-sm text-ink/60">Wallet balance</p>
-            <p className="mt-3 text-2xl font-semibold">
-              {formatRupees(account?.wallet_balance_paise ?? 0)}
-            </p>
-            <p className="mt-2 text-xs text-ink/50">
-              Spend limit {formatRupees(account?.spend_limit_paise ?? 0)}
-            </p>
-          </section>
-          <section className="border border-ink/10 bg-white p-5">
-            <p className="text-sm text-ink/60">Recent orders</p>
-            <p className="mt-3 text-2xl font-semibold">{orders.length}</p>
-            <p className="mt-2 text-xs text-ink/50">Account-scoped by policy</p>
-          </section>
-          <section className="border border-ink/10 bg-white p-5">
-            <p className="text-sm text-ink/60">Merchant uplift</p>
-            <p className="mt-3 text-2xl font-semibold">
-              {formatRupees(upliftTotal)}
-            </p>
-            <p className="mt-2 text-xs text-ink/50">
-              Across fulfilled revenue records
-            </p>
-          </section>
+          <Stat
+            label="Wallet balance"
+            value={money(account?.wallet_balance_paise ?? 0)}
+            basis={`Spend limit ${money(account?.spend_limit_paise ?? 0)}`}
+          />
+          <Stat
+            label="Recent orders"
+            value={String(orders.length)}
+            basis="Account scoped by policy"
+          />
+          <Stat
+            label="Revenue above list"
+            value={money(upliftTotal)}
+            basis="Across settled revenue rows"
+            tone="moss"
+          />
+        </div>
+
+        <div className="mt-8">
+          <Card
+            title="Your runs"
+            source="One row per request you made"
+            action={
+              <Link className="text-sm text-moss hover:underline" href="/dashboard/runs">
+                Open the deal room
+              </Link>
+            }
+          >
+            <Rows
+              items={runs.map((run) => ({
+                key: run.run_id,
+                left: (
+                  <Link
+                    className="hover:underline"
+                    href={`/dashboard/runs?run=${run.run_id}`}
+                  >
+                    {run.request ?? "request not recorded"}
+                    {run.product_name ? ` (${run.product_name})` : ""}
+                  </Link>
+                ),
+                right: (
+                  <>
+                    <span className="font-semibold text-moss">
+                      {run.outcome ?? "open"}
+                    </span>
+                    {run.final_amount_paise ? (
+                      <span className="ml-2">{money(run.final_amount_paise)}</span>
+                    ) : null}
+                  </>
+                ),
+              }))}
+            />
+          </Card>
         </div>
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
           <section className="border border-ink/10 bg-white p-5">
@@ -179,7 +222,7 @@ export default async function DashboardPage() {
                     </div>
                     <div className="text-right">
                       <p className="font-semibold">
-                        {formatRupees(order.amount_paise)}
+                        {money(order.amount_paise)}
                       </p>
                       <p className="text-xs text-moss">{order.status}</p>
                     </div>
@@ -210,10 +253,10 @@ export default async function DashboardPage() {
                     <div className="text-right">
                       <p className="font-semibold">
                         {entry.amount_paise >= 0 ? "+" : ""}
-                        {formatRupees(entry.amount_paise)}
+                        {money(entry.amount_paise)}
                       </p>
                       <p className="text-xs text-ink/50">
-                        Balance {formatRupees(entry.balance_after_paise)}
+                        Balance {money(entry.balance_after_paise)}
                       </p>
                     </div>
                   </div>
@@ -241,12 +284,12 @@ export default async function DashboardPage() {
                         </p>
                       </div>
                       <p className="font-semibold text-moss">
-                        +{formatRupees(row.uplift_paise)}
+                        +{money(row.uplift_paise)}
                       </p>
                     </div>
                     <p className="mt-1 text-xs text-ink/60">
-                      Base {formatRupees(row.base_amount_paise)} to final{" "}
-                      {formatRupees(row.final_amount_paise)}
+                      Base {money(row.base_amount_paise)} to final{" "}
+                      {money(row.final_amount_paise)}
                     </p>
                   </div>
                 ))
