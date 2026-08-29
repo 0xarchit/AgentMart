@@ -14,7 +14,9 @@ export default async function HomePage() {
   } = await supabase.auth.getUser();
   const buyHref = user ? "/dashboard#telegram" : "/login";
   const buyLabel = user ? "Buy via Telegram agent" : "Sign in to buy";
-  const nameById = new Map(products.map((product) => [product.id, product.name]));
+  const nameById = new Map(
+    products.map((product) => [product.id, product.name]),
+  );
   return (
     <main className="min-h-screen bg-paper">
       <header className="border-b border-ink/10 bg-ink text-paper">
@@ -94,7 +96,9 @@ export default async function HomePage() {
             </div>
             <div className="text-right text-sm text-ink/60">
               <p>{products.length} products on the shelf</p>
-              <p className="mt-1">Price, stock and pairing as the agents see them</p>
+              <p className="mt-1">
+                Price, stock and pairing as the agents see them
+              </p>
             </div>
           </div>
 

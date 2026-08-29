@@ -63,16 +63,22 @@ export function summarize(
 ): Figures {
   const productById = new Map(products.map((product) => [product.id, product]));
   const fulfilled = orders.filter((order) => settled(order.status));
-  const refunded = orders.filter((order) => order.status.startsWith("refunded"));
+  const refunded = orders.filter((order) =>
+    order.status.startsWith("refunded"),
+  );
 
   const priced = fulfilled.filter(
     (order) => (productById.get(order.product_id)?.cost_paise ?? 0) > 0,
   );
   const margin = priced.reduce((sum, order) => {
-    const cost = (productById.get(order.product_id)?.cost_paise ?? 0) * order.qty;
+    const cost =
+      (productById.get(order.product_id)?.cost_paise ?? 0) * order.qty;
     return sum + (order.amount_paise - cost);
   }, 0);
-  const pricedValue = priced.reduce((sum, order) => sum + order.amount_paise, 0);
+  const pricedValue = priced.reduce(
+    (sum, order) => sum + order.amount_paise,
+    0,
+  );
 
   const perDay = new Map<string, number>();
   for (const order of [...fulfilled].sort((a, b) =>
@@ -85,7 +91,11 @@ export function summarize(
   const perProduct = new Map<string, ProductTotal>();
   for (const order of fulfilled) {
     const name = productById.get(order.product_id)?.name ?? "Unknown product";
-    const entry = perProduct.get(order.product_id) ?? { name, count: 0, value: 0 };
+    const entry = perProduct.get(order.product_id) ?? {
+      name,
+      count: 0,
+      value: 0,
+    };
     entry.count += order.qty;
     entry.value += order.amount_paise;
     perProduct.set(order.product_id, entry);

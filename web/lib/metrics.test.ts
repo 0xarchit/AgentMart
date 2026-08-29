@@ -4,8 +4,20 @@ import { describe, expect, it } from "vitest";
 import { summarize, type OrderRow, type ProductRow } from "./metrics";
 
 const products: ProductRow[] = [
-  { id: "p1", name: "Trimmer", stock: 12, cost_paise: 60_000, price_paise: 100_000 },
-  { id: "p2", name: "Cream", stock: 2, cost_paise: 20_000, price_paise: 45_000 },
+  {
+    id: "p1",
+    name: "Trimmer",
+    stock: 12,
+    cost_paise: 60_000,
+    price_paise: 100_000,
+  },
+  {
+    id: "p2",
+    name: "Cream",
+    stock: 2,
+    cost_paise: 20_000,
+    price_paise: 45_000,
+  },
   { id: "p3", name: "Unpriced", stock: 40, cost_paise: 0, price_paise: 10_000 },
 ];
 
@@ -38,7 +50,10 @@ describe("summarize", () => {
 
   it("leaves an order without a cost floor out of the margin", () => {
     const figures = summarize(
-      [order({ id: "a" }), order({ id: "b", product_id: "p3", amount_paise: 10_000 })],
+      [
+        order({ id: "a" }),
+        order({ id: "b", product_id: "p3", amount_paise: 10_000 }),
+      ],
       products,
       [],
     );
@@ -67,7 +82,11 @@ describe("summarize", () => {
     const figures = summarize(
       [
         order({ id: "a", created_at: "2026-08-25T10:00:00Z" }),
-        order({ id: "b", created_at: "2026-08-26T10:00:00Z", amount_paise: 30_000 }),
+        order({
+          id: "b",
+          created_at: "2026-08-26T10:00:00Z",
+          amount_paise: 30_000,
+        }),
         order({
           id: "c",
           created_at: "2026-08-26T18:00:00Z",

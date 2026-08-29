@@ -13,20 +13,25 @@ export type Product = {
   combo_discount_pct: number | null;
 };
 
-export async function loadPublicProducts(fetcher: typeof fetch = fetch): Promise<Product[]> {
+export async function loadPublicProducts(
+  fetcher: typeof fetch = fetch,
+): Promise<Product[]> {
   const baseURL = process.env.SUPABASE_URL;
   const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
   if (!baseURL || !publishableKey) {
     return [];
   }
 
-  const response = await fetcher(`${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct&order=name.asc`, {
-    headers: {
-      apikey: publishableKey,
-      Authorization: `Bearer ${publishableKey}`,
+  const response = await fetcher(
+    `${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct&order=name.asc`,
+    {
+      headers: {
+        apikey: publishableKey,
+        Authorization: `Bearer ${publishableKey}`,
+      },
+      next: { revalidate: 30 },
     },
-    next: { revalidate: 30 },
-  });
+  );
   if (!response.ok) {
     return [];
   }

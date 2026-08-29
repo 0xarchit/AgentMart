@@ -98,7 +98,9 @@ export default async function DashboardPage() {
       .limit(100),
     supabase
       .from("run_summary")
-      .select("run_id,request,product_name,outcome,final_amount_paise,started_at")
+      .select(
+        "run_id,request,product_name,outcome,final_amount_paise,started_at",
+      )
       .order("started_at", { ascending: false })
       .limit(5),
   ]);
@@ -171,7 +173,10 @@ export default async function DashboardPage() {
             title="Your runs"
             source="One row per request you made"
             action={
-              <Link className="text-sm text-moss hover:underline" href="/dashboard/runs">
+              <Link
+                className="text-sm text-moss hover:underline"
+                href="/dashboard/runs"
+              >
                 Open the deal room
               </Link>
             }
@@ -194,7 +199,9 @@ export default async function DashboardPage() {
                       {run.outcome ?? "open"}
                     </span>
                     {run.final_amount_paise ? (
-                      <span className="ml-2">{money(run.final_amount_paise)}</span>
+                      <span className="ml-2">
+                        {money(run.final_amount_paise)}
+                      </span>
                     ) : null}
                   </>
                 ),

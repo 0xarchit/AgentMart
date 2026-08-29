@@ -40,7 +40,9 @@ export default async function AdminPage() {
     await Promise.all([
       admin
         .from("merchant_revenue")
-        .select("order_id,base_amount_paise,final_amount_paise,uplift_paise,credited_at")
+        .select(
+          "order_id,base_amount_paise,final_amount_paise,uplift_paise,credited_at",
+        )
         .order("credited_at", { ascending: false })
         .limit(200),
       admin
@@ -51,7 +53,9 @@ export default async function AdminPage() {
       admin.from("products").select("id,name,stock,cost_paise,price_paise"),
       admin
         .from("run_summary")
-        .select("run_id,request,product_name,outcome,final_amount_paise,started_at")
+        .select(
+          "run_id,request,product_name,outcome,final_amount_paise,started_at",
+        )
         .order("started_at", { ascending: false })
         .limit(6),
       admin.from("audit_log").select("id").limit(500),
@@ -152,7 +156,10 @@ export default async function AdminPage() {
             title="Latest runs"
             source="One row per request a person made"
             action={
-              <Link className="text-sm text-moss hover:underline" href="/dashboard/runs">
+              <Link
+                className="text-sm text-moss hover:underline"
+                href="/dashboard/runs"
+              >
                 Open the deal room
               </Link>
             }
@@ -190,10 +197,7 @@ export default async function AdminPage() {
           </Card>
         </div>
 
-        <Card
-          title="Revenue ledger"
-          source="Credited rows, newest first"
-        >
+        <Card title="Revenue ledger" source="Credited rows, newest first">
           <Rows
             items={revenue.slice(0, 12).map((row) => ({
               key: row.order_id,

@@ -10,7 +10,11 @@ describe("loadPublicProducts", () => {
   it("loads products with the publishable key without a user session", async () => {
     vi.stubEnv("SUPABASE_URL", "https://example.supabase.co");
     vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "public-key");
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{ id: "p1" }]), { status: 200 }));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify([{ id: "p1" }]), { status: 200 }),
+      );
 
     const products = await loadPublicProducts(fetcher);
 

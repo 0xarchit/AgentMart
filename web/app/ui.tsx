@@ -70,7 +70,10 @@ export function Bars({
   return (
     <div className="flex items-end gap-3 overflow-x-auto pb-1">
       {data.map((point) => (
-        <div key={point.label} className="flex w-16 shrink-0 flex-col items-center gap-2">
+        <div
+          key={point.label}
+          className="flex w-16 shrink-0 flex-col items-center gap-2"
+        >
           <span className="text-xs font-medium text-ink/70">
             {format(point.value)}
           </span>
@@ -120,12 +123,20 @@ export function Rows({
 }
 
 /** TopNav is the one navigation bar every page shares. */
-export function TopNav({ current }: { current: "store" | "dashboard" | "admin" }) {
+export function TopNav({
+  current,
+}: {
+  current: "store" | "dashboard" | "admin";
+}) {
   const link = (href: string, label: string, key: string) => (
     <Link
       key={key}
       href={href}
-      className={current === key ? "font-semibold text-moss" : "text-ink/70 hover:text-moss"}
+      className={
+        current === key
+          ? "font-semibold text-moss"
+          : "text-ink/70 hover:text-moss"
+      }
     >
       {label}
     </Link>
