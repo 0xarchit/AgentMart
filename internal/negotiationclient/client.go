@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"agentmart/internal/negotiation"
+	"agentmart/internal/runid"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -105,10 +106,19 @@ type Resolution struct {
 	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
 }
 
+// withRun names the run this message belongs to, so the shop's trail rows join
+// the buyer's. Outside a run the field is left off entirely.
+func withRun(ctx context.Context, payload map[string]any) map[string]any {
+	if id := runid.From(ctx); id != "" {
+		payload["run_id"] = id
+	}
+	return payload
+}
+
 // Counter submits a buyer counter amount against an open session. The merchant
 // may accept (status accepted), re-counter (status countered), or decline.
 func (c *Client) Counter(ctx context.Context, sessionID string, amountPaise int64) (Resolution, error) {
-	payload := map[string]any{"type": "counter", "session_id": sessionID, "counter_amount_paise": amountPaise}
+	payload := withRun(ctx, map[string]any{"type": "counter", "session_id": sessionID, "counter_amount_paise": amountPaise})
 	if c.agent != nil {
 		return c.agentResolution(ctx, payload)
 	}
@@ -125,7 +135,7 @@ func (c *Client) Propose(ctx context.Context, productID string, quantity int) (P
 // ProposeAs asks the merchant for a counter offer while identifying the buyer
 // account, which lets the merchant agent apply campaign and loyalty deals.
 func (c *Client) ProposeAs(ctx context.Context, productID string, quantity int, accountID string) (Proposal, error) {
-	payload := map[string]any{"type": "propose", "product_id": productID, "qty": quantity}
+	payload := withRun(ctx, map[string]any{"type": "propose", "product_id": productID, "qty": quantity})
 	if strings.TrimSpace(accountID) != "" {
 		payload["account_id"] = accountID
 	}
@@ -161,7 +171,7 @@ type ShortlistOption struct {
 // Browse opens the conversation: the buyer tells the merchant what it is after
 // and the merchant answers with what it wants to show.
 func (c *Client) Browse(ctx context.Context, brief string, budgetPaise int64, accountID string) (Shortlist, error) {
-	payload := map[string]any{"type": "browse", "brief": brief}
+	payload := withRun(ctx, map[string]any{"type": "browse", "brief": brief})
 	if budgetPaise > 0 {
 		payload["budget_paise"] = budgetPaise
 	}

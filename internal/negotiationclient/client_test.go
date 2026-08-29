@@ -2,7 +2,10 @@
 package negotiationclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"agentmart/internal/catalog"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
+	"agentmart/internal/runid"
 )
 
 func TestClientNegotiatesAgainstMerchantServer(t *testing.T) {
@@ -33,6 +37,58 @@ func TestClientNegotiatesAgainstMerchantServer(t *testing.T) {
 	resolution, err := client.Accept(t.Context(), proposal.SessionID)
 	if err != nil || resolution.Status != "accepted" || resolution.ProductID != "product" || resolution.Quantity != 1 {
 		t.Fatalf("resolution = %+v, err = %v", resolution, err)
+	}
+}
+
+func TestTheRunIdTravelsToTheShopOnEveryMessage(t *testing.T) {
+	// The shop writes its own pricing explanations. Without the run on the wire
+	// those rows land in the trail unattached to the purchase they caused.
+	seen := make(chan string, 4)
+	upstream := negotiation.NewCatalogServer(func(context.Context, string) (catalog.Product, error) {
+		return catalog.Product{ID: "product", PricePaise: 100, Stock: 3, WarrantyYears: 2, TrustScore: 90}, nil
+	})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		var message struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(body, &message); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		seen <- message.RunID
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		upstream.Handler().ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	client, err := New(httpServer.URL+"/negotiation", httpServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := runid.With(t.Context(), "run-1")
+	proposal, err := client.Propose(ctx, "product", 1)
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := client.Counter(ctx, proposal.SessionID, 90); err != nil {
+		t.Fatalf("counter: %v", err)
+	}
+	for message := 1; message <= 2; message++ {
+		if got := <-seen; got != "run-1" {
+			t.Fatalf("message %d carried run %q, want run-1", message, got)
+		}
+	}
+
+	if _, err := client.Propose(t.Context(), "product", 1); err != nil {
+		t.Fatalf("propose outside a run: %v", err)
+	}
+	if got := <-seen; got != "" {
+		t.Fatalf("work outside a run invented one: %q", got)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/runid"
 )
 
 var (
@@ -119,15 +120,18 @@ func (s *Server) Handler() http.Handler {
 
 		var response any
 		var err error
+		// The buyer names the run it is on, so the shop's own explanations land
+		// on the same trail as the purchase they led to.
+		ctx := runid.With(r.Context(), strings.TrimSpace(request.RunID))
 		switch request.Type {
 		case "browse":
-			response, err = s.browse(r.Context(), request)
+			response, err = s.browse(ctx, request)
 		case "propose":
-			response, err = s.propose(r.Context(), request)
+			response, err = s.propose(ctx, request)
 		case "counter":
-			response, err = s.counter(r.Context(), request)
+			response, err = s.counter(ctx, request)
 		case "accept", "decline":
-			response, err = s.resolve(r.Context(), request)
+			response, err = s.resolve(ctx, request)
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be browse, propose, counter, accept, or decline"})
 			return
@@ -152,6 +156,7 @@ type negotiationRequest struct {
 	Reason             string `json:"reason"`
 	CounterAmountPaise int64  `json:"counter_amount_paise"`
 	AccountID          string `json:"account_id"`   // optional buyer identity for campaign personalisation
+	RunID              string `json:"run_id"`       // the buyer's run, carried so both trails join
 	Brief              string `json:"brief"`        // browse only: what the buyer is shopping for
 	BudgetPaise        int64  `json:"budget_paise"` // browse only: the ceiling the buyer stated
 }
