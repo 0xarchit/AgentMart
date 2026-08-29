@@ -489,6 +489,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			Quantity: result.Quantity, FinalPaise: result.FinalPaise, SessionID: result.SessionID,
 			Accepted: result.Accepted, NeedsHuman: result.NeedsApproval,
 			Rationale: result.Rationale, Steps: result.Steps,
+			Transcript: result.Transcript,
 		}); auditErr != nil {
 			return fmt.Errorf("audit agent run: %w", auditErr)
 		}

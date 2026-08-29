@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"agentmart/internal/gate"
+	"agentmart/internal/negotiation"
 	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/runid"
 	"agentmart/internal/supabase"
@@ -105,6 +106,10 @@ type AgentRun struct {
 	NeedsHuman  bool     `json:"needs_human"`
 	Rationale   string   `json:"-"`
 	Steps       []string `json:"steps,omitempty"`
+	// Transcript is what the two sides actually said. It is recorded with the
+	// decision because the words are the evidence for the price, and a chat
+	// attachment the person can delete is not a trail.
+	Transcript []negotiation.Turn `json:"transcript,omitempty"`
 }
 
 // RecordAgentRun persists the buyer graph's decision and trace.
