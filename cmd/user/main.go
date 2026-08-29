@@ -443,8 +443,11 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 		return err
 	}
 	if message.CallbackQueryID != "" {
+		// The acknowledgement only clears the spinner on the tapped button. It
+		// must never decide whether the person is told what happened to their
+		// money, so a failure here is reported and stepped over.
 		if err := client.AnswerCallbackQuery(ctx, message.CallbackQueryID); err != nil {
-			return err
+			log.Printf("acknowledging the tapped button failed: %v", err)
 		}
 	}
 	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
