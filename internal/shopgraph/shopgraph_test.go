@@ -3,6 +3,7 @@ package shopgraph
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"agentmart/internal/catalog"
@@ -162,5 +163,25 @@ func TestAnUnsettledNegotiationGoesToThePersonInsteadOfLosingTheRun(t *testing.T
 	}
 	if _, err := service.resultFrom(nil, "not an outcome"); err == nil {
 		t.Fatal("an unrecognised final output is still a failure")
+	}
+}
+
+// TestNoMoneyMovingToolReachesAReasoningLayer keeps a deliberate safety
+// decision honest: a tool calling layer that can create a charge can create the
+// wrong charge, and no instruction fixes that. Charge creation stays in code,
+// behind the gate, on values the gate has already validated.
+func TestNoMoneyMovingToolReachesAReasoningLayer(t *testing.T) {
+	service, err := New(t.Context(), Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, fakeGraphTools())
+	if err != nil {
+		t.Fatalf("build graph: %v", err)
+	}
+	forbidden := []string{"charge", "capture", "payment_link", "paymentlink", "initiate_payment", "create_payment", "refund", "token", "mandate", "settle", "debit", "wallet"}
+	for _, exposed := range service.negotiationTools() {
+		name := strings.ToLower(exposed.Name())
+		for _, word := range forbidden {
+			if strings.Contains(name, word) {
+				t.Fatalf("tool %q can move money and must not be reachable from a reasoning layer", exposed.Name())
+			}
+		}
 	}
 }
