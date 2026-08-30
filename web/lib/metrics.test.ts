@@ -176,18 +176,29 @@ describe("the revenue scoreboard", () => {
   });
 
   it("maps a settled order to the run that earned it", () => {
-    const figures = summarize([order({ id: "a" })], products, [], [], [], [
-      { order_id: "a", run_id: "run-one" },
-      { order_id: null, run_id: "run-two" },
-      { order_id: "b", run_id: null },
-    ]);
+    const figures = summarize(
+      [order({ id: "a" })],
+      products,
+      [],
+      [],
+      [],
+      [
+        { order_id: "a", run_id: "run-one" },
+        { order_id: null, run_id: "run-two" },
+        { order_id: "b", run_id: null },
+      ],
+    );
     expect(figures.runByOrder).toEqual({ a: "run-one" });
   });
 
   it("ignores a debit for an order outside the window being shown", () => {
     const ledger: LedgerRow[] = [
       { order_id: "a", entry_type: "purchase_debit", amount_paise: 100_000 },
-      { order_id: "older", entry_type: "purchase_debit", amount_paise: 999_000 },
+      {
+        order_id: "older",
+        entry_type: "purchase_debit",
+        amount_paise: 999_000,
+      },
     ];
     const figures = summarize([order({ id: "a" })], products, [], ledger);
     expect(figures.ledgerNet).toBe(100_000);

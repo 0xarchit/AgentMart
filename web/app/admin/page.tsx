@@ -54,36 +54,36 @@ export default async function AdminPage() {
     auditResult,
     ledgerResult,
   ] = await Promise.all([
-      admin
-        .from("merchant_revenue")
-        .select(
-          "order_id,base_amount_paise,final_amount_paise,uplift_paise,credited_at",
-        )
-        .order("credited_at", { ascending: false })
-        .limit(200),
-      admin
-        .from("orders")
-        .select("id,product_id,qty,amount_paise,status,created_at")
-        .order("created_at", { ascending: false })
-        .limit(200),
-      admin.from("products").select("id,name,stock,cost_paise,price_paise"),
-      admin
-        .from("run_summary")
-        .select(
-          "run_id,request,product_name,outcome,final_amount_paise,started_at",
-        )
-        .order("started_at", { ascending: false })
-        .limit(6),
-      admin
-        .from("audit_log")
-        .select("run_id,order_id,action,payload")
-        .order("created_at", { ascending: false })
-        .limit(500),
-      admin
-        .from("wallet_ledger")
-        .select("order_id,entry_type,amount_paise")
-        .limit(500),
-    ]);
+    admin
+      .from("merchant_revenue")
+      .select(
+        "order_id,base_amount_paise,final_amount_paise,uplift_paise,credited_at",
+      )
+      .order("credited_at", { ascending: false })
+      .limit(200),
+    admin
+      .from("orders")
+      .select("id,product_id,qty,amount_paise,status,created_at")
+      .order("created_at", { ascending: false })
+      .limit(200),
+    admin.from("products").select("id,name,stock,cost_paise,price_paise"),
+    admin
+      .from("run_summary")
+      .select(
+        "run_id,request,product_name,outcome,final_amount_paise,started_at",
+      )
+      .order("started_at", { ascending: false })
+      .limit(6),
+    admin
+      .from("audit_log")
+      .select("run_id,order_id,action,payload")
+      .order("created_at", { ascending: false })
+      .limit(500),
+    admin
+      .from("wallet_ledger")
+      .select("order_id,entry_type,amount_paise")
+      .limit(500),
+  ]);
 
   const revenue = (revenueResult.data ?? []) as RevenueRow[];
   const orders = (ordersResult.data ?? []) as OrderRow[];
@@ -148,7 +148,9 @@ export default async function AdminPage() {
           />
           <Stat
             label="Reconciliation"
-            value={figures.reconciled ? "Agrees" : money(figures.ledgerDifference)}
+            value={
+              figures.reconciled ? "Agrees" : money(figures.ledgerDifference)
+            }
             basis={
               figures.reconciled
                 ? "settled value matches the wallet debits"

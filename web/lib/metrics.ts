@@ -133,9 +133,7 @@ export function summarize(
     (sum, order) => sum + order.amount_paise,
     0,
   );
-  const debits = ledger.filter(
-    (row) => row.entry_type === "purchase_debit",
-  );
+  const debits = ledger.filter((row) => row.entry_type === "purchase_debit");
   // Only movements for orders in this same window are compared. Reading a wider
   // slice of the ledger than of the orders would otherwise show a disagreement
   // that is only a difference in how much was read.
@@ -169,9 +167,7 @@ export function summarize(
     marginPct: pricedValue > 0 ? Math.round((margin / pricedValue) * 100) : 0,
     pricedCount: priced.length,
     attachRate:
-      offers.length > 0
-        ? Math.round((attachedCount / offers.length) * 100)
-        : 0,
+      offers.length > 0 ? Math.round((attachedCount / offers.length) * 100) : 0,
     attachedCount,
     offersPriced: offers.length,
     ledgerNet,
