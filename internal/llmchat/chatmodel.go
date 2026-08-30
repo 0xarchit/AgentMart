@@ -30,16 +30,16 @@ import (
 // their first byte.
 const providerTimeout = 120 * time.Second
 
-// Retry budget for a shared free pool. A rate limit there usually clears in a
-// second or two, so the first retry is quick and each later one waits longer.
-// The provider's own stated wait wins when it sends one.
+// Retry budget for a shared free pool. A flap on such a pool is stochastic per
+// call rather than a lasting condition, so the same model is asked several times
+// with a steady pause before the chain moves on. The provider's own stated wait
+// wins when it sends one.
 const (
-	maxAttempts  = 5
-	retryBase    = time.Second
+	maxAttempts = 5
+	retryPause  = 3 * time.Second
+	// maxRetryWait caps a wait the provider asked for, so one long stated delay
+	// cannot hold a run open.
 	maxRetryWait = 20 * time.Second
-	// attemptsPerFallback is used when a model chain is configured: fewer waits
-	// per model, because moving to a working model beats waiting on a dead one.
-	attemptsPerFallback = 2
 	// maxBodySnippet bounds how much of a failing response is quoted back.
 	maxBodySnippet = 600
 	// allowanceCooldown keeps a model whose free allowance is spent out of the
@@ -228,22 +228,18 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 }
 
 // post works down the model chain, skipping any model whose free allowance is
-// known to be spent. Each model gets a few bounded attempts for the transient
-// failures a shared pool produces constantly; when a model is simply
-// unavailable or out of free quota, the next one is tried.
+// known to be spent. Each model is asked up to the full attempt budget, because
+// the failures a shared pool produces clear on a later try far more often than
+// they persist; a model that is genuinely unavailable or out of free quota is
+// left behind for the next one.
 func (m *Model) post(ctx context.Context, body []byte) (*response, error) {
-	attempts := maxAttempts
-	if len(m.models) > 1 {
-		// With somewhere else to go, spend less time waiting on one endpoint.
-		attempts = attemptsPerFallback
-	}
 	var reasons []string
 	for _, name := range m.callable() {
 		aimed, err := withModel(body, name)
 		if err != nil {
 			return nil, err
 		}
-		decoded, err := m.postTo(ctx, aimed, attempts)
+		decoded, err := m.postTo(ctx, aimed, maxAttempts)
 		if err == nil {
 			return decoded, nil
 		}
@@ -275,9 +271,9 @@ func withModel(body []byte, name string) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// postTo calls one model, retrying the failures that clear on their own. A rate
-// limit on a shared pool usually clears in a second or two, so the first retry
-// is quick and each later one waits longer.
+// postTo calls one model, retrying the failures that clear on their own. The
+// pause between attempts is steady rather than growing, because a flap on a
+// shared pool is decided per call and not by how long the caller has waited.
 func (m *Model) postTo(ctx context.Context, body []byte, attempts int) (*response, error) {
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -289,8 +285,6 @@ func (m *Model) postTo(ctx context.Context, body []byte, attempts int) (*respons
 		if wait <= 0 || attempt == attempts {
 			break
 		}
-		// 1s, 2s, 4s, 8s unless the provider named its own wait.
-		wait *= 1 << (attempt - 1)
 		if wait > maxRetryWait {
 			wait = maxRetryWait
 		}
@@ -315,7 +309,7 @@ func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Durat
 
 	resp, err := m.http.Do(httpReq)
 	if err != nil {
-		return nil, retryBase, err
+		return nil, retryPause, err
 	}
 	defer resp.Body.Close()
 
@@ -339,14 +333,19 @@ func (m *Model) attempt(ctx context.Context, body []byte) (*response, time.Durat
 
 	var decoded response
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, retryBase, fmt.Errorf("decode response (%s): %w", resp.Status, err)
+		return nil, retryPause, fmt.Errorf("decode response (%s): %w", resp.Status, err)
 	}
 	if decoded.Error != nil {
 		return nil, 0, fmt.Errorf("provider error (%s): %s", resp.Status, decoded.Error.Message)
 	}
 	if len(decoded.Choices) == 0 {
 		// An empty body with a success status is a pool hiccup, not an answer.
-		return nil, retryBase, fmt.Errorf("no choices returned (%s)", resp.Status)
+		return nil, retryPause, fmt.Errorf("no choices returned (%s)", resp.Status)
+	}
+	if decoded.Choices[0].FinishReason == "length" {
+		// The answer was cut off mid sentence. Accepting it means acting on half a
+		// judgement, and a tool call cut in half does not even parse.
+		return nil, retryPause, fmt.Errorf("answer was cut off before it finished (%s)", resp.Status)
 	}
 	return &decoded, 0, nil
 }
@@ -373,7 +372,7 @@ func retryAfter(resp *http.Response) time.Duration {
 			return maxRetryWait
 		}
 	}
-	return retryBase
+	return retryPause
 }
 
 // adapt converts the provider choice into a framework response. Tool results

@@ -268,3 +268,57 @@ func TestASpentModelLeavesTheChainInsteadOfBeingAskedAgain(t *testing.T) {
 		t.Fatalf("asked the working model %d times, want 3", asked["working-model"])
 	}
 }
+
+func TestAFlappingModelIsAskedAgainRatherThanAbandoned(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}`))
+	}))
+	defer server.Close()
+
+	m := New("flapping-model", "key", server.URL)
+	if _, err := m.post(context.Background(), []byte(`{"model":"flapping-model","messages":[]}`)); err == nil {
+		t.Fatal("a model that never answers should report failure")
+	}
+	if calls != 5 {
+		t.Fatalf("asked %d times, want 5: a pool flap is decided per call, so the budget must be spent before giving up", calls)
+	}
+}
+
+func TestAnAnswerCutOffIsAskedAgainInsteadOfActedOn(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var sent struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if sent.Model != "one-model" {
+			t.Fatalf("switched to %q instead of asking the same model again", sent.Model)
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"the trimmer is worth it because"},"finish_reason":"length"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"the trimmer is worth it because it holds its charge."},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	m := New("one-model", "key", server.URL)
+	decoded, err := m.post(context.Background(), []byte(`{"model":"one-model","messages":[]}`))
+	if err != nil {
+		t.Fatalf("the second answer was complete and should have been returned: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if decoded.Choices[0].FinishReason != "stop" {
+		t.Fatalf("kept the cut answer: finish reason %q", decoded.Choices[0].FinishReason)
+	}
+}
