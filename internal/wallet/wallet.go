@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"agentmart/internal/runid"
 	"agentmart/internal/supabase"
 )
 
@@ -28,11 +29,14 @@ func (s *Service) TopUp(ctx context.Context, request TopUpRequest) error {
 }
 
 // Fulfill debits the wallet and records a fulfilled-via-wallet order
-// atomically, returning the order id the refund path is keyed on.
+// atomically, returning the order id the refund path is keyed on. The run the
+// purchase belongs to is stamped here rather than by the caller, so a money row
+// cannot reach the trail without the conversation that produced it.
 func (s *Service) Fulfill(ctx context.Context, request FulfillRequest) (string, error) {
 	if err := request.validate(); err != nil {
 		return "", err
 	}
+	request.RunID = runid.From(ctx)
 	var result FulfillResult
 	if err := s.db.RPC(ctx, "fulfill_wallet_order", request, &result); err != nil {
 		return "", err
@@ -104,6 +108,8 @@ type FulfillRequest struct {
 	RazorpayOrderID     string `json:"p_razorpay_order_id"`
 	IdempotencyKey      string `json:"p_idempotency_key"`
 	RefundWindowMinutes int    `json:"p_refund_window_minutes"`
+	// RunID is filled in by Fulfill from the surrounding run, not by callers.
+	RunID string `json:"p_run_id,omitempty"`
 }
 
 func (r FulfillRequest) validate() error {

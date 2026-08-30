@@ -29,6 +29,22 @@ export type Point = { label: string; value: number };
 
 export type ProductTotal = { name: string; count: number; value: number };
 
+/** LedgerRow is one wallet movement, used to reconcile the revenue figures. */
+export type LedgerRow = {
+  order_id: string | null;
+  entry_type: string;
+  amount_paise: number;
+};
+
+/** OfferRow is one priced offer from the trail, used for the attach rate. */
+export type OfferRow = {
+  run_id: string | null;
+  payload: { bundle_name?: string | null } | null;
+};
+
+/** TrailRow ties a settled order back to the run that earned it. */
+export type TrailRow = { run_id: string | null; order_id: string | null };
+
 export type Figures = {
   uplift: number;
   settledCount: number;
@@ -37,6 +53,13 @@ export type Figures = {
   margin: number;
   marginPct: number;
   pricedCount: number;
+  attachRate: number;
+  attachedCount: number;
+  offersPriced: number;
+  ledgerNet: number;
+  ledgerDifference: number;
+  reconciled: boolean;
+  runByOrder: Record<string, string>;
   salesOverTime: Point[];
   topProducts: ProductTotal[];
   lowStock: ProductRow[];
@@ -54,12 +77,17 @@ function day(iso: string): string {
 /**
  * summarize reduces the raw rows to the figures the operations page shows.
  * An order whose product carries no cost floor is left out of the margin
- * rather than counted at a guessed cost.
+ * rather than counted at a guessed cost. The wallet movements are used to
+ * reconcile the sales figures against the money that actually moved, so a
+ * disagreement is visible rather than hidden behind a matching total.
  */
 export function summarize(
   orders: OrderRow[],
   products: ProductRow[],
   revenue: RevenueRow[],
+  ledger: LedgerRow[] = [],
+  offers: OfferRow[] = [],
+  trail: TrailRow[] = [],
 ): Figures {
   const productById = new Map(products.map((product) => [product.id, product]));
   const fulfilled = orders.filter((order) => settled(order.status));
@@ -101,14 +129,55 @@ export function summarize(
     perProduct.set(order.product_id, entry);
   }
 
+  const settledValue = fulfilled.reduce(
+    (sum, order) => sum + order.amount_paise,
+    0,
+  );
+  const debits = ledger.filter(
+    (row) => row.entry_type === "purchase_debit",
+  );
+  // Only movements for orders in this same window are compared. Reading a wider
+  // slice of the ledger than of the orders would otherwise show a disagreement
+  // that is only a difference in how much was read.
+  const known = new Set(orders.map((order) => order.id));
+  const inWindow = debits.filter(
+    (row) => row.order_id !== null && known.has(row.order_id),
+  );
+  const ledgerNet = inWindow.reduce((sum, row) => sum + row.amount_paise, 0);
+  const refundedIds = new Set(refunded.map((order) => order.id));
+  const debitedButRefunded = inWindow
+    .filter((row) => row.order_id !== null && refundedIds.has(row.order_id))
+    .reduce((sum, row) => sum + row.amount_paise, 0);
+
+  const attachedCount = offers.filter(
+    (offer) => (offer.payload?.bundle_name ?? "").trim() !== "",
+  ).length;
+
+  const runByOrder: Record<string, string> = {};
+  for (const row of trail) {
+    if (row.order_id && row.run_id) {
+      runByOrder[row.order_id] = row.run_id;
+    }
+  }
+
   return {
     uplift: revenue.reduce((sum, row) => sum + (row.uplift_paise ?? 0), 0),
     settledCount: fulfilled.length,
-    settledValue: fulfilled.reduce((sum, order) => sum + order.amount_paise, 0),
+    settledValue,
     refundedCount: refunded.length,
     margin,
     marginPct: pricedValue > 0 ? Math.round((margin / pricedValue) * 100) : 0,
     pricedCount: priced.length,
+    attachRate:
+      offers.length > 0
+        ? Math.round((attachedCount / offers.length) * 100)
+        : 0,
+    attachedCount,
+    offersPriced: offers.length,
+    ledgerNet,
+    ledgerDifference: ledgerNet - debitedButRefunded - settledValue,
+    reconciled: ledgerNet - debitedButRefunded === settledValue,
+    runByOrder,
     salesOverTime: [...perDay.entries()]
       .slice(-10)
       .map(([label, value]) => ({ label, value })),
