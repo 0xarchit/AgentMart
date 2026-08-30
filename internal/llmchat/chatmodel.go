@@ -214,6 +214,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 		// tools to call, so the answer function could not be the only legal move
 		// on the first ask. Ask once more with the answer as the only move left.
 		if structured && answeredWithoutTheShape(response) {
+			countShapeReAsk()
 			forced, buildErr := m.buildRequest(req, true)
 			if buildErr != nil {
 				yield(nil, failure.Reasoning(buildErr))
@@ -471,7 +472,7 @@ func (m *Model) buildRequest(req *model.LLMRequest, forceAnswer bool) ([]byte, e
 	if wantsStructuredOutput(req) {
 		answer := tool{Type: "function", Function: toolFunction{
 			Name:        structuredOutputTool,
-			Description: "Give your final answer through this function. Every field is required.",
+			Description: "Give your final answer through this function. Fill every field the schema marks required.",
 			Parameters:  schemaAsMap(req.Config.ResponseSchema),
 		}}
 		hadOtherTools := len(out.Tools) > 0
@@ -624,4 +625,26 @@ func schemaAsMap(schema *genai.Schema) map[string]any {
 		out["items"] = schemaAsMap(schema.Items)
 	}
 	return out
+}
+
+// Shape re-asks are counted so a run can report how often a model answered
+// without the shape it was asked for, instead of the number being arguable.
+var (
+	shapeMu     sync.Mutex
+	shapeReAsks int
+)
+
+// countShapeReAsk records one answer that arrived without its shape.
+func countShapeReAsk() {
+	shapeMu.Lock()
+	defer shapeMu.Unlock()
+	shapeReAsks++
+}
+
+// ShapeReAsks reports how many answers so far arrived without the shape they
+// were asked for and had to be asked again.
+func ShapeReAsks() int {
+	shapeMu.Lock()
+	defer shapeMu.Unlock()
+	return shapeReAsks
 }

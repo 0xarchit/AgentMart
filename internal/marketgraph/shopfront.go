@@ -72,7 +72,7 @@ type shopfrontAnswer struct {
 		Pitch     string `json:"pitch"`
 		Includes  string `json:"includes,omitempty"`
 	} `json:"options"`
-	Closing string `json:"closing,omitempty"`
+	Closing string `json:"closing"`
 }
 
 // buildShopfront creates the shop-owner agent.
