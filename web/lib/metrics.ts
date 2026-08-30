@@ -133,10 +133,19 @@ export function summarize(
     (sum, order) => sum + order.amount_paise,
     0,
   );
-  const debits = ledger.filter((row) => row.entry_type === "purchase_debit");
-  const ledgerNet = debits.reduce((sum, row) => sum + row.amount_paise, 0);
+  const debits = ledger.filter(
+    (row) => row.entry_type === "purchase_debit",
+  );
+  // Only movements for orders in this same window are compared. Reading a wider
+  // slice of the ledger than of the orders would otherwise show a disagreement
+  // that is only a difference in how much was read.
+  const known = new Set(orders.map((order) => order.id));
+  const inWindow = debits.filter(
+    (row) => row.order_id !== null && known.has(row.order_id),
+  );
+  const ledgerNet = inWindow.reduce((sum, row) => sum + row.amount_paise, 0);
   const refundedIds = new Set(refunded.map((order) => order.id));
-  const debitedButRefunded = debits
+  const debitedButRefunded = inWindow
     .filter((row) => row.order_id !== null && refundedIds.has(row.order_id))
     .reduce((sum, row) => sum + row.amount_paise, 0);
 

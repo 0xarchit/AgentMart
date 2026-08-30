@@ -184,6 +184,16 @@ describe("the revenue scoreboard", () => {
     expect(figures.runByOrder).toEqual({ a: "run-one" });
   });
 
+  it("ignores a debit for an order outside the window being shown", () => {
+    const ledger: LedgerRow[] = [
+      { order_id: "a", entry_type: "purchase_debit", amount_paise: 100_000 },
+      { order_id: "older", entry_type: "purchase_debit", amount_paise: 999_000 },
+    ];
+    const figures = summarize([order({ id: "a" })], products, [], ledger);
+    expect(figures.ledgerNet).toBe(100_000);
+    expect(figures.reconciled).toBe(true);
+  });
+
   it("shows no attach rate rather than a false zero when nothing was priced", () => {
     const figures = summarize([], products, []);
     expect(figures.offersPriced).toBe(0);
