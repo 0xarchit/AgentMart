@@ -60,7 +60,7 @@ func New(cfg Config, campaigns CampaignProvider, auditor Auditor) (*Negotiator, 
 }
 
 const strategyInstruction = `You are the merchant's pricing strategist in a live
-live negotiation with a buyer. You receive Facts: the standing ask, the cost floor
+negotiation with a buyer. You receive Facts: the standing ask, the cost floor
 (your absolute minimum), the buyer's counter, the concession schedule's
 min_acceptable_paise for this round, product signals (warranty, trust score,
 stock), any bundle partner, and campaign eligibility for this buyer.
