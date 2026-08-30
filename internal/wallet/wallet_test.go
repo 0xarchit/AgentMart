@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"agentmart/internal/runid"
 	"agentmart/internal/supabase"
 )
 
@@ -136,5 +137,70 @@ func TestFulfillUsesAtomicWalletRPC(t *testing.T) {
 	}
 	if _, err := NewService(db).Fulfill(t.Context(), request); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// fulfilmentSpy answers one fulfilment call and keeps the body it was sent.
+func fulfilmentSpy(t *testing.T, sent *map[string]any) *Service {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(sent); err != nil {
+			t.Fatalf("decode call: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"approved":true,"order_id":"11111111-1111-1111-1111-111111111111"}`))
+	}))
+	t.Cleanup(server.Close)
+	db, err := supabase.NewClient(server.URL, "key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewService(db)
+}
+
+func settlement() FulfillRequest {
+	return FulfillRequest{
+		AccountID: "22222222-2222-2222-2222-222222222222", ProductID: "33333333-3333-3333-3333-333333333333",
+		Quantity: 1, BaseAmountPaise: 45000, FinalAmountPaise: 45000,
+		RazorpayOrderID: "artifact", IdempotencyKey: "key", RefundWindowMinutes: 60,
+	}
+}
+
+func TestAMoneyRowCarriesTheRunItCameFrom(t *testing.T) {
+	var sent map[string]any
+	service := fulfilmentSpy(t, &sent)
+
+	ctx := runid.With(t.Context(), "run-under-test")
+	if _, err := service.Fulfill(ctx, settlement()); err != nil {
+		t.Fatal(err)
+	}
+	if sent["p_run_id"] != "run-under-test" {
+		t.Fatalf("p_run_id = %v, want the run the purchase belongs to: revenue that cannot be traced to a conversation cannot be explained", sent["p_run_id"])
+	}
+}
+
+func TestACallerCannotOverrideTheRunOnAMoneyRow(t *testing.T) {
+	var sent map[string]any
+	service := fulfilmentSpy(t, &sent)
+
+	request := settlement()
+	request.RunID = "a-run-the-caller-invented"
+	if _, err := service.Fulfill(runid.With(t.Context(), "the-real-run"), request); err != nil {
+		t.Fatal(err)
+	}
+	if sent["p_run_id"] != "the-real-run" {
+		t.Fatalf("p_run_id = %v, want the surrounding run", sent["p_run_id"])
+	}
+}
+
+func TestASettlementOutsideAnyRunLeavesTheRunUnset(t *testing.T) {
+	var sent map[string]any
+	service := fulfilmentSpy(t, &sent)
+
+	if _, err := service.Fulfill(t.Context(), settlement()); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := sent["p_run_id"]; present {
+		t.Fatalf("p_run_id was sent as %v, want it omitted so the stored default applies", sent["p_run_id"])
 	}
 }
