@@ -4,6 +4,8 @@ package marketgraph
 import (
 	"testing"
 
+	"google.golang.org/adk/v2/session"
+
 	"agentmart/internal/catalog"
 	"agentmart/internal/negotiation"
 )
@@ -85,5 +87,25 @@ func TestFactsFromCarriesRailsAndTranscript(t *testing.T) {
 	}
 	if facts.BundleName != "CalmSkin Cream" || len(facts.Transcript) == 0 {
 		t.Fatalf("bundle/transcript lost: %+v", facts)
+	}
+}
+
+func TestAnOwnerWithNothingToPitchStillAnswers(t *testing.T) {
+	event := &session.Event{Output: shopfrontAnswer{
+		Greeting: "Nothing on the shelf suits that budget.",
+		Options:  nil,
+	}}
+	answer, err := shopfrontAnswerFrom(event)
+	if err != nil {
+		t.Fatalf("a refusal in words is an answer: %v", err)
+	}
+	if answer.Greeting == "" || len(answer.Options) != 0 {
+		t.Fatalf("answer = %+v, want the words and no options", answer)
+	}
+}
+
+func TestAnUnreadableAnswerIsStillAFault(t *testing.T) {
+	if _, err := shopfrontAnswerFrom(&session.Event{Output: "not an answer at all"}); err == nil {
+		t.Fatal("expected a fault when nothing can be read")
 	}
 }

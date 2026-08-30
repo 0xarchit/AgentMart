@@ -39,6 +39,26 @@ type BrowseOutput struct {
 	Closing  string         `json:"closing,omitempty"`
 }
 
+// nothingFits is the shop owner saying they have nothing to show, which is a
+// real answer and not a fault. It keeps the two opening turns so the buyer can
+// end the conversation cleanly and the trail still reads as a conversation.
+func (s *Server) nothingFits(brief string, budgetPaise int64, spoken string) map[string]any {
+	now := time.Now().UTC()
+	greeting := strings.TrimSpace(spoken)
+	if greeting == "" {
+		greeting = "Nothing I have right now fits that budget."
+	}
+	return map[string]any{
+		"type":     "shortlist",
+		"greeting": greeting,
+		"options":  []BrowseOption{},
+		"transcript": []Turn{
+			{Actor: "buyer", Message: buyerOpening(brief, budgetPaise), At: now},
+			{Actor: "merchant", Message: greeting, At: now},
+		},
+	}
+}
+
 // Shopfront is the merchant's shop-owner voice. Implemented by the merchant
 // reasoning layer; declared here so this package does not import it.
 type Shopfront interface {
@@ -67,19 +87,7 @@ func (s *Server) browse(ctx context.Context, request negotiationRequest) (map[st
 		return nil, fmt.Errorf("look through stock: %w", err)
 	}
 	if len(candidates) == 0 {
-		// An empty shelf is a real answer from a shop owner, not a fault. Saying so
-		// costs nothing and lets the buyer end the conversation cleanly.
-		now := time.Now().UTC()
-		greeting := "Nothing I have right now fits that budget."
-		return map[string]any{
-			"type":     "shortlist",
-			"greeting": greeting,
-			"options":  []BrowseOption{},
-			"transcript": []Turn{
-				{Actor: "buyer", Message: buyerOpening(brief, request.BudgetPaise), At: now},
-				{Actor: "merchant", Message: greeting, At: now},
-			},
-		}, nil
+		return s.nothingFits(brief, request.BudgetPaise, ""), nil
 	}
 
 	shortlist, err := s.shopfront.Shortlist(ctx, BrowseInput{
@@ -93,7 +101,11 @@ func (s *Server) browse(ctx context.Context, request negotiationRequest) (map[st
 	}
 	shortlist.Options = withCatalogTruth(shortlist.Options, candidates)
 	if len(shortlist.Options) == 0 {
-		return nil, fmt.Errorf("shop owner named no product that is actually in stock")
+		// The owner looked at what is affordable and would not pitch any of it for
+		// this brief. That is a judgement, not a fault: a shelf of face cream is
+		// not an answer to someone asking for a trimmer. Pass the refusal on in
+		// the owner's own words when there are any.
+		return s.nothingFits(brief, request.BudgetPaise, shortlist.Greeting), nil
 	}
 
 	now := time.Now().UTC()

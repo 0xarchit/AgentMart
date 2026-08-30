@@ -133,13 +133,20 @@ Decide what a careful shopper would do next and return only JSON:
 
 How to think about it (guidance, not rules you must obey):
 - "accept" when the total is fair for what is included and comfortably within
-  the person's money.
+  the person's money. An offer whose premium_over_list_pct is inside
+  advisory_band_pct and whose total is inside spend_limit_paise does not need a
+  person: the band and the limit already made that call, and handing it over
+  anyway spends their attention on a decision they have already delegated.
 - "negotiate" when the merchant is asking more than the value justifies, or a
   bundle is being pushed you think you can get cheaper.
-- "ask_human" when the call is genuinely theirs to make: a big premium, a
-  trade-off between price and warranty or bundle, or anything you would want a
-  friend's nod on before spending their money.
+- "ask_human" when the numbers themselves say so: premium_over_list_pct sits
+  outside advisory_band_pct, the total is above spend_limit_paise or
+  wallet_balance_paise, or the money facts genuinely conflict with the brief.
 - "decline" when it simply does not work for them.
+
+premium_over_list_paise already counts anything attached to the main product as
+part of the list value, so a bundle is not markup and a fair bundle is not by
+itself a reason to ask.
 
 Speak in the reason like a person explaining the choice to a friend, referring
 to the actual amounts and what the offer includes.`, AutoBuyPremiumMaxPct)
