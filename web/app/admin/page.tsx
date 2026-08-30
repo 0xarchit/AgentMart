@@ -7,10 +7,20 @@ import Link from "next/link";
 import { Bars, Card, Empty, Rows, Stat, TopNav, money } from "../ui";
 import {
   summarize,
+  type LedgerRow,
+  type OfferRow,
   type OrderRow,
   type ProductRow,
   type RevenueRow,
 } from "@/lib/metrics";
+
+/** TrailEvent is one recorded trail row, read once and used three ways. */
+type TrailEvent = {
+  run_id: string | null;
+  order_id: string | null;
+  action: string;
+  payload: { bundle_name?: string | null } | null;
+};
 
 type RunRow = {
   run_id: string;
@@ -36,8 +46,14 @@ export default async function AdminPage() {
   // RLS scopes every table to the caller's own account, so the cross-account
   // admin views must read through the service-role client after the guard.
   const admin = createAdminClient();
-  const [revenueResult, ordersResult, productsResult, runsResult, auditResult] =
-    await Promise.all([
+  const [
+    revenueResult,
+    ordersResult,
+    productsResult,
+    runsResult,
+    auditResult,
+    ledgerResult,
+  ] = await Promise.all([
       admin
         .from("merchant_revenue")
         .select(
@@ -58,15 +74,28 @@ export default async function AdminPage() {
         )
         .order("started_at", { ascending: false })
         .limit(6),
-      admin.from("audit_log").select("id").limit(500),
+      admin
+        .from("audit_log")
+        .select("run_id,order_id,action,payload")
+        .order("created_at", { ascending: false })
+        .limit(500),
+      admin
+        .from("wallet_ledger")
+        .select("order_id,entry_type,amount_paise")
+        .limit(500),
     ]);
 
   const revenue = (revenueResult.data ?? []) as RevenueRow[];
   const orders = (ordersResult.data ?? []) as OrderRow[];
   const products = (productsResult.data ?? []) as ProductRow[];
   const runs = (runsResult.data ?? []) as RunRow[];
-  const auditEvents = auditResult.data?.length ?? 0;
-  const figures = summarize(orders, products, revenue);
+  const trail = (auditResult.data ?? []) as TrailEvent[];
+  const ledger = (ledgerResult.data ?? []) as LedgerRow[];
+  const offers = trail.filter(
+    (event) => event.action === "offer_priced",
+  ) as OfferRow[];
+  const auditEvents = trail.length;
+  const figures = summarize(orders, products, revenue, ledger, offers, trail);
 
   return (
     <main className="min-h-screen bg-paper px-6 py-10">
@@ -105,6 +134,27 @@ export default async function AdminPage() {
             value={String(figures.refundedCount)}
             basis={`${auditEvents} recorded trail event(s)`}
             tone={figures.refundedCount > 0 ? "coral" : undefined}
+          />
+          <Stat
+            label="Bundle attach rate"
+            value={`${figures.attachRate}%`}
+            basis={`${figures.attachedCount} of ${figures.offersPriced} priced offer(s) carried a partner`}
+            tone="moss"
+          />
+          <Stat
+            label="Wallet movements"
+            value={money(figures.ledgerNet)}
+            basis={`${ledger.length} ledger row(s) read`}
+          />
+          <Stat
+            label="Reconciliation"
+            value={figures.reconciled ? "Agrees" : money(figures.ledgerDifference)}
+            basis={
+              figures.reconciled
+                ? "settled value matches the wallet debits"
+                : "settled value and wallet debits disagree"
+            }
+            tone={figures.reconciled ? "moss" : "coral"}
           />
         </div>
 
@@ -197,22 +247,38 @@ export default async function AdminPage() {
           </Card>
         </div>
 
-        <Card title="Revenue ledger" source="Credited rows, newest first">
+        <Card
+          title="Revenue ledger"
+          source="Credited rows, newest first, each opening the run that earned it"
+        >
           <Rows
-            items={revenue.slice(0, 12).map((row) => ({
-              key: row.order_id,
-              left: `Order ${row.order_id.slice(0, 8)}`,
-              right: (
-                <>
-                  <span className="text-ink/60">
-                    {money(row.final_amount_paise)} settled
-                  </span>
-                  <span className="ml-3 font-semibold text-moss">
-                    +{money(row.uplift_paise)}
-                  </span>
-                </>
-              ),
-            }))}
+            items={revenue.slice(0, 12).map((row) => {
+              const run = figures.runByOrder[row.order_id];
+              const label = `Order ${row.order_id.slice(0, 8)}`;
+              return {
+                key: row.order_id,
+                left: run ? (
+                  <Link
+                    className="hover:underline"
+                    href={`/dashboard/runs?run=${run}`}
+                  >
+                    {label}
+                  </Link>
+                ) : (
+                  label
+                ),
+                right: (
+                  <>
+                    <span className="text-ink/60">
+                      {money(row.final_amount_paise)} settled
+                    </span>
+                    <span className="ml-3 font-semibold text-moss">
+                      +{money(row.uplift_paise)}
+                    </span>
+                  </>
+                ),
+              };
+            })}
           />
         </Card>
       </div>
