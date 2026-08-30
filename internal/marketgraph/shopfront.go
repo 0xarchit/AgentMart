@@ -182,13 +182,17 @@ func (n *Negotiator) runShopfront(parent context.Context, payload string) (shopf
 	return shopfrontAnswerFrom(last)
 }
 
+// shopfrontAnswerFrom reads the shop owner's answer out of an event. An answer
+// naming no product is still an answer: an owner who will not pitch what is on
+// the shelf for this brief has judged, and the caller turns that into a spoken
+// refusal. Only an answer that cannot be read at all is a fault.
 func shopfrontAnswerFrom(event *session.Event) (shopfrontAnswer, error) {
 	if event == nil {
 		return shopfrontAnswer{}, fmt.Errorf("shop owner said nothing")
 	}
 	if encoded, err := json.Marshal(event.Output); err == nil {
 		var out shopfrontAnswer
-		if json.Unmarshal(encoded, &out) == nil && len(out.Options) > 0 {
+		if json.Unmarshal(encoded, &out) == nil && answered(out) {
 			return out, nil
 		}
 	}
@@ -198,10 +202,16 @@ func shopfrontAnswerFrom(event *session.Event) (shopfrontAnswer, error) {
 				continue
 			}
 			var out shopfrontAnswer
-			if json.Unmarshal([]byte(part.Text), &out) == nil && len(out.Options) > 0 {
+			if json.Unmarshal([]byte(part.Text), &out) == nil && answered(out) {
 				return out, nil
 			}
 		}
 	}
-	return shopfrontAnswer{}, fmt.Errorf("shop owner named no product")
+	return shopfrontAnswer{}, fmt.Errorf("shop owner said nothing that could be read")
+}
+
+// answered reports whether the owner said something usable: either stock to
+// show or words explaining why there is none.
+func answered(out shopfrontAnswer) bool {
+	return len(out.Options) > 0 || strings.TrimSpace(out.Greeting) != ""
 }

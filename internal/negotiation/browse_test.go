@@ -130,14 +130,38 @@ func TestBrowseDropsProductsTheShopDoesNotHave(t *testing.T) {
 	}
 }
 
-func TestBrowseRefusesWhenNothingRealIsNamed(t *testing.T) {
+func TestBrowseSaysSoWhenNothingRealIsNamed(t *testing.T) {
 	shopfront := &fakeShopfront{answer: BrowseOutput{
-		Options: []BrowseOption{{ProductID: "does-not-exist", Pitch: "hallucinated"}},
+		Greeting: "None of what I can show you suits that.",
+		Options:  []BrowseOption{{ProductID: "does-not-exist", Pitch: "invented"}},
 	}}
 	server := browseServer(t, shopfront)
 
-	if _, err := server.browse(context.Background(), negotiationRequest{Type: "browse", Brief: "trimmer"}); err == nil {
-		t.Fatal("expected a refusal when no named product is in stock")
+	response, err := server.browse(context.Background(), negotiationRequest{Type: "browse", Brief: "trimmer"})
+	if err != nil {
+		t.Fatalf("an owner with nothing to pitch is answering, not failing: %v", err)
+	}
+	if options := response["options"].([]BrowseOption); len(options) != 0 {
+		t.Fatalf("options = %+v, want none", options)
+	}
+	if response["greeting"] != "None of what I can show you suits that." {
+		t.Fatalf("greeting = %v, want the owner's own words", response["greeting"])
+	}
+	if turns := response["transcript"].([]Turn); len(turns) != 2 {
+		t.Fatalf("transcript = %+v, want both opening turns", turns)
+	}
+}
+
+func TestBrowseSpeaksForItselfWhenTheShelfIsBare(t *testing.T) {
+	server := browseServer(t, &fakeShopfront{answer: BrowseOutput{Options: []BrowseOption{}}})
+
+	response, err := server.browse(context.Background(), negotiationRequest{Type: "browse", Brief: "trimmer"})
+	if err != nil {
+		t.Fatalf("browse: %v", err)
+	}
+	greeting, _ := response["greeting"].(string)
+	if strings.TrimSpace(greeting) == "" {
+		t.Fatal("an empty answer still has to say something")
 	}
 }
 
