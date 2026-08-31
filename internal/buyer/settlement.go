@@ -5,7 +5,9 @@ package buyer
 import (
 	"context"
 	"fmt"
+	"strconv"
 
+	"agentmart/internal/runid"
 	"agentmart/internal/wallet"
 )
 
@@ -18,6 +20,7 @@ type SettleRequest struct {
 	BaseAmountPaise  int64
 	FinalAmountPaise int64
 	IdempotencyKey   string
+	HumanApproved    bool
 }
 
 // SettleResult is what a settled purchase leaves behind: the order row it wrote,
@@ -56,7 +59,7 @@ func (w *WalletSettlement) Settle(ctx context.Context, request SettleRequest) (S
 	if len(receipt) > 40 {
 		receipt = receipt[:40]
 	}
-	artifact, err := w.artifacts.CreateWalletArtifact(ctx, request.FinalAmountPaise, receipt, map[string]string{"account_id": request.AccountID, "product_id": request.ProductID, "fulfillment": "wallet"})
+	artifact, err := w.artifacts.CreateWalletArtifact(ctx, request.FinalAmountPaise, receipt, notesFor(ctx, request))
 	if err != nil {
 		return SettleResult{}, err
 	}
@@ -65,4 +68,25 @@ func (w *WalletSettlement) Settle(ctx context.Context, request SettleRequest) (S
 		return SettleResult{}, err
 	}
 	return SettleResult{OrderID: orderID, GatewayOrderID: artifact.ID, Method: "fulfilled_via_wallet"}, nil
+}
+
+// notesFor describes the purchase on the gateway object itself, so the payment
+// record carries the conversation that caused it and how it was authorised
+// rather than being a bare amount that has to be matched up by hand.
+func notesFor(ctx context.Context, request SettleRequest) map[string]string {
+	authorised := "within_standing_limits"
+	if request.HumanApproved {
+		authorised = "approved_by_person"
+	}
+	notes := map[string]string{
+		"account_id":  request.AccountID,
+		"product_id":  request.ProductID,
+		"quantity":    strconv.Itoa(request.Quantity),
+		"fulfillment": "wallet",
+		"authorised":  authorised,
+	}
+	if run := runid.From(ctx); run != "" {
+		notes["run_id"] = run
+	}
+	return notes
 }

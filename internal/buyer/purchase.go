@@ -138,7 +138,7 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		}
 		return PurchaseResult{Reason: decision.Reason, AmountPaise: finalAmount}, nil
 	}
-	settled, err := s.settle.Settle(ctx, SettleRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, IdempotencyKey: request.IdempotencyKey})
+	settled, err := s.settle.Settle(ctx, SettleRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, IdempotencyKey: request.IdempotencyKey, HumanApproved: request.HumanApproved})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
