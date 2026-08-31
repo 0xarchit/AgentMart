@@ -158,6 +158,9 @@ func main() {
 		return
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
+	// Refusals before the gate is consulted leave a row too, so no money path in
+	// the trail is silent.
+	purchaseService.UseFailureTrail(store)
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
 	// A cancellation credits the allowance and then reverses the captured payments
 	// that funded it, so the failure path leaves evidence outside our own tables.
