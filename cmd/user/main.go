@@ -143,7 +143,11 @@ func main() {
 		}()
 	}
 	store := buyer.NewStore(db)
-	gateService, err := gate.New(store, time.Minute)
+	// The freshness window is the price rail. It was never reachable while callers
+	// passed the same instant as both the observation time and now, so this value
+	// only starts mattering here: it is set from the conversation budget, since a
+	// quote can legitimately be a few minutes old inside one shopping run.
+	gateService, err := gate.New(store, 5*time.Minute)
 	if err != nil {
 		logger.Error("user gate configuration failed", "error", err)
 		return
@@ -528,6 +532,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		BaseAmountPaise:  baseAmount,
 		FinalAmountPaise: result.FinalPaise,
 		IdempotencyKey:   fmt.Sprintf("telegram:nl:%d:%d", message.From.ID, message.MessageID),
+		PriceObservedAt:  result.QuotedAt,
 	}
 
 	// The buyer agent itself asked for the human: record a pending approval and

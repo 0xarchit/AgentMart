@@ -317,6 +317,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				Reason:     proposal.Reason,
 				Transcript: proposal.Transcript,
 				ShopTurns:  pick.ShopTranscript,
+				QuotedAt:   time.Now().UTC(),
 			}
 			if proposal.Bundle != nil {
 				offer.BundledPaise = proposal.Bundle.PricePaise * int64(offer.Quantity)
@@ -464,6 +465,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				Quantity: qty, FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
 				Steps: outcome.Steps, SessionID: outcome.SessionID, Transcript: outcome.Transcript,
 				Accepted: outcome.Accepted, NeedsApproval: needsApproval,
+				QuotedAt: outcome.QuotedAt,
 			}, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
@@ -558,6 +560,7 @@ func (s *Service) resultFrom(lastResult *Result, lastOutput any) (Result, error)
 			Steps: outcome.Steps, SessionID: outcome.SessionID,
 			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
 			NeedsApproval: Action(outcome.Action) == ActionAskHuman,
+			QuotedAt:      outcome.QuotedAt,
 		}), nil
 	}
 	// The quote is in hand but nothing settled it. Losing the negotiation is not
@@ -578,6 +581,7 @@ func (s *Service) escalate(offer Offer, why string) Result {
 		Quantity: offer.Quantity, FinalPaise: offer.FinalPaise, SessionID: offer.SessionID,
 		Rationale:  joinReason(offer.Reason, why),
 		Transcript: offer.ShopTurns,
+		QuotedAt:   offer.QuotedAt,
 	})
 }
 
@@ -633,6 +637,7 @@ func outcomeFrom(offer Offer, resolution negotiationclient.Resolution) Outcome {
 		BundledPaise: offer.BundledPaise,
 		SessionID:    resolution.SessionID,
 		FinalPaise:   resolution.FinalAmountPaise,
+		QuotedAt:     offer.QuotedAt,
 		Transcript:   append(append([]negotiation.Turn{}, offer.ShopTurns...), settled...),
 	}
 	if out.FinalPaise == 0 {

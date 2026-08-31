@@ -8,6 +8,7 @@ package shopgraph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/negotiation"
@@ -44,6 +45,9 @@ type Result struct {
 	Transcript    []negotiation.Turn
 	Accepted      bool
 	NeedsApproval bool // informational: premium band crossed on an in-budget offer
+	// QuotedAt is when the quote behind FinalPaise was received, passed to the gate
+	// so a price this run observed too long ago is refused rather than spent.
+	QuotedAt time.Time
 }
 
 // Assessment is the buyer agent's judgement on a merchant offer. The agent,
@@ -117,6 +121,10 @@ type Offer struct {
 	// merchant's session, so they must be carried separately or a settlement
 	// that returns the session transcript would erase them.
 	ShopTurns []negotiation.Turn `json:"-"`
+	// QuotedAt is when this side received the quote. It never travels to a model
+	// and never comes back from one, so it cannot be invented: the gate uses it to
+	// refuse spending against a price this run observed too long ago.
+	QuotedAt time.Time `json:"-"`
 }
 
 // Outcome is the settled negotiation state flowing into finalize.
@@ -135,4 +143,7 @@ type Outcome struct {
 	SessionID    string             `json:"session_id"`
 	Accepted     bool               `json:"accepted"`
 	Transcript   []negotiation.Turn `json:"transcript,omitempty"`
+	// QuotedAt carries the observation time forward from the offer, out of reach of
+	// a model.
+	QuotedAt time.Time `json:"-"`
 }

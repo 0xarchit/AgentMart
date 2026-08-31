@@ -45,6 +45,10 @@ type PurchaseRequest struct {
 	FinalAmountPaise int64
 	IdempotencyKey   string
 	HumanApproved    bool
+	// PriceObservedAt is when the quote being spent against was received. Left
+	// zero, the gate treats the price as observed now, which is right for a
+	// purchase priced straight from the catalog and wrong for a negotiated quote.
+	PriceObservedAt time.Time
 }
 
 // PurchaseResult reports the stable purchase outcome.
@@ -120,7 +124,13 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	now := s.now()
-	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: now, Now: now})
+	// A quote carries when it was seen. Without one the price is being read from
+	// the catalog in this call, so now is the honest observation time.
+	observed := request.PriceObservedAt
+	if observed.IsZero() {
+		observed = now
+	}
+	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: observed, Now: now})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
