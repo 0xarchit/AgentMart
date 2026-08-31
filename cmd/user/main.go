@@ -155,6 +155,9 @@ func main() {
 	}
 	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
+	// A cancellation credits the allowance and then reverses the captured payments
+	// that funded it, so the failure path leaves evidence outside our own tables.
+	refundService.UseReversal(buyer.NewGatewayReversal(store, artifactClient), store)
 	buyerModel := buyerreasoning.FromEnv("USER")
 	reasoningService, err := buyerreasoning.New(ctx, buyerModel)
 	if err != nil {

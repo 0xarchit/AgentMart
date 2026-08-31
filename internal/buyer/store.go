@@ -62,6 +62,73 @@ func (s *Store) insertTrail(ctx context.Context, row map[string]any) error {
 	return s.db.Insert(ctx, "audit_log", row, nil)
 }
 
+// FundingPayments lists the captured payments that funded an allowance, oldest
+// first, so a reversal draws them down in the order the money arrived.
+func (s *Store) FundingPayments(ctx context.Context, accountID string) ([]FundingPayment, error) {
+	query := url.Values{
+		"select":              {"razorpay_payment_id,amount_paise"},
+		"account_id":          {"eq." + accountID},
+		"entry_type":          {"eq.topup"},
+		"razorpay_payment_id": {"not.is.null"},
+		"order":               {"created_at.asc"},
+	}
+	var rows []struct {
+		PaymentID   string `json:"razorpay_payment_id"`
+		AmountPaise int64  `json:"amount_paise"`
+	}
+	if err := s.db.Get(ctx, "wallet_ledger", query, &rows); err != nil {
+		return nil, err
+	}
+	payments := make([]FundingPayment, 0, len(rows))
+	for _, row := range rows {
+		payments = append(payments, FundingPayment{PaymentID: row.PaymentID, AmountPaise: row.AmountPaise})
+	}
+	return payments, nil
+}
+
+// RecordReversal stores the gateway refunds a cancellation produced on the order
+// and writes one trail row for them. A shortfall becomes the reason rather than
+// being dropped, so an incomplete reversal is visible in the trail.
+func (s *Store) RecordReversal(ctx context.Context, accountID, orderID string, result ReverseResult) error {
+	if len(result.RefundIDs) > 0 {
+		filter := url.Values{"id": {"eq." + orderID}}
+		payload := map[string]any{"razorpay_refund_ids": result.RefundIDs}
+		if err := s.db.Update(ctx, "orders", filter, payload, nil); err != nil {
+			return err
+		}
+	}
+	reason := "reversed at the payment gateway"
+	if result.ShortfallPaise > 0 {
+		reason = fmt.Sprintf("reversed short of the credited amount by %d paise", result.ShortfallPaise)
+	}
+	return s.insertTrail(ctx, map[string]any{
+		"account_id": accountID,
+		"order_id":   orderID,
+		"actor":      "gate",
+		"action":     "refund_reversed",
+		"reason":     reason,
+		"payload": map[string]any{
+			"refund_ids":      result.RefundIDs,
+			"amount_paise":    result.ReversedPaise,
+			"shortfall_paise": result.ShortfallPaise,
+		},
+	})
+}
+
+// RecordReversalFailure records that the internal credit succeeded and the gateway
+// reversal did not, because a money path that leaves no row is the one thing this
+// trail is not allowed to do.
+func (s *Store) RecordReversalFailure(ctx context.Context, accountID, orderID string, cause error) error {
+	return s.insertTrail(ctx, map[string]any{
+		"account_id": accountID,
+		"order_id":   orderID,
+		"actor":      "gate",
+		"action":     "refund_reversal_failed",
+		"reason":     "allowance credited, gateway reversal did not complete",
+		"payload":    map[string]any{"cause": cause.Error()},
+	})
+}
+
 // RecordGateDecision persists every purchase approval and rejection.
 func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) error {
 	action := "gate_rejected"

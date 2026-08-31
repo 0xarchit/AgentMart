@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"agentmart/internal/razorpay"
+	"agentmart/internal/runid"
 	"agentmart/internal/wallet"
 )
 
@@ -64,5 +65,55 @@ func TestALongIdempotencyKeyStillYieldsAnAcceptableReceipt(t *testing.T) {
 func TestSettlingWithNoPathRefusesInsteadOfPanicking(t *testing.T) {
 	if _, err := (&WalletSettlement{}).Settle(t.Context(), SettleRequest{FinalAmountPaise: 100}); err == nil {
 		t.Fatal("a settlement with no path should refuse")
+	}
+}
+
+func TestTheGatewayObjectCarriesTheRunThatCausedIt(t *testing.T) {
+	artifacts := &receiptRecorder{}
+	settlement := NewWalletSettlement(artifacts, &fakeWallet{})
+	ctx := runid.With(t.Context(), "run-42")
+
+	_, err := settlement.Settle(ctx, SettleRequest{AccountID: "account", ProductID: "product", Quantity: 3, FinalAmountPaise: 300, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifacts.notes["run_id"] != "run-42" {
+		t.Fatalf("run_id = %q, want the run that caused the purchase", artifacts.notes["run_id"])
+	}
+	if artifacts.notes["quantity"] != "3" {
+		t.Fatalf("quantity = %q, want 3", artifacts.notes["quantity"])
+	}
+}
+
+func TestTheGatewayObjectSaysWhoAuthorisedTheSpend(t *testing.T) {
+	artifacts := &receiptRecorder{}
+	settlement := NewWalletSettlement(artifacts, &fakeWallet{})
+
+	_, err := settlement.Settle(t.Context(), SettleRequest{AccountID: "account", ProductID: "product", Quantity: 1, FinalAmountPaise: 100, IdempotencyKey: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifacts.notes["authorised"] != "within_standing_limits" {
+		t.Fatalf("authorised = %q for an unattended spend", artifacts.notes["authorised"])
+	}
+
+	approved := &receiptRecorder{}
+	if _, err := NewWalletSettlement(approved, &fakeWallet{}).Settle(t.Context(), SettleRequest{AccountID: "account", ProductID: "product", Quantity: 1, FinalAmountPaise: 100, IdempotencyKey: "two", HumanApproved: true}); err != nil {
+		t.Fatal(err)
+	}
+	if approved.notes["authorised"] != "approved_by_person" {
+		t.Fatalf("authorised = %q after a person approved it", approved.notes["authorised"])
+	}
+}
+
+func TestNoRunOnTheContextLeavesTheKeyOffRatherThanEmpty(t *testing.T) {
+	artifacts := &receiptRecorder{}
+	settlement := NewWalletSettlement(artifacts, &fakeWallet{})
+
+	if _, err := settlement.Settle(t.Context(), SettleRequest{AccountID: "account", ProductID: "product", Quantity: 1, FinalAmountPaise: 100, IdempotencyKey: "key"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := artifacts.notes["run_id"]; present {
+		t.Fatalf("notes carry an empty run id: %v", artifacts.notes)
 	}
 }

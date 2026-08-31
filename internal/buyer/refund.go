@@ -13,6 +13,12 @@ type walletRefunder interface {
 	Refund(context.Context, wallet.RefundRequest) (wallet.RefundResult, error)
 }
 
+// reversalRecorder writes what the gateway did, or did not do, to the trail.
+type reversalRecorder interface {
+	RecordReversal(context.Context, string, string, ReverseResult) error
+	RecordReversalFailure(context.Context, string, string, error) error
+}
+
 // RefundRequest identifies a Telegram refund attempt.
 type RefundRequest struct {
 	TelegramID int64
@@ -21,24 +27,37 @@ type RefundRequest struct {
 	Reason     string
 }
 
-// RefundResult reports the wallet refund outcome.
+// RefundResult reports the wallet refund outcome, plus what the gateway confirmed
+// when a reversal path is configured.
 type RefundResult struct {
-	Approved    bool
-	Duplicate   bool
-	OrderID     string
-	AmountPaise int64
-	Reason      string
+	Approved       bool
+	Duplicate      bool
+	OrderID        string
+	AmountPaise    int64
+	Reason         string
+	RefundIDs      []string
+	ShortfallPaise int64
 }
 
-// RefundService coordinates account lookup and wallet-only refunds.
+// RefundService coordinates account lookup, the internal credit, and the gateway
+// reversal that leaves evidence for it.
 type RefundService struct {
 	accounts accountReader
 	wallet   walletRefunder
+	reversal Reversal
+	recorder reversalRecorder
 }
 
 // NewRefundService constructs a buyer refund service.
 func NewRefundService(accounts accountReader, walletService walletRefunder) *RefundService {
 	return &RefundService{accounts: accounts, wallet: walletService}
+}
+
+// UseReversal attaches the gateway reversal. Without it the allowance credit is
+// the whole refund, which is how this behaved before.
+func (s *RefundService) UseReversal(reversal Reversal, recorder reversalRecorder) {
+	s.reversal = reversal
+	s.recorder = recorder
 }
 
 // Refund resolves the Telegram wallet and applies one idempotent credit.
@@ -59,5 +78,33 @@ func (s *RefundService) Refund(ctx context.Context, request RefundRequest) (Refu
 	if err != nil {
 		return RefundResult{}, err
 	}
-	return RefundResult{Approved: result.Approved, Duplicate: result.Duplicate, OrderID: result.OrderID, AmountPaise: result.AmountPaise, Reason: result.Reason}, nil
+	outcome := RefundResult{Approved: result.Approved, Duplicate: result.Duplicate, OrderID: result.OrderID, AmountPaise: result.AmountPaise, Reason: result.Reason}
+	if !result.Approved || result.Duplicate || s.reversal == nil {
+		return outcome, nil
+	}
+
+	// The allowance is already credited, so a gateway refusal must not fail the
+	// refund the person was promised. It is recorded and the credit stands.
+	reversed, reverseErr := s.reversal.Reverse(ctx, ReverseRequest{
+		AccountID:      account.ID,
+		OrderID:        result.OrderID,
+		AmountPaise:    result.AmountPaise,
+		IdempotencyKey: fmt.Sprintf("telegram:%d:refund:%d", request.TelegramID, request.MessageID),
+		Reason:         strings.TrimSpace(request.Reason),
+	})
+	if reverseErr != nil && s.recorder != nil {
+		if err := s.recorder.RecordReversalFailure(ctx, account.ID, result.OrderID, reverseErr); err != nil {
+			return outcome, err
+		}
+	}
+	if len(reversed.RefundIDs) > 0 || reversed.ShortfallPaise > 0 {
+		if s.recorder != nil {
+			if err := s.recorder.RecordReversal(ctx, account.ID, result.OrderID, reversed); err != nil {
+				return outcome, err
+			}
+		}
+		outcome.RefundIDs = reversed.RefundIDs
+		outcome.ShortfallPaise = reversed.ShortfallPaise
+	}
+	return outcome, nil
 }

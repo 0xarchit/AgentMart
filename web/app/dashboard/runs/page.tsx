@@ -30,6 +30,7 @@ type TimelineRow = {
   reason: string | null;
   order_id: string | null;
   amount_paise: number | null;
+  gateway_order_id: string | null;
   payload: { run?: { transcript?: Turn[] } } | null;
 };
 
@@ -73,7 +74,7 @@ export default async function RunsPage({
     selected
       ? supabase
           .from("run_timeline")
-          .select("run_id,at,actor,action,reason,order_id,amount_paise,payload")
+          .select("run_id,at,actor,action,reason,order_id,amount_paise,payload,gateway_order_id")
           .eq("run_id", selected)
           .order("at", { ascending: true })
       : Promise.resolve({ data: [] as TimelineRow[] }),
@@ -254,6 +255,14 @@ export default async function RunsPage({
                         </p>
                         {row.reason && (
                           <p className="mt-1 text-ink/70">{row.reason}</p>
+                        )}
+                        {row.gateway_order_id && (
+                          <p className="mt-2 text-xs text-ink/70">
+                            Gateway order{" "}
+                            <code className="select-all rounded bg-mint/60 px-1 py-0.5 font-mono text-ink">
+                              {row.gateway_order_id}
+                            </code>
+                          </p>
                         )}
                       </li>
                     ))}
