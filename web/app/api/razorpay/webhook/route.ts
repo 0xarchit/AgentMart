@@ -27,30 +27,64 @@ export async function POST(request: Request) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-razorpay-signature") ?? "";
   try {
-    if (!verifyWebhookSignature(rawBody, signature)) return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+    if (!verifyWebhookSignature(rawBody, signature))
+      return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "webhook verification failed" }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "webhook verification failed",
+      },
+      { status: 500 },
+    );
   }
   let event: {
     event?: string;
-    payload?: { payment?: { entity?: CapturedPayment }; refund?: { entity?: GatewayRefund } };
+    payload?: {
+      payment?: { entity?: CapturedPayment };
+      refund?: { entity?: GatewayRefund };
+    };
   };
   try {
     event = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json({ error: "invalid webhook JSON" }, { status: 400 });
+    return NextResponse.json(
+      { error: "invalid webhook JSON" },
+      { status: 400 },
+    );
   }
 
   // A failure the gateway reports is worth more than one we generate ourselves, so
   // it is recorded against the run that caused it instead of being discarded.
-  if (event.event === "payment.failed" || event.event === "refund.processed" || event.event === "refund.failed") {
-    return recordGatewayEvent(event.event, event.payload?.payment?.entity, event.payload?.refund?.entity);
+  if (
+    event.event === "payment.failed" ||
+    event.event === "refund.processed" ||
+    event.event === "refund.failed"
+  ) {
+    return recordGatewayEvent(
+      event.event,
+      event.payload?.payment?.entity,
+      event.payload?.refund?.entity,
+    );
   }
-  if (event.event !== "payment.captured") return NextResponse.json({ received: true, ignored: true });
+  if (event.event !== "payment.captured")
+    return NextResponse.json({ received: true, ignored: true });
   const payment = event.payload?.payment?.entity;
   const accountID = payment?.notes?.account_id;
-  if (!payment || payment.status !== "captured" || !accountID || !payment.order_id || !Number.isInteger(payment.amount) || payment.amount <= 0) {
-    return NextResponse.json({ error: "incomplete captured payment" }, { status: 400 });
+  if (
+    !payment ||
+    payment.status !== "captured" ||
+    !accountID ||
+    !payment.order_id ||
+    !Number.isInteger(payment.amount) ||
+    payment.amount <= 0
+  ) {
+    return NextResponse.json(
+      { error: "incomplete captured payment" },
+      { status: 400 },
+    );
   }
   const admin = createAdminClient();
   const { error } = await admin.rpc("credit_wallet_topup", {
@@ -60,21 +94,29 @@ export async function POST(request: Request) {
     p_razorpay_order_id: payment.order_id,
     p_razorpay_payment_id: payment.id,
   });
-  if (error) return NextResponse.json({ error: error.message }, { status: 409 });
+  if (error)
+    return NextResponse.json({ error: error.message }, { status: 409 });
   return NextResponse.json({ received: true });
 }
 
 // recordGatewayEvent writes a gateway reported outcome to the trail. It never
 // moves money: a failed payment credits nothing, and a reversal was already
 // credited internally before it was ever sent to the gateway.
-async function recordGatewayEvent(name: string, payment?: CapturedPayment, refund?: GatewayRefund) {
+async function recordGatewayEvent(
+  name: string,
+  payment?: CapturedPayment,
+  refund?: GatewayRefund,
+) {
   const entity = refund ?? payment;
   const accountID = entity?.notes?.account_id;
-  if (!entity || !accountID) return NextResponse.json({ received: true, ignored: true });
+  if (!entity || !accountID)
+    return NextResponse.json({ received: true, ignored: true });
   const reason =
     payment?.error_description ??
     payment?.error_reason ??
-    (name === "refund.processed" ? "the gateway completed the reversal" : "the gateway reported an outcome");
+    (name === "refund.processed"
+      ? "the gateway completed the reversal"
+      : "the gateway reported an outcome");
   const admin = createAdminClient();
   const { error } = await admin.from("audit_log").insert({
     account_id: accountID,
@@ -83,8 +125,13 @@ async function recordGatewayEvent(name: string, payment?: CapturedPayment, refun
     actor: "gateway",
     action: name.replace(".", "_"),
     reason,
-    payload: { id: entity.id, amount_paise: entity.amount, status: entity.status },
+    payload: {
+      id: entity.id,
+      amount_paise: entity.amount,
+      status: entity.status,
+    },
   });
-  if (error) return NextResponse.json({ error: error.message }, { status: 409 });
+  if (error)
+    return NextResponse.json({ error: error.message }, { status: 409 });
   return NextResponse.json({ received: true, recorded: name });
 }
