@@ -129,6 +129,22 @@ func (s *Store) RecordReversalFailure(ctx context.Context, accountID, orderID st
 	})
 }
 
+// RecordPurchaseFailure writes a purchase refusal that never reached the gate, or
+// reached it and could not move the money. The account is left unresolved because
+// the failure may be the account lookup itself.
+func (s *Store) RecordPurchaseFailure(ctx context.Context, telegramID int64, productID string, quantity int, cause error) error {
+	return s.insertTrail(ctx, map[string]any{
+		"actor":  "buyer_agent",
+		"action": "purchase_failed",
+		"reason": cause.Error(),
+		"payload": map[string]any{
+			"telegram_id": telegramID,
+			"product_id":  productID,
+			"quantity":    quantity,
+		},
+	})
+}
+
 // RecordGateDecision persists every purchase approval and rejection.
 func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) error {
 	action := "gate_rejected"

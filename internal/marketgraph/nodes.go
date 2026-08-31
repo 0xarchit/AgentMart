@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"agentmart/internal/failure"
@@ -34,7 +35,24 @@ type Negotiator struct {
 	campaigns CampaignProvider
 	auditor   Auditor
 	sessions  atomic.Uint64
-	pending   atomic.Pointer[negotiation.CounterInput]
+	// inflight holds each caller's input against the session its own graph pass
+	// runs under. One shared slot would let two buyers negotiating at the same
+	// time price against each other's floor, ask and bid.
+	inflight sync.Map
+}
+
+// inputFor returns the negotiation input belonging to the graph pass this node is
+// running inside, identified by its own session rather than by whatever ran last.
+func (n *Negotiator) inputFor(sessionID string) (negotiation.CounterInput, error) {
+	stored, ok := n.inflight.Load(sessionID)
+	if !ok {
+		return negotiation.CounterInput{}, fmt.Errorf("no negotiation input in flight")
+	}
+	input, ok := stored.(*negotiation.CounterInput)
+	if !ok || input == nil {
+		return negotiation.CounterInput{}, fmt.Errorf("no negotiation input in flight")
+	}
+	return *input, nil
 }
 
 // New builds the merchant graph. Returns (nil, nil) when no model is
@@ -103,12 +121,12 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 	// campaign/loyalty layer. Pure data assembly: no judgement here.
 	campaignNode := workflow.NewFunctionNode[string, Facts]("campaign_eligibility",
 		func(ctx agent.Context, _ string) (Facts, error) {
-			input := n.pending.Load()
-			if input == nil {
-				return Facts{}, fmt.Errorf("no negotiation input in flight")
+			input, err := n.inputFor(ctx.SessionID())
+			if err != nil {
+				return Facts{}, err
 			}
-			facts := factsFrom(*input)
-			tier, pct, notes := n.eligibility(ctx, *input)
+			facts := factsFrom(input)
+			tier, pct, notes := n.eligibility(ctx, input)
 			facts.LoyaltyTier, facts.LoyaltyDiscountPct = tier, pct
 			facts.CampaignNotes = notes
 			return facts, nil
@@ -124,12 +142,12 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 	// asked for into the rails and explains any correction.
 	guardNode := workflow.NewFunctionNode[StrategyChoice, Decision]("price_guard",
 		func(ctx agent.Context, choice StrategyChoice) (Decision, error) {
-			input := n.pending.Load()
-			if input == nil {
-				return Decision{}, fmt.Errorf("no negotiation input in flight")
+			input, err := n.inputFor(ctx.SessionID())
+			if err != nil {
+				return Decision{}, err
 			}
-			facts := factsFrom(*input)
-			amount, note := clampToRails(choice.AmountPaise, facts.FloorPaise, facts.BuyerPaise, facts.AskPaise)
+			facts := factsFrom(input)
+			amount, note := clampToRails(choice.AmountPaise, facts.FloorPaise, facts.BuyerPaise, facts.MinAcceptablePaise, facts.AskPaise)
 			strategy := choice.Strategy
 			if strategy == "" {
 				strategy = StrategyConcede
@@ -148,7 +166,7 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 			// Fail closed on auditing, exactly like the Gate: a price the
 			// merchant cannot explain in the trail never reaches the buyer.
 			if n.auditor != nil {
-				if err := n.auditor.RecordOfferDecision(ctx, *input, facts, decision); err != nil {
+				if err := n.auditor.RecordOfferDecision(ctx, input, facts, decision); err != nil {
 					return Decision{}, fmt.Errorf("audit merchant offer: %w", err)
 				}
 			}
@@ -227,8 +245,11 @@ func (n *Negotiator) Decide(parent context.Context, input negotiation.CounterInp
 	if n == nil || n.graph == nil {
 		return Decision{}, fmt.Errorf("merchant graph is not configured")
 	}
-	n.pending.Store(&input)
-	defer n.pending.Store(nil)
+	// The input is keyed by this pass's own session, so concurrent callers cannot
+	// read each other's rails.
+	sessionID := fmt.Sprintf("merchant-%d", n.sessions.Add(1))
+	n.inflight.Store(sessionID, &input)
+	defer n.inflight.Delete(sessionID)
 
 	run, err := runner.NewInMemory("agentmart-merchant", n.graph)
 	if err != nil {
@@ -237,7 +258,6 @@ func (n *Negotiator) Decide(parent context.Context, input negotiation.CounterInp
 	ctx, cancel := context.WithTimeout(parent, graphTimeout)
 	defer cancel()
 
-	sessionID := fmt.Sprintf("merchant-%d", n.sessions.Add(1))
 	var last any
 	events := 0
 	for event, runErr := range run.Run(ctx, "merchant", sessionID,

@@ -45,6 +45,10 @@ type PurchaseRequest struct {
 	FinalAmountPaise int64
 	IdempotencyKey   string
 	HumanApproved    bool
+	// PriceObservedAt is when the quote being spent against was received. Left
+	// zero, the gate treats the price as observed now, which is right for a
+	// purchase priced straight from the catalog and wrong for a negotiated quote.
+	PriceObservedAt time.Time
 }
 
 // PurchaseResult reports the stable purchase outcome.
@@ -68,7 +72,14 @@ type PurchaseService struct {
 	settle    Settlement
 	approvals approvalCreator
 	resolver  approvalResolver
+	failures  purchaseFailureRecorder
 	now       func() time.Time
+}
+
+// purchaseFailureRecorder writes the refusals that happen before the gate is
+// consulted, or after it approved and the money would not move.
+type purchaseFailureRecorder interface {
+	RecordPurchaseFailure(context.Context, int64, string, int, error) error
 }
 
 // NewPurchaseService constructs the straight-through buyer workflow, settling
@@ -91,8 +102,31 @@ func (s *PurchaseService) UseSettlement(settlement Settlement) {
 	}
 }
 
-// Purchase evaluates and fulfills one wallet-backed order.
+// UseFailureTrail records purchase refusals that never reach the gate. Without it
+// the sequence behaves exactly as before, which is what the tests that construct
+// this service directly rely on.
+func (s *PurchaseService) UseFailureTrail(recorder purchaseFailureRecorder) {
+	if recorder != nil {
+		s.failures = recorder
+	}
+}
+
+// Purchase evaluates and fulfills one wallet-backed order. It is the audit
+// boundary: every refusal leaves a row, including the ones that happen before the
+// gate is consulted, because a money path that records nothing is the one thing
+// this trail is not allowed to contain.
 func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest) (PurchaseResult, error) {
+	result, err := s.attempt(ctx, request)
+	if err != nil && s.failures != nil {
+		if recordErr := s.failures.RecordPurchaseFailure(ctx, request.TelegramID, request.ProductID, request.Quantity, err); recordErr != nil {
+			return PurchaseResult{}, fmt.Errorf("%w (recording it also failed: %v)", err, recordErr)
+		}
+	}
+	return result, err
+}
+
+// attempt is the sequence itself. It returns errors freely; Purchase records them.
+func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) (PurchaseResult, error) {
 	if request.TelegramID <= 0 || strings.TrimSpace(request.ProductID) == "" || request.Quantity <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" {
 		return PurchaseResult{}, fmt.Errorf("Telegram id, product id, quantity, and idempotency key are required")
 	}
@@ -120,7 +154,13 @@ func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest)
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	now := s.now()
-	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: now, Now: now})
+	// A quote carries when it was seen. Without one the price is being read from
+	// the catalog in this call, so now is the honest observation time.
+	observed := request.PriceObservedAt
+	if observed.IsZero() {
+		observed = now
+	}
+	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: observed, Now: now})
 	if err != nil {
 		return PurchaseResult{}, err
 	}

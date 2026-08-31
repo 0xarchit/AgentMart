@@ -104,16 +104,28 @@ const (
 // clampToRails keeps any proposed amount inside [minFloor, ask] and reports
 // what it changed. This is the bounded-money guarantee: the LLM cannot sell at
 // a loss, cannot exceed its own ask, and cannot undercut the buyer's own bid.
-func clampToRails(proposed, floor, buyerPaise, ask int64) (int64, string) {
-	low := floor
+// clampToRails is the money boundary. The strategist proposes; this decides. The
+// low bound is whichever of the cost floor, the buyer's own bid and the round's
+// concession floor is highest, and nothing may exceed the standing ask. Naming the
+// bound that bit is what makes the correction explainable in the trail.
+func clampToRails(proposed, floor, buyerPaise, minAcceptable, ask int64) (int64, string) {
+	low, bound := floor, "the cost floor"
 	if buyerPaise > low {
-		low = buyerPaise
+		low, bound = buyerPaise, "the buyer's own bid"
+	}
+	if minAcceptable > low {
+		low, bound = minAcceptable, "this round's concession floor"
+	}
+	// A low bound above the standing ask would let the merchant charge more than
+	// it asked for, so the ask wins over every floor.
+	if ask > 0 && low > ask {
+		low, bound = ask, "the standing ask"
 	}
 	switch {
 	case ask <= 0:
-		return low, "no standing ask; held at floor"
+		return low, "no standing ask; held at " + bound
 	case proposed < low:
-		return low, fmt.Sprintf("raised to %d: strategy amount was below the cost floor or the buyer's own bid", low)
+		return low, fmt.Sprintf("raised to %d: strategy amount was below %s", low, bound)
 	case proposed > ask:
 		return ask, fmt.Sprintf("lowered to %d: strategy amount exceeded the standing ask", ask)
 	default:
