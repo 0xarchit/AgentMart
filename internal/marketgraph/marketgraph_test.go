@@ -2,6 +2,7 @@
 package marketgraph
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/session"
@@ -12,24 +13,49 @@ import (
 
 func TestClampToRailsNeverSellsBelowFloor(t *testing.T) {
 	// Strategy tried to undercut the floor.
-	amount, note := clampToRails(60_000, 70_000, 50_000, 100_000)
+	amount, note := clampToRails(60_000, 70_000, 50_000, 0, 100_000)
 	if amount != 70_000 || note == "" {
 		t.Fatalf("amount = %d, note = %q", amount, note)
 	}
 	// Strategy tried to undercut the buyer's own bid.
-	amount, note = clampToRails(75_000, 70_000, 80_000, 100_000)
+	amount, note = clampToRails(75_000, 70_000, 80_000, 0, 100_000)
 	if amount != 80_000 || note == "" {
 		t.Fatalf("buyer-bid floor: amount = %d, note = %q", amount, note)
 	}
 	// Strategy tried to exceed its own standing ask.
-	amount, note = clampToRails(150_000, 70_000, 50_000, 100_000)
+	amount, note = clampToRails(150_000, 70_000, 50_000, 0, 100_000)
 	if amount != 100_000 || note == "" {
 		t.Fatalf("ask ceiling: amount = %d, note = %q", amount, note)
 	}
 	// Amount already inside the rails passes through unannotated.
-	amount, note = clampToRails(90_000, 70_000, 50_000, 100_000)
+	amount, note = clampToRails(90_000, 70_000, 50_000, 0, 100_000)
 	if amount != 90_000 || note != "" {
 		t.Fatalf("in-rails: amount = %d, note = %q", amount, note)
+	}
+}
+
+func TestTheConcessionFloorIsEnforcedRatherThanSuggested(t *testing.T) {
+	// The schedule says hold at 90000 this round. A strategist conceding straight
+	// to the buyer's bid used to be allowed through, because this floor only ever
+	// reached the prompt and the audit payload.
+	amount, note := clampToRails(72_000, 70_000, 50_000, 90_000, 100_000)
+	if amount != 90_000 {
+		t.Fatalf("amount = %d, want the round's concession floor held at 90000", amount)
+	}
+	if !strings.Contains(note, "concession floor") {
+		t.Fatalf("note = %q, want it to name the bound that bit", note)
+	}
+	// The cost floor still wins when it is the higher of the two.
+	if amount, _ = clampToRails(60_000, 95_000, 0, 90_000, 100_000); amount != 95_000 {
+		t.Fatalf("amount = %d, want the cost floor at 95000", amount)
+	}
+	// A schedule above the standing ask must not let the merchant charge above it.
+	amount, note = clampToRails(80_000, 70_000, 0, 150_000, 100_000)
+	if amount != 100_000 {
+		t.Fatalf("amount = %d, want the standing ask to cap every floor", amount)
+	}
+	if !strings.Contains(note, "standing ask") {
+		t.Fatalf("note = %q, want the ask named as the bound", note)
 	}
 }
 
