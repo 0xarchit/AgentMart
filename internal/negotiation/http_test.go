@@ -47,7 +47,10 @@ func TestNegotiationHTTPFlow(t *testing.T) {
 	if err := json.NewDecoder(propose.Body).Decode(&counter); err != nil {
 		t.Fatalf("decode counter: %v", err)
 	}
-	if counter.SessionID == "" || counter.BaseAmountPaise != 100 || counter.FinalAmountPaise != 10100 || counter.WarrantyYears != 1 {
+	// This server has no gateway and no selling rate to read, so nothing is
+	// observed and the ask is exactly the list total. Cover is only billed for when
+	// the shop can see what it pays out.
+	if counter.SessionID == "" || counter.BaseAmountPaise != 100 || counter.FinalAmountPaise != 100 || counter.WarrantyYears != 1 {
 		t.Fatalf("unexpected counter: %+v", counter)
 	}
 
@@ -67,7 +70,7 @@ func TestNegotiationHTTPFlow(t *testing.T) {
 	if err := json.NewDecoder(accept.Body).Decode(&result); err != nil {
 		t.Fatalf("decode accepted session: %v", err)
 	}
-	if result.Status != StatusAccepted || result.BaseAmountPaise != 100 || result.FinalAmountPaise != 10100 || result.UpliftPaise != 10000 {
+	if result.Status != StatusAccepted || result.BaseAmountPaise != 100 || result.FinalAmountPaise != 100 || result.UpliftPaise != 0 {
 		t.Fatalf("unexpected accepted session: %+v", result)
 	}
 }

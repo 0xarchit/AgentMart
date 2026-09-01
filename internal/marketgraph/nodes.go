@@ -33,6 +33,7 @@ type Negotiator struct {
 	graph     agent.Agent
 	shopfront agent.Agent
 	campaigns CampaignProvider
+	trading   TradingProvider
 	auditor   Auditor
 	sessions  atomic.Uint64
 	// inflight holds each caller's input against the session its own graph pass
@@ -59,11 +60,11 @@ func (n *Negotiator) inputFor(sessionID string) (negotiation.CounterInput, error
 // configured so the caller keeps its deterministic concession schedule.
 // The auditor is optional; when supplied, an offer that cannot be explained in
 // the audit trail is not returned to the buyer.
-func New(cfg Config, campaigns CampaignProvider, auditor Auditor) (*Negotiator, error) {
+func New(cfg Config, campaigns CampaignProvider, trading TradingProvider, auditor Auditor) (*Negotiator, error) {
 	if cfg.APIKey == "" || cfg.Model == "" {
 		return nil, nil
 	}
-	n := &Negotiator{campaigns: campaigns, auditor: auditor}
+	n := &Negotiator{campaigns: campaigns, trading: trading, auditor: auditor}
 	graph, err := n.buildGraph(cfg)
 	if err != nil {
 		return nil, err
@@ -81,7 +82,19 @@ const strategyInstruction = `You are the merchant's pricing strategist in a live
 negotiation with a buyer. You receive Facts: the standing ask, the cost floor
 (your absolute minimum), the buyer's counter, the concession schedule's
 min_acceptable_paise for this round, product signals (warranty, trust score,
-stock), any bundle partner, and campaign eligibility for this buyer.
+stock), any bundle partner, campaign eligibility for this buyer, and how the shop
+is actually trading.
+
+Read the trading conditions before you choose:
+- units_sold_recently and stock_cover_days say how this product is moving.
+  Tight cover on something that sells means you can hold; deep cover on something
+  that is not moving means holding costs you a sale you will not get again.
+- refund_rate_pct says how much of what this shop sells comes back. A high rate
+  means the goods are already costing you after the sale, so do not stack a
+  premium on top of it.
+- trading_observed false and refund_rate_known false mean those figures were
+  unavailable. That is not the same as them being zero. Price as if you cannot
+  see them, and do not claim a reason you have no figure for.
 
 Choose exactly one strategy and one amount:
 - "hold": keep ask_paise. Use when the buyer's counter is far below
@@ -129,6 +142,7 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 			tier, pct, notes := n.eligibility(ctx, input)
 			facts.LoyaltyTier, facts.LoyaltyDiscountPct = tier, pct
 			facts.CampaignNotes = notes
+			n.addTradingConditions(ctx, &facts, input.Product.ID)
 			return facts, nil
 		}, workflow.NodeConfig{})
 
@@ -186,26 +200,37 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 	})
 }
 
-// eligibility resolves the campaign layer, falling back to merchant-side
-// signals when no provider is wired.
+// addTradingConditions fills in what the shop can see about its own business. A
+// missing provider or a failed read leaves the facts unobserved, which the
+// strategist is instructed to read as an absence rather than as a zero.
+func (n *Negotiator) addTradingConditions(ctx context.Context, facts *Facts, productID string) {
+	if n.trading == nil {
+		return
+	}
+	conditions, err := n.trading.Conditions(ctx, productID)
+	if err != nil {
+		facts.CampaignNotes = append(facts.CampaignNotes, fmt.Sprintf("trading conditions unavailable: %v", err))
+		return
+	}
+	facts.TradingObserved = conditions.Observed
+	facts.UnitsSoldRecently = conditions.UnitsSold
+	facts.StockCoverDays = conditions.StockCoverDays
+	facts.RefundRatePct = conditions.RefundRatePct
+	facts.RefundRateKnown = conditions.RefundRateKnown
+}
+
+// eligibility resolves the campaign layer. With no provider wired there is
+// nothing funding a discount, so none is offered: a stock level is not funding,
+// and guessing one would let an unbounded floor back in through the fallback.
 func (n *Negotiator) eligibility(ctx context.Context, input negotiation.CounterInput) (string, int, []string) {
-	if n.campaigns != nil {
-		tier, pct, notes, err := n.campaigns.Eligibility(ctx, input)
-		if err == nil {
-			return tier, pct, notes
-		}
+	if n.campaigns == nil {
+		return "standard", 0, []string{"no campaign source is configured, so no discount is funded"}
+	}
+	tier, pct, notes, err := n.campaigns.Eligibility(ctx, input)
+	if err != nil {
 		return "standard", 0, []string{fmt.Sprintf("campaign lookup failed: %v", err)}
 	}
-	// Merchant-side signals only: slow-moving stock earns a small funded
-	// discount, scarce stock earns none.
-	switch {
-	case input.Product.Stock >= 25:
-		return "stock_clearance", 5, []string{"high stock on hand: 5% clearance budget available"}
-	case input.Product.Stock <= 3:
-		return "scarce", 0, []string{"low stock: no discount budget"}
-	default:
-		return "standard", 0, nil
-	}
+	return tier, pct, notes
 }
 
 // factsFrom assembles the deterministic view the strategist reasons over.

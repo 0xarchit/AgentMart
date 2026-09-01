@@ -2,6 +2,8 @@
 package marketgraph
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -60,7 +62,7 @@ func TestTheConcessionFloorIsEnforcedRatherThanSuggested(t *testing.T) {
 }
 
 func TestNewWithoutModelStaysDeterministic(t *testing.T) {
-	negotiator, err := New(Config{}, nil, nil)
+	negotiator, err := New(Config{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +72,7 @@ func TestNewWithoutModelStaysDeterministic(t *testing.T) {
 }
 
 func TestNewCompilesMerchantGraph(t *testing.T) {
-	negotiator, err := New(Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, nil, nil)
+	negotiator, err := New(Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build merchant graph: %v", err)
 	}
@@ -79,19 +81,20 @@ func TestNewCompilesMerchantGraph(t *testing.T) {
 	}
 }
 
-func TestEligibilityUsesStockSignalsWithoutProvider(t *testing.T) {
+func TestNoProviderMeansNoFundedDiscount(t *testing.T) {
 	negotiator := &Negotiator{}
-	tier, pct, notes := negotiator.eligibility(t.Context(), negotiation.CounterInput{
-		Product: catalog.Product{Stock: 40},
-	})
-	if tier != "stock_clearance" || pct != 5 || len(notes) == 0 {
-		t.Fatalf("clearance tier = %q pct = %d notes = %v", tier, pct, notes)
-	}
-	tier, pct, _ = negotiator.eligibility(t.Context(), negotiation.CounterInput{
-		Product: catalog.Product{Stock: 2},
-	})
-	if tier != "scarce" || pct != 0 {
-		t.Fatalf("scarce tier = %q pct = %d", tier, pct)
+	// A shelf holding forty units is not a discount budget. Without a campaign
+	// source nothing funds a giveaway, whatever the stock level happens to be.
+	for _, stock := range []int{40, 2} {
+		tier, pct, notes := negotiator.eligibility(t.Context(), negotiation.CounterInput{
+			Product: catalog.Product{Stock: stock},
+		})
+		if tier != "standard" || pct != 0 {
+			t.Fatalf("stock %d gave tier %q pct %d", stock, tier, pct)
+		}
+		if len(notes) == 0 {
+			t.Fatalf("stock %d gave no reason for having no budget", stock)
+		}
 	}
 }
 
@@ -133,5 +136,56 @@ func TestAnOwnerWithNothingToPitchStillAnswers(t *testing.T) {
 func TestAnUnreadableAnswerIsStillAFault(t *testing.T) {
 	if _, err := shopfrontAnswerFrom(&session.Event{Output: "not an answer at all"}); err == nil {
 		t.Fatal("expected a fault when nothing can be read")
+	}
+}
+
+// stubTrading answers with fixed conditions or a refusal.
+type stubTrading struct {
+	conditions negotiation.TradingConditions
+	err        error
+}
+
+// Conditions implements TradingProvider.
+func (s stubTrading) Conditions(context.Context, string) (negotiation.TradingConditions, error) {
+	return s.conditions, s.err
+}
+
+func TestTheShopsOwnTradingFiguresReachTheStrategist(t *testing.T) {
+	negotiator := &Negotiator{trading: stubTrading{conditions: negotiation.TradingConditions{
+		Observed: true, UnitsSold: 14, StockCoverDays: 3, RefundRatePct: 8, RefundRateKnown: true,
+	}}}
+	facts := Facts{}
+	negotiator.addTradingConditions(t.Context(), &facts, "product")
+
+	if !facts.TradingObserved || facts.UnitsSoldRecently != 14 || facts.StockCoverDays != 3 {
+		t.Fatalf("facts = %+v", facts)
+	}
+	if !facts.RefundRateKnown || facts.RefundRatePct != 8 {
+		t.Fatalf("refund figures = %+v", facts)
+	}
+}
+
+func TestAnUnreadableTradingFigureIsNotedRatherThanZeroed(t *testing.T) {
+	negotiator := &Negotiator{trading: stubTrading{err: errors.New("records are unreachable")}}
+	facts := Facts{}
+	negotiator.addTradingConditions(t.Context(), &facts, "product")
+
+	// The strategist must be able to tell an absence from a zero, so the failure
+	// is carried in the notes and nothing is presented as observed.
+	if facts.TradingObserved || facts.RefundRateKnown {
+		t.Fatalf("a failed read was presented as an observation: %+v", facts)
+	}
+	if len(facts.CampaignNotes) == 0 {
+		t.Fatal("a failed read left no trace for the strategist or the trail")
+	}
+}
+
+func TestNoTradingProviderLeavesEveryFigureUnobserved(t *testing.T) {
+	negotiator := &Negotiator{}
+	facts := Facts{}
+	negotiator.addTradingConditions(t.Context(), &facts, "product")
+
+	if facts.TradingObserved || facts.RefundRateKnown || facts.UnitsSoldRecently != 0 {
+		t.Fatalf("facts = %+v", facts)
 	}
 }

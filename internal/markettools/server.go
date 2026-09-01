@@ -78,7 +78,7 @@ func offersHandler(reader offerReader) mcp.ToolHandlerFor[offersInput, offersOut
 				partnerPriced = &negotiation.Priced{Product: *partner, CostPaise: partnerPriv.CostPaise}
 			}
 		}
-		offer, oerr := negotiation.OpeningOffer(negotiation.Priced{Product: mainPriv, CostPaise: mainPriv.CostPaise}, partnerPriced, input.Quantity)
+		offer, oerr := negotiation.OpeningOffer(negotiation.Priced{Product: mainPriv, CostPaise: mainPriv.CostPaise}, partnerPriced, input.Quantity, negotiation.TradingConditions{})
 		if oerr != nil {
 			return nil, offersOutput{}, fmt.Errorf("build offer: %w", oerr)
 		}

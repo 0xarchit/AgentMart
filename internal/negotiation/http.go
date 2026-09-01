@@ -34,6 +34,10 @@ type Server struct {
 	// to fund for one buyer. Absent, every buyer is treated as entitled to nothing,
 	// so the floor stays at the list total.
 	entitlement func(context.Context, string) (int, error)
+	// conditions reads what the shop can observe about how a product is selling.
+	// Absent, it means nothing is observed, which costs the shop a premium rather
+	// than inventing one.
+	conditions func(context.Context, string) (TradingConditions, error)
 }
 
 // WithEntitlement gives the server the funded discount for a buyer, which is the
@@ -55,6 +59,26 @@ func (s *Server) entitlementFor(ctx context.Context, accountID string) int {
 		return 0
 	}
 	return pct
+}
+
+// WithConditions gives the server a way to see how a product is actually selling.
+func (s *Server) WithConditions(reader func(context.Context, string) (TradingConditions, error)) *Server {
+	s.conditions = reader
+	return s
+}
+
+// conditionsFor reads what the shop can observe about one product. A missing
+// reader or a failed lookup both mean nothing is observed, which withholds the
+// scarcity premium rather than inventing demand the shop cannot show.
+func (s *Server) conditionsFor(ctx context.Context, productID string) TradingConditions {
+	if s.conditions == nil || strings.TrimSpace(productID) == "" {
+		return TradingConditions{}
+	}
+	conditions, err := s.conditions(ctx, productID)
+	if err != nil {
+		return TradingConditions{}
+	}
+	return conditions
 }
 
 // WithShopfront gives the server its shop-owner voice and the stock it can look
@@ -227,7 +251,7 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 			partnerPriced = &Priced{Product: pp, CostPaise: pc}
 		}
 	}
-	offer, err = OpeningOffer(Priced{Product: main, CostPaise: mainCost}, partnerPriced, request.Quantity)
+	offer, err = OpeningOffer(Priced{Product: main, CostPaise: mainCost}, partnerPriced, request.Quantity, s.conditionsFor(ctx, main.ID))
 	if err != nil {
 		return nil, err
 	}

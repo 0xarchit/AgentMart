@@ -108,8 +108,12 @@ every transaction, which contradicts the one thing this system is for.
   reduction in defence depth on that one claim.
 - A run is one shot. A follow-up message starts a new shopping run instead of
   continuing the open conversation.
-- The opening quote's uplifts are constants rather than derived from the trading
-  day. Wiring them to real sales facts is designed and not done.
+- The opening quote's bounds are chosen, even though the amounts inside them are
+  not. What the shop may add for cover, handling and scarcity is argued from the
+  selling rate, stock cover and the gateway's refund rate, and nothing is charged
+  for unless the fact behind it was read. The ceilings on each of those, and the
+  twelve percent ceiling over list, are still a judgement call rather than a
+  measurement.
 - The buyer's account identifier on the negotiation call is self asserted. It
   cannot move money past the gate, which re-derives every amount, but it can
   claim another account's loyalty tier.
