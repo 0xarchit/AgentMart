@@ -3,7 +3,9 @@ package shopgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"agentmart/internal/catalog"
@@ -148,7 +150,7 @@ func TestAnUnsettledNegotiationGoesToThePersonInsteadOfLosingTheRun(t *testing.T
 		ShopTurns: []negotiation.Turn{{Actor: "merchant", Message: "Welcome in"}},
 	}
 
-	result, err := service.resultFrom(nil, offer)
+	result, err := service.resultFrom("run-1", nil, offer)
 	if err != nil {
 		t.Fatalf("an unsettled negotiation must not fail the run: %v", err)
 	}
@@ -161,7 +163,7 @@ func TestAnUnsettledNegotiationGoesToThePersonInsteadOfLosingTheRun(t *testing.T
 	if len(result.Transcript) == 0 {
 		t.Fatal("the person needs the conversation to judge the offer")
 	}
-	if _, err := service.resultFrom(nil, "not an outcome"); err == nil {
+	if _, err := service.resultFrom("run-1", nil, "not an outcome"); err == nil {
 		t.Fatal("an unrecognised final output is still a failure")
 	}
 }
@@ -206,5 +208,75 @@ func TestAFundedDiscountIsNotTreatedAsAPremium(t *testing.T) {
 	bandCrossed := listPaise > 0 && paise > 0 && paise*100 > int64(listPaise)*AutoBuyPremiumMaxPct
 	if bandCrossed {
 		t.Fatal("a discount crossed the premium band")
+	}
+}
+
+func TestEachRunReadsItsOwnMoneyFacts(t *testing.T) {
+	// The chat loop and the public buyer surface share one service. One shared
+	// slot let whichever caller started last decide what the other could spend,
+	// and the wallet is what decides whether a run asks a person at all.
+	service := &Service{}
+	service.begin("run-person", Wallet{BalancePaise: 500000, SpendLimitPaise: 250000, AccountID: "account-1"}, nil)
+	service.begin("run-agent", Wallet{BalancePaise: 99999999, SpendLimitPaise: 99999999}, nil)
+
+	if got := service.walletFor("run-person").SpendLimitPaise; got != 250000 {
+		t.Fatalf("the person's limit read as %d after another caller started", got)
+	}
+	if got := service.walletFor("run-agent").SpendLimitPaise; got != 99999999 {
+		t.Fatalf("the outside caller's budget read as %d", got)
+	}
+
+	service.end("run-agent")
+	if got := service.walletFor("run-person").SpendLimitPaise; got != 250000 {
+		t.Fatalf("the person's limit read as %d after another caller finished", got)
+	}
+	// A finished run's facts are gone, and an unknown session can approve nothing.
+	if got := service.walletFor("run-agent"); got.SpendLimitPaise != 0 || got.BalancePaise != 0 {
+		t.Fatalf("a finished run still had money facts: %+v", got)
+	}
+}
+
+func TestProgressGoesOnlyToTheRunBeingWatched(t *testing.T) {
+	service := &Service{}
+	var watched []string
+	service.begin("run-watched", Wallet{}, func(line string) { watched = append(watched, line) })
+	service.begin("run-unwatched", Wallet{}, nil)
+
+	service.noteTo("run-watched", "asking the shop")
+	service.noteTo("run-unwatched", "this one has nobody listening")
+	service.noteTo("run-never-started", "and this one does not exist")
+
+	if len(watched) != 1 || watched[0] != "asking the shop" {
+		t.Fatalf("progress = %v, want only this run's own line", watched)
+	}
+}
+
+func TestConcurrentRunsDoNotShareAWallet(t *testing.T) {
+	service := &Service{}
+	const runs = 40
+	var wg sync.WaitGroup
+	failures := make(chan string, runs)
+
+	for i := range runs {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			id := fmt.Sprintf("run-%d", n)
+			limit := int64(n+1) * 1000
+			service.begin(id, Wallet{SpendLimitPaise: limit}, nil)
+			defer service.end(id)
+			// Read it back while every other run is storing its own.
+			for range 20 {
+				if got := service.walletFor(id).SpendLimitPaise; got != limit {
+					failures <- fmt.Sprintf("run %d read a limit of %d, want %d", n, got, limit)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(failures)
+	for failure := range failures {
+		t.Fatal(failure)
 	}
 }

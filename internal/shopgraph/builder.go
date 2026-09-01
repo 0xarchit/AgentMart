@@ -53,18 +53,26 @@ type Config struct {
 	MerchantAgent agent.Agent
 }
 
-// Service owns the compiled graph and per-run wallet slot. The buyer bot is
-// serial, so one slot is safe; revisit if runs ever fan out per user.
+// Service owns the compiled graph. Each run keeps its own money facts and its
+// own progress reporter, because two callers can be shopping at once: the chat
+// loop and the public buyer surface share one service.
 type Service struct {
 	tools       Tools
 	model       *llmchat.Model
 	merchant    agent.Agent
 	chooseAgent agent.Agent
 	assessAgent agent.Agent
-	mu          sync.Mutex
-	wallet      Wallet
-	progress    func(string)
-	wfAgent     agent.Agent
+	// runs holds each caller's money facts against the session its own graph pass
+	// runs under. One shared slot let an outside caller's stated budget replace a
+	// person's real spend limit mid run, which decides whether the run asks them.
+	runs    sync.Map
+	wfAgent agent.Agent
+}
+
+// runState is what one graph pass needs that is not in its input.
+type runState struct {
+	wallet   Wallet
+	progress func(string)
 }
 
 // New compiles the graph. Safe to call without network: models are only used
@@ -82,30 +90,44 @@ func New(ctx context.Context, cfg Config, tools Tools) (*Service, error) {
 	return s, nil
 }
 
-func (s *Service) walletSnapshot() Wallet {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.wallet
-}
-
-// ponytail: one run at a time per service, which is what the message loop does.
-// Give each run its own service if concurrent shoppers ever share one.
-func (s *Service) setRun(w Wallet, progress func(string)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.wallet = w
-	s.progress = progress
-}
-
-// note reports which stage the run reached, so a slow or stuck step is visible
-// while it happens rather than only in the final error.
-func (s *Service) note(line string) {
-	s.mu.Lock()
-	report := s.progress
-	s.mu.Unlock()
-	if report != nil {
-		report(line)
+// walletFor returns the money facts belonging to the graph pass this node is
+// running inside, identified by its own session rather than by whatever ran last.
+// An unknown session yields a zero wallet, which can approve nothing.
+func (s *Service) walletFor(sessionID string) Wallet {
+	state, ok := s.runs.Load(sessionID)
+	if !ok {
+		return Wallet{}
 	}
+	run, ok := state.(*runState)
+	if !ok || run == nil {
+		return Wallet{}
+	}
+	return run.wallet
+}
+
+// begin records the facts for one run. end must be called when it finishes.
+func (s *Service) begin(sessionID string, w Wallet, progress func(string)) {
+	s.runs.Store(sessionID, &runState{wallet: w, progress: progress})
+}
+
+// end releases one run's facts.
+func (s *Service) end(sessionID string) {
+	s.runs.Delete(sessionID)
+}
+
+// noteTo reports which stage a run reached, so a slow or stuck step is visible
+// while it happens rather than only in the final error. A note for a run nobody
+// is watching is dropped rather than delivered to another caller.
+func (s *Service) noteTo(sessionID, line string) {
+	state, ok := s.runs.Load(sessionID)
+	if !ok {
+		return
+	}
+	run, ok := state.(*runState)
+	if !ok || run == nil || run.progress == nil {
+		return
+	}
+	run.progress(line)
 }
 
 func (s *Service) decisionModel() model.LLM { return s.model }
@@ -263,13 +285,13 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 	// merchant answers with its own pick of stock, pitched in its own words.
 	askShopNode := workflow.NewFunctionNode[string, negotiationclient.Shortlist]("ask_shop",
 		func(ctx agent.Context, request string) (negotiationclient.Shortlist, error) {
-			wallet := s.walletSnapshot()
+			wallet := s.walletFor(ctx.SessionID())
 			budget := wallet.SpendLimitPaise
 			brief := strings.TrimSpace(request)
 			if brief == "" {
 				return negotiationclient.Shortlist{}, fmt.Errorf("nothing to ask the shop for")
 			}
-			s.note(fmt.Sprintf("Asking the shop about %q, up to INR %.2f", brief, float64(budget)/100))
+			s.noteTo(ctx.SessionID(), fmt.Sprintf("Asking the shop about %q, up to INR %.2f", brief, float64(budget)/100))
 			shortlist, err := s.tools.Browse(ctx, brief, budget, wallet.AccountID)
 			if err != nil {
 				return negotiationclient.Shortlist{}, err
@@ -287,7 +309,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			for _, option := range shortlist.Options {
 				names = append(names, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
 			}
-			s.note("The shop showed: " + strings.Join(names, "; "))
+			s.noteTo(ctx.SessionID(), "The shop showed: "+strings.Join(names, "; "))
 			selection, err := s.choose(ctx, shortlist)
 			if err != nil {
 				return Pick{}, err
@@ -298,14 +320,14 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if selection.Quantity <= 0 {
 				selection.Quantity = 1
 			}
-			s.note(fmt.Sprintf("Chose %s: %s", nameFor(shortlist, selection.ProductID), selection.Rationale))
+			s.noteTo(ctx.SessionID(), fmt.Sprintf("Chose %s: %s", nameFor(shortlist, selection.ProductID), selection.Rationale))
 			return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
 		}, workflow.NodeConfig{Timeout: assessTimeout})
 
 	offerNode := workflow.NewFunctionNode[Pick, OfferView]("fetch_offer",
 		func(ctx agent.Context, pick Pick) (OfferView, error) {
-			wallet := s.walletSnapshot()
-			s.note("Asking the shop to price it")
+			wallet := s.walletFor(ctx.SessionID())
+			s.noteTo(ctx.SessionID(), "Asking the shop to price it")
 			proposal, err := s.tools.Offers(ctx, pick.ProductID, pick.Quantity, wallet.AccountID)
 			if err != nil {
 				return OfferView{}, err
@@ -347,7 +369,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if view.SessionID == "" {
 				return nil, fmt.Errorf("merchant returned no negotiation session for %q", view.ProductID)
 			}
-			s.note(fmt.Sprintf("The shop quoted %s at INR %.2f: %s",
+			s.noteTo(ctx.SessionID(), fmt.Sprintf("The shop quoted %s at INR %.2f: %s",
 				view.ProductName, float64(view.FinalPaise)/100, view.Offer.Reason))
 			assessment, err := s.assess(ctx, view)
 			if err != nil {
@@ -355,15 +377,15 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				// reason to lose the run: hand the offer to the person, and say
 				// which layer failed rather than hiding it behind a guess.
 				explanation := failure.Explain(err)
-				s.note("Could not judge this offer, so it goes to you. " + explanation)
+				s.noteTo(ctx.SessionID(), "Could not judge this offer, so it goes to you. "+explanation)
 				assessment = Assessment{
 					Decision: "ask_human",
 					Reason:   "the buyer agent could not judge this offer: " + firstLine(explanation),
 				}
 			}
 			offer := view.Offer
-			route, note := routeFor(assessment, offer, s.walletSnapshot())
-			s.note("Decision: " + route + ". " + joinReason(assessment.Reason, note))
+			route, note := routeFor(assessment, offer, s.walletFor(ctx.SessionID()))
+			s.noteTo(ctx.SessionID(), "Decision: "+route+". "+joinReason(assessment.Reason, note))
 			offer.Route = route
 			offer.Reason = joinReason(assessment.Reason, note, offer.Reason)
 			ev := session.NewEvent(ctx, ctx.InvocationID())
@@ -493,7 +515,12 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	if s.wfAgent == nil {
 		return Result{}, fmt.Errorf("shop graph is not built")
 	}
-	s.setRun(wallet, progress)
+	// The session identifies this pass. Every node reads its own money facts and
+	// reports its own progress against it, so a second caller shopping at the same
+	// time cannot be priced against this wallet or told about this run.
+	sessionID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+	s.begin(sessionID, wallet, progress)
+	defer s.end(sessionID)
 
 	runner, err := runnerFor("shop", s.wfAgent)
 	if err != nil {
@@ -508,22 +535,22 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	var lastOutput any
 	var lastResult *Result
 	events := 0
-	for event, runErr := range runner.Run(runCtx, "user", fmt.Sprintf("run-%d", time.Now().UnixNano()),
+	for event, runErr := range runner.Run(runCtx, "user", sessionID,
 		textContent(request), defaultRunConfig()) {
 		if runErr != nil {
 			if errors.Is(runErr, errNothingToShow) {
-				s.note("The shop had nothing within the budget, so nothing was bought.")
+				s.noteTo(sessionID, "The shop had nothing within the budget, so nothing was bought.")
 				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingToShow.Error()}, nil
 			}
 			if errors.Is(runErr, errNothingWorthBuying) {
-				s.note("Nothing the shop showed was worth buying, so nothing was bought.")
+				s.noteTo(sessionID, "Nothing the shop showed was worth buying, so nothing was bought.")
 				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingWorthBuying.Error()}, nil
 			}
 			// The quote is already in hand, so whatever broke after it, the person
 			// can still decide. Hand the offer over with the reason rather than
 			// losing the run.
 			if offer, ok := lastOutput.(Offer); ok {
-				s.note("The run could not finish, so this offer goes to you.")
+				s.noteTo(sessionID, "The run could not finish, so this offer goes to you.")
 				return s.escalate(offer, "the run could not finish: "+failure.Explain(runErr)), nil
 			}
 			return Result{}, fmt.Errorf("graph run failed after %d events: %w", events, runErr)
@@ -542,13 +569,13 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 			}
 		}
 	}
-	return s.resultFrom(lastResult, lastOutput)
+	return s.resultFrom(sessionID, lastResult, lastOutput)
 }
 
 // resultFrom turns what the graph finished holding into a result. A settled
 // outcome is used as is; a quote that nothing settled becomes the person's call
 // rather than a lost run.
-func (s *Service) resultFrom(lastResult *Result, lastOutput any) (Result, error) {
+func (s *Service) resultFrom(sessionID string, lastResult *Result, lastOutput any) (Result, error) {
 	if lastResult != nil {
 		return normalized(*lastResult), nil
 	}
@@ -567,7 +594,7 @@ func (s *Service) resultFrom(lastResult *Result, lastOutput any) (Result, error)
 	// a reason to lose the run: hand the offer to the person, who can still say
 	// yes. Escalation never spends, so this stays money safe.
 	if offer, ok := lastOutput.(Offer); ok {
-		s.note("The negotiation did not settle, so this offer goes to you.")
+		s.noteTo(sessionID, "The negotiation did not settle, so this offer goes to you.")
 		return s.escalate(offer, "the negotiation did not settle, so it goes to you"), nil
 	}
 	return Result{}, fmt.Errorf("graph finished without a result (last output %T)", lastOutput)
