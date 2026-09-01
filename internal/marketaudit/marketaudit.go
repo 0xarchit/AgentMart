@@ -58,6 +58,11 @@ func (s *Store) RecordOfferDecision(ctx context.Context, in negotiation.CounterI
 			"loyalty_tier":         facts.LoyaltyTier,
 			"loyalty_discount_pct": facts.LoyaltyDiscountPct,
 			"campaign_notes":       facts.CampaignNotes,
+			"trading_observed":     facts.TradingObserved,
+			"units_sold_recently":  facts.UnitsSoldRecently,
+			"stock_cover_days":     facts.StockCoverDays,
+			"refund_rate_pct":      facts.RefundRatePct,
+			"refund_rate_known":    facts.RefundRateKnown,
 		},
 	}
 	// audit_log.account_id is nullable: an anonymous agent caller still gets a
