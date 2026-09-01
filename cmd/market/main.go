@@ -60,9 +60,27 @@ func main() {
 	// so the discount a buyer is offered and the discount the floor allows come
 	// from the same read.
 	campaignProvider := campaigns.NewProvider(db)
+	// The shop reads its own selling rate from its records and its refund rate from
+	// the gateway. Credentials are optional here: without them the shop still prices
+	// from how fast things move, just without knowing how much comes back.
+	var tradingProvider *trading.Provider
+	if gateway, gerr := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: 10 * time.Second}); gerr == nil {
+		tradingProvider = trading.NewProvider(db, gateway)
+	} else {
+		logger.Info("pricing without gateway refund figures", "reason", gerr)
+		tradingProvider = trading.NewProvider(db, nil)
+	}
+	// Assign through the interface only when the pointer is real, otherwise the
+	// interface value is non-nil while what it holds is not.
+	var tradingFacts marketgraph.TradingProvider
+	var conditions func(context.Context, string) (negotiation.TradingConditions, error)
+	if tradingProvider != nil {
+		tradingFacts = tradingProvider
+		conditions = tradingProvider.Conditions
+	}
 	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
 		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
-	}, campaignProvider, marketaudit.New(db))
+	}, campaignProvider, tradingFacts, marketaudit.New(db))
 	if nerr != nil {
 		logger.Error("merchant negotiator configuration failed", "error", nerr)
 		return
@@ -77,20 +95,6 @@ func main() {
 	entitlement := func(ctx context.Context, accountID string) (int, error) {
 		_, pct, _, err := campaignProvider.Eligibility(ctx, negotiation.CounterInput{BuyerAccountID: accountID})
 		return pct, err
-	}
-	// The shop reads its own selling rate from its records and its refund rate from
-	// the gateway. Credentials are optional here: without them the shop still prices
-	// from how fast things move, just without knowing how much comes back.
-	var tradingProvider *trading.Provider
-	if gateway, gerr := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: 10 * time.Second}); gerr == nil {
-		tradingProvider = trading.NewProvider(db, gateway)
-	} else {
-		logger.Info("pricing without gateway refund figures", "reason", gerr)
-		tradingProvider = trading.NewProvider(db, nil)
-	}
-	var conditions func(context.Context, string) (negotiation.TradingConditions, error)
-	if tradingProvider != nil {
-		conditions = tradingProvider.Conditions
 	}
 	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant, entitlement, conditions)
 	if err != nil {

@@ -59,6 +59,15 @@ type Facts struct {
 	LoyaltyDiscountPct int      `json:"loyalty_discount_pct"`
 	CampaignNotes      []string `json:"campaign_notes,omitempty"`
 
+	// Trading conditions: what the shop can see about its own business. Observed
+	// false means these were unavailable, which is different from them being zero,
+	// and the strategist is told to treat the difference as real.
+	TradingObserved   bool `json:"trading_observed"`
+	UnitsSoldRecently int  `json:"units_sold_recently"`
+	StockCoverDays    int  `json:"stock_cover_days"`
+	RefundRatePct     int  `json:"refund_rate_pct"`
+	RefundRateKnown   bool `json:"refund_rate_known"`
+
 	Transcript []string `json:"transcript,omitempty"`
 }
 
@@ -80,11 +89,19 @@ type Decision struct {
 }
 
 // CampaignProvider lets the market binary supply account-specific deals. It is
-// optional: without one the graph derives tiers from merchant-side signals only.
+// optional: without one nothing funds a discount, whatever the stock level.
 type CampaignProvider interface {
 	// Eligibility returns a loyalty tier label, a discount percentage the
 	// merchant is willing to fund, and human-readable notes for the audit.
 	Eligibility(ctx context.Context, in negotiation.CounterInput) (tier string, discountPct int, notes []string, err error)
+}
+
+// TradingProvider lets the market binary supply what the shop can observe about
+// its own business. It is optional: without one the strategist is told that
+// nothing was observed rather than being handed zeros to read as facts.
+type TradingProvider interface {
+	// Conditions returns the selling rate and refund confidence for one product.
+	Conditions(ctx context.Context, productID string) (negotiation.TradingConditions, error)
 }
 
 // Auditor persists the merchant agent's explanation for every priced offer.

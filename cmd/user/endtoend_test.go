@@ -186,7 +186,7 @@ func marketProcess(t *testing.T, wiring reasoningWiring) *httptest.Server {
 
 	merchant, err := marketgraph.New(marketgraph.Config{
 		APIKey: wiring.apiKey, BaseURL: wiring.baseURL, Model: wiring.model,
-	}, campaigns.NewProvider(nil), nil)
+	}, campaigns.NewProvider(nil), nil, nil)
 	if err != nil {
 		t.Fatalf("merchant reasoning: %v", err)
 	}
