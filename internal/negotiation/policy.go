@@ -96,6 +96,22 @@ func OpeningOffer(main Priced, partner *Priced, quantity int) (Offer, error) {
 	return offer, nil
 }
 
+// EntitledFloor is how far below the list total the merchant may go for one
+// buyer. A funded discount is the only thing that moves the floor under list, and
+// the cost floor is absolute regardless, so an entitlement can never sell at a
+// loss. A zero entitlement returns the list total, which is what every buyer
+// without a campaign gets and what this system did for everyone before.
+func EntitledFloor(costFloorPaise, listPaise int64, entitlementPct int) int64 {
+	floor := listPaise
+	if entitlementPct > 0 && entitlementPct < 100 && listPaise > 0 {
+		floor = listPaise - (listPaise * int64(entitlementPct) / 100)
+	}
+	if costFloorPaise > floor {
+		return costFloorPaise
+	}
+	return floor
+}
+
 // FloorFor returns the minimum acceptable total: blended cost across the main
 // product and any bundled partner. The orchestrator never goes below it.
 func FloorFor(main Priced, partner *Priced, quantity int) (int64, error) {

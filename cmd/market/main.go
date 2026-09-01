@@ -54,9 +54,13 @@ func main() {
 		agentEndpoint += "/"
 	}
 	merchantConfig := buyerreasoning.FromEnv("MARKET")
+	// One campaign provider serves both the strategist's facts and the price floor,
+	// so the discount a buyer is offered and the discount the floor allows come
+	// from the same read.
+	campaignProvider := campaigns.NewProvider(db)
 	merchantNegotiator, nerr := marketgraph.New(marketgraph.Config{
 		APIKey: merchantConfig.APIKey, BaseURL: merchantConfig.BaseURL, Model: merchantConfig.Model,
-	}, campaigns.NewProvider(db), marketaudit.New(db))
+	}, campaignProvider, marketaudit.New(db))
 	if nerr != nil {
 		logger.Error("merchant negotiator configuration failed", "error", nerr)
 		return
@@ -68,7 +72,11 @@ func main() {
 	if merchantNegotiator != nil {
 		merchant = merchantNegotiator
 	}
-	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant)
+	entitlement := func(ctx context.Context, accountID string) (int, error) {
+		_, pct, _, err := campaignProvider.Eligibility(ctx, negotiation.CounterInput{BuyerAccountID: accountID})
+		return pct, err
+	}
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant, entitlement)
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -107,7 +115,7 @@ type merchantBrain interface {
 	negotiation.Shopfront
 }
 
-func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain) (http.Handler, error) {
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain, entitlement func(context.Context, string) (int, error)) (http.Handler, error) {
 	privateMux := http.NewServeMux()
 	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
 		product, err := service.GetWithCost(ctx, id)
@@ -119,6 +127,12 @@ func newHandler(service catalogReader, store negotiation.SessionStore, agentEndp
 	negotiationServer, err := negotiation.NewOrchestratedServer(service.Get, getPriced, store)
 	if err != nil {
 		return nil, err
+	}
+	// A funded loyalty discount is the only thing that lets a price settle below
+	// the list total, so the floor reads the same campaign tier the strategist is
+	// shown rather than trusting a number from a model.
+	if entitlement != nil {
+		negotiationServer.WithEntitlement(entitlement)
 	}
 	if merchantNegotiator != nil {
 		negotiationServer.UseNegotiator(merchantNegotiator)
