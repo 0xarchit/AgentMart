@@ -309,7 +309,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			for _, option := range shortlist.Options {
 				names = append(names, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
 			}
-			s.noteTo(ctx.SessionID(), "The shop showed: " + strings.Join(names, "; "))
+			s.noteTo(ctx.SessionID(), "The shop showed: "+strings.Join(names, "; "))
 			selection, err := s.choose(ctx, shortlist)
 			if err != nil {
 				return Pick{}, err
@@ -377,7 +377,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				// reason to lose the run: hand the offer to the person, and say
 				// which layer failed rather than hiding it behind a guess.
 				explanation := failure.Explain(err)
-				s.noteTo(ctx.SessionID(), "Could not judge this offer, so it goes to you. " + explanation)
+				s.noteTo(ctx.SessionID(), "Could not judge this offer, so it goes to you. "+explanation)
 				assessment = Assessment{
 					Decision: "ask_human",
 					Reason:   "the buyer agent could not judge this offer: " + firstLine(explanation),
@@ -385,7 +385,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			}
 			offer := view.Offer
 			route, note := routeFor(assessment, offer, s.walletFor(ctx.SessionID()))
-			s.noteTo(ctx.SessionID(), "Decision: " + route + ". " + joinReason(assessment.Reason, note))
+			s.noteTo(ctx.SessionID(), "Decision: "+route+". "+joinReason(assessment.Reason, note))
 			offer.Route = route
 			offer.Reason = joinReason(assessment.Reason, note, offer.Reason)
 			ev := session.NewEvent(ctx, ctx.InvocationID())
