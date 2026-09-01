@@ -260,7 +260,7 @@ is pending, which is a one file swap rather than a redesign.
 | --- | --- | --- |
 | bundled goods not carried through the settling agent | `shopgraph/builder.go` negotiate branch | a negotiated bundle is still measured against the main product alone |
 | a run is one shot | buyer graph | a follow up message starts over instead of continuing |
-| pricing uplifts are constants | `negotiation/policy.go`, `negotiation/orchestrator.go` | the opening quote is arithmetic wearing an agent costume |
+| the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
 | no drawable mandate on the test key | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object |
 | one shared negotiation slot for all callers | `marketgraph/nodes.go:230`, read at `:106` and `:127` | two concurrent buyers cross wires or fail with no input in flight |
 | the price freshness rail cannot fire | `buyer/purchase.go:123` passes `PriceObservedAt` and `Now` as the same instant | `stale_price` is in the ladder, the tests and this document, and is unreachable in production |
@@ -291,8 +291,8 @@ Deferred with the reason stated. The self asserted account id stays, because the
 fix is either signing the id or issuing per buyer tokens and neither is an hour's
 work; it is an authorization hole in the personalisation path only, it cannot move
 money past the gate, and it is written down here rather than left for someone to
-find. The bundled goods carry, the one shot run, the constant uplifts and the
-mandate all stay as already sequenced in later phases. The stub tool is removed
+find. The bundled goods carry and the one shot run stay as already sequenced in
+later phases, as does the mandate. The stub tool is removed
 rather than implemented, since a tool that hands back its own argument is worse
 than a missing one.
 
@@ -346,6 +346,5 @@ with a reason, alternates the two shops per scenario so neither meets a differen
 provider, and splits revenue into settled and pending a person's approval so a
 gate that did its job is not scored as a lost sale.
 
-The remaining sequence, in order: hold conversation state across messages,
-then price from trading conditions rather than constants, then move policy out of
-code into account rows, then learn from outcomes.
+The remaining sequence, in order: hold conversation state across messages, then
+move policy out of code into account rows, then learn from outcomes.

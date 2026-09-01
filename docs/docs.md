@@ -62,6 +62,7 @@ Merchant side:
 | `internal/markettools` | the catalog tool server |
 | `internal/merchantagent`, `internal/buyeragent` | agent cards and skills on both sides |
 | `internal/campaigns` | loyalty tier lookup for a known buyer |
+| `internal/trading` | the shop's own selling rate and the gateway's refund rate |
 | `internal/marketaudit` | records every priced offer, and fails closed |
 
 Shared:
@@ -128,8 +129,10 @@ Tables: `accounts`, `products`, `orders`, `wallet_ledger`, `merchant_revenue`,
 `audit_log`, `campaigns`, `human_approval_requests`, `link_tokens`,
 `telegram_links`.
 
-Views: `run_summary` and `run_timeline`, both with `security_invoker` on, so a
-reader sees only their own rows.
+Views: `run_summary`, `run_timeline` and `product_trading`, all with
+`security_invoker` on, so a reader sees only their own rows. `product_trading`
+carries the selling rate and stock cover an opening quote is priced from, with a
+cover of minus one meaning no sales were observed rather than none exist.
 
 Database functions, which is where money actually moves:
 
@@ -232,7 +235,7 @@ The absences are choices, and each one was argued rather than defaulted.
 gofmt -l internal/ cmd/
 go build ./...
 go vet ./...
-go test -short -count=1 ./internal/... ./cmd/...     # 22 packages
+go test -short -count=1 ./internal/... ./cmd/...     # 23 packages
 cd web && npx tsc --noEmit && npx vitest run          # 17 tests, 3 files
 ```
 
