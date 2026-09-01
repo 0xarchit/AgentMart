@@ -305,7 +305,7 @@ func TestAnOfferOverTheLimitGoesToThePerson(t *testing.T) {
 	buyer, _ := shoppingSystem(t)
 
 	result, err := buyer.Run(t.Context(), "buy me a good trimmer",
-		shopgraph.Wallet{BalancePaise: 500000, SpendLimitPaise: 400000, AccountID: "account-1"})
+		shopgraph.Wallet{BalancePaise: 500000, SpendLimitPaise: 350000, AccountID: "account-1"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -475,11 +475,13 @@ func recordingBot(t *testing.T) (*telegram.Client, *telegramRecorder) {
 	return client, record
 }
 
-// escalatingAccounts has a spend limit below what the merchant will quote.
+// escalatingAccounts has a spend limit below what the merchant will quote. The
+// limit is stated against the quote this shelf actually produces, so the test
+// exercises the guard rather than the size of an uplift.
 type escalatingAccounts struct{}
 
 func (escalatingAccounts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
-	return buyer.Account{ID: "account-1", WalletBalancePaise: 500000, SpendLimitPaise: 400000}, nil
+	return buyer.Account{ID: "account-1", WalletBalancePaise: 500000, SpendLimitPaise: 350000}, nil
 }
 
 type stockCatalog struct{}
@@ -497,7 +499,7 @@ func TestAnEscalationSendsOneTranscriptAndTwoButtons(t *testing.T) {
 	buyerService, _ := shoppingSystem(t)
 	client, record := recordingBot(t)
 
-	err := conversationalBuy(t.Context(), client, fakePurchaser{result: buyer.PurchaseResult{AmountPaise: 418815}},
+	err := conversationalBuy(t.Context(), client, fakePurchaser{result: buyer.PurchaseResult{AmountPaise: 388013}},
 		commandServices{
 			loop:         buyerService,
 			accounts:     escalatingAccounts{},

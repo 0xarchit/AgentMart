@@ -12,13 +12,14 @@ func priced(id string, price, cost int64) Priced {
 	return Priced{Product: catalog.Product{ID: id, Name: id, PricePaise: price}, CostPaise: cost}
 }
 
-func TestOpeningOfferKeepsLegacyUplifts(t *testing.T) {
-	offer, err := OpeningOffer(priced("p", 100, 70), nil, 1)
+func TestAnOpeningOfferNeverStartsBelowList(t *testing.T) {
+	offer, err := OpeningOffer(priced("p", 100, 70), nil, 1, TradingConditions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// warranty 0 here; trust/stock defaults keep the base at list.
-	if offer.Kind != KindUplift || offer.FinalPaise < offer.BasePaise {
+	// No warranty, no trust above the floor and nothing observed, so the ask is the
+	// list total exactly.
+	if offer.Kind != KindUplift || offer.FinalPaise != offer.BasePaise {
 		t.Fatalf("offer = %+v", offer)
 	}
 }
@@ -37,7 +38,7 @@ func TestOpeningOfferAttachesCombo(t *testing.T) {
 		t.Fatalf("combo floor = %d", floor)
 	}
 
-	offer, err := OpeningOffer(main, &partner, 1)
+	offer, err := OpeningOffer(main, &partner, 1, TradingConditions{})
 	if err != nil {
 		t.Fatal(err)
 	}

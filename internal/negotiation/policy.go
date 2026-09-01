@@ -46,36 +46,30 @@ type Priced struct {
 // Policy builds deterministic merchant offers.
 type Policy struct{}
 
-// Counter keeps the legacy opening-quote contract used by existing callers.
+// Counter keeps the legacy opening-quote contract used by existing callers. It
+// quotes with nothing observed, which is the conservative case: no velocity means
+// no scarcity premium.
 func (Policy) Counter(product catalog.Product, quantity int) (Counter, error) {
-	offer, err := OpeningOffer(Priced{Product: product}, nil, quantity)
+	offer, err := OpeningOffer(Priced{Product: product}, nil, quantity, TradingConditions{})
 	if err != nil {
 		return Counter{}, err
 	}
 	return Counter{FinalAmountPaise: offer.FinalPaise, Reason: offer.Reason}, nil
 }
 
-// OpeningOffer quotes the merchant's first ask: list price plus transparent
-// uplifts, with the seeded combo attached whenever one is configured.
-func OpeningOffer(main Priced, partner *Priced, quantity int) (Offer, error) {
+// OpeningOffer quotes the merchant's first ask: the list total plus whatever
+// uplift the shop's own trading conditions justify, with the seeded combo
+// attached whenever one is configured. Every added amount is a share of the list
+// total argued from an observation, so the same product carries a proportionate
+// uplift whether it costs hundreds or thousands.
+func OpeningOffer(main Priced, partner *Priced, quantity int, conditions TradingConditions) (Offer, error) {
 	if quantity <= 0 || main.Product.PricePaise <= 0 || main.Product.PricePaise > math.MaxInt64/int64(quantity) {
 		return Offer{}, ErrInvalidProposal
 	}
 	base := main.Product.PricePaise * int64(quantity)
-	final := base
-	reason := "standard fulfillment"
-	if main.Product.WarrantyYears > 0 {
-		final += int64(main.Product.WarrantyYears) * 10_000
-		reason = "extended warranty"
-	}
-	if main.Product.TrustScore >= 90 {
-		final += 5_000
-		reason += " and high-trust handling"
-	}
-	if main.Product.Stock > 0 && main.Product.Stock <= quantity {
-		final += 2_500
-		reason += " and limited stock"
-	}
+	bps, reasons := UpliftBps(main.Product.WarrantyYears, main.Product.TrustScore, conditions)
+	final := base + applyBps(base, bps)
+	reason := reasonFrom(reasons)
 	offer := Offer{Kind: KindUplift, BasePaise: base, FinalPaise: final, Reason: reason}
 
 	pct := main.Product.ComboDiscountPct
