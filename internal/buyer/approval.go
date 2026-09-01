@@ -90,8 +90,11 @@ func NewApprovalRequest(account Account, telegramID int64, product catalog.Produ
 	return ApprovalRequest{Token: hex.EncodeToString(tokenBytes[:]), AccountID: account.ID, TelegramID: telegramID, ProductID: product.ID, Quantity: quantity, BaseAmountPaise: baseAmountPaise, FinalAmountPaise: finalAmountPaise, IdempotencyKey: idempotencyKey, Reason: reason}, nil
 }
 
+// validateApprovalRequest refuses a request that could not be honoured. A settled
+// amount below the list total is a funded discount rather than an error, so only
+// the amounts themselves are checked, never the ordering between them.
 func validateApprovalRequest(request ApprovalRequest) error {
-	if strings.TrimSpace(request.Token) == "" || strings.TrimSpace(request.AccountID) == "" || request.TelegramID <= 0 || strings.TrimSpace(request.ProductID) == "" || request.Quantity <= 0 || request.BaseAmountPaise <= 0 || request.FinalAmountPaise < request.BaseAmountPaise || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" {
+	if strings.TrimSpace(request.Token) == "" || strings.TrimSpace(request.AccountID) == "" || request.TelegramID <= 0 || strings.TrimSpace(request.ProductID) == "" || request.Quantity <= 0 || request.BaseAmountPaise <= 0 || request.FinalAmountPaise <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" {
 		return fmt.Errorf("approval request fields are invalid")
 	}
 	return nil

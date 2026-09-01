@@ -30,10 +30,29 @@ func TestNewApprovalRequestGeneratesResumeToken(t *testing.T) {
 	}
 }
 
-func TestApprovalRequestRejectsDiscount(t *testing.T) {
-	err := validateApprovalRequest(ApprovalRequest{Token: "token", AccountID: "account", TelegramID: 10, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 99, IdempotencyKey: "purchase", Reason: "approval"})
-	if err == nil {
-		t.Fatal("expected discount rejection")
+func TestApprovalRequestAcceptsAFundedDiscount(t *testing.T) {
+	// A discount reaches approval only when the total is over the standing limit as
+	// well, which is exactly when a person has to decide. Refusing it here meant
+	// they never got the choice.
+	discounted := ApprovalRequest{Token: "token", AccountID: "account", TelegramID: 10, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 99, IdempotencyKey: "purchase", Reason: "approval"}
+	if err := validateApprovalRequest(discounted); err != nil {
+		t.Fatalf("a funded discount was refused before the person saw it: %v", err)
+	}
+}
+
+func TestApprovalRequestStillNeedsRealAmounts(t *testing.T) {
+	base := ApprovalRequest{Token: "token", AccountID: "account", TelegramID: 10, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 100, IdempotencyKey: "purchase", Reason: "approval"}
+	for name, broken := range map[string]func(*ApprovalRequest){
+		"no settled amount": func(r *ApprovalRequest) { r.FinalAmountPaise = 0 },
+		"negative settled":  func(r *ApprovalRequest) { r.FinalAmountPaise = -1 },
+		"no list total":     func(r *ApprovalRequest) { r.BaseAmountPaise = 0 },
+		"no quantity":       func(r *ApprovalRequest) { r.Quantity = 0 },
+	} {
+		request := base
+		broken(&request)
+		if err := validateApprovalRequest(request); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
 	}
 }
 
