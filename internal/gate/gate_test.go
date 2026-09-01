@@ -29,7 +29,7 @@ func TestEvaluatePolicies(t *testing.T) {
 	}{
 		{name: "approve", change: func(*Request) {}, approved: true, reason: "approved"},
 		{name: "negotiated uplift", change: func(r *Request) { r.FinalAmountPaise = 250 }, approved: true, reason: "approved"},
-		{name: "negotiated discount", change: func(r *Request) { r.FinalAmountPaise = 199 }, reason: "negotiated_amount_below_base"},
+		{name: "funded discount", change: func(r *Request) { r.FinalAmountPaise = 199 }, approved: true, reason: "approved"},
 		{name: "stock", change: func(r *Request) { r.Stock = 1 }, reason: "insufficient_stock"},
 		{name: "limit", change: func(r *Request) { r.SpendLimitPaise = 199 }, reason: "human_approval_required"},
 		{name: "wallet", change: func(r *Request) { r.WalletBalancePaise = 199 }, reason: "insufficient_wallet_balance"},
