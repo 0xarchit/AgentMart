@@ -79,19 +79,20 @@ func TestNewCompilesMerchantGraph(t *testing.T) {
 	}
 }
 
-func TestEligibilityUsesStockSignalsWithoutProvider(t *testing.T) {
+func TestNoProviderMeansNoFundedDiscount(t *testing.T) {
 	negotiator := &Negotiator{}
-	tier, pct, notes := negotiator.eligibility(t.Context(), negotiation.CounterInput{
-		Product: catalog.Product{Stock: 40},
-	})
-	if tier != "stock_clearance" || pct != 5 || len(notes) == 0 {
-		t.Fatalf("clearance tier = %q pct = %d notes = %v", tier, pct, notes)
-	}
-	tier, pct, _ = negotiator.eligibility(t.Context(), negotiation.CounterInput{
-		Product: catalog.Product{Stock: 2},
-	})
-	if tier != "scarce" || pct != 0 {
-		t.Fatalf("scarce tier = %q pct = %d", tier, pct)
+	// A shelf holding forty units is not a discount budget. Without a campaign
+	// source nothing funds a giveaway, whatever the stock level happens to be.
+	for _, stock := range []int{40, 2} {
+		tier, pct, notes := negotiator.eligibility(t.Context(), negotiation.CounterInput{
+			Product: catalog.Product{Stock: stock},
+		})
+		if tier != "standard" || pct != 0 {
+			t.Fatalf("stock %d gave tier %q pct %d", stock, tier, pct)
+		}
+		if len(notes) == 0 {
+			t.Fatalf("stock %d gave no reason for having no budget", stock)
+		}
 	}
 }
 

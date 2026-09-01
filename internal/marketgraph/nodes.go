@@ -186,26 +186,18 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 	})
 }
 
-// eligibility resolves the campaign layer, falling back to merchant-side
-// signals when no provider is wired.
+// eligibility resolves the campaign layer. With no provider wired there is
+// nothing funding a discount, so none is offered: a stock level is not funding,
+// and guessing one would let an unbounded floor back in through the fallback.
 func (n *Negotiator) eligibility(ctx context.Context, input negotiation.CounterInput) (string, int, []string) {
-	if n.campaigns != nil {
-		tier, pct, notes, err := n.campaigns.Eligibility(ctx, input)
-		if err == nil {
-			return tier, pct, notes
-		}
+	if n.campaigns == nil {
+		return "standard", 0, []string{"no campaign source is configured, so no discount is funded"}
+	}
+	tier, pct, notes, err := n.campaigns.Eligibility(ctx, input)
+	if err != nil {
 		return "standard", 0, []string{fmt.Sprintf("campaign lookup failed: %v", err)}
 	}
-	// Merchant-side signals only: slow-moving stock earns a small funded
-	// discount, scarce stock earns none.
-	switch {
-	case input.Product.Stock >= 25:
-		return "stock_clearance", 5, []string{"high stock on hand: 5% clearance budget available"}
-	case input.Product.Stock <= 3:
-		return "scarce", 0, []string{"low stock: no discount budget"}
-	default:
-		return "standard", 0, nil
-	}
+	return tier, pct, notes
 }
 
 // factsFrom assembles the deterministic view the strategist reasons over.
