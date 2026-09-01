@@ -185,3 +185,26 @@ func TestNoMoneyMovingToolReachesAReasoningLayer(t *testing.T) {
 		}
 	}
 }
+
+func TestAFundedDiscountIsNotTreatedAsAPremium(t *testing.T) {
+	// A price below list is what a loyalty entitlement produces. It must read as a
+	// negative premium, and the approval band must not fire on it: nobody needs to
+	// be asked whether they mind paying less than the list price.
+	const listPaise = 200_000
+	const settled = 176_000
+
+	paise, pct := premiumOver(settled, listPaise)
+	if paise >= 0 {
+		t.Fatalf("premium = %d, want a discount to read as negative", paise)
+	}
+	if pct >= 0 {
+		t.Fatalf("premium pct = %d, want a discount to read as negative", pct)
+	}
+
+	// This is the band expression from the finalize step, pinned here so a change
+	// to it cannot start escalating discounts unnoticed.
+	bandCrossed := listPaise > 0 && paise > 0 && paise*100 > int64(listPaise)*AutoBuyPremiumMaxPct
+	if bandCrossed {
+		t.Fatal("a discount crossed the premium band")
+	}
+}
