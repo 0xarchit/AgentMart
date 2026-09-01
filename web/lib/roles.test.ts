@@ -75,7 +75,14 @@ describe("currentIdentity", () => {
   it("treats anything other than the exact operator value as a customer", async () => {
     // Case, whitespace and near misses must not open the operator view. Only the
     // value the database constraint allows counts.
-    for (const value of ["Admin", "ADMIN", " admin", "administrator", "", null]) {
+    for (const value of [
+      "Admin",
+      "ADMIN",
+      " admin",
+      "administrator",
+      "",
+      null,
+    ]) {
       signedIn();
       maybeSingle.mockResolvedValue({
         data: { account_type: value },

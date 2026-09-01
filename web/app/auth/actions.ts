@@ -7,7 +7,10 @@ import { redirect } from "next/navigation";
 
 export async function signIn(formData: FormData) {
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({ email: String(formData.get("email")), password: String(formData.get("password")) });
+  const { error } = await supabase.auth.signInWithPassword({
+    email: String(formData.get("email")),
+    password: String(formData.get("password")),
+  });
   if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
   revalidatePath("/", "layout");
   redirect("/dashboard");
@@ -35,7 +38,8 @@ export async function signInAsOperator() {
     provider: "google",
     options: { redirectTo: `${appURL}/auth/callback?next=/admin` },
   });
-  if (error) redirect(`/admin/login?error=${encodeURIComponent(error.message)}`);
+  if (error)
+    redirect(`/admin/login?error=${encodeURIComponent(error.message)}`);
   if (data.url) redirect(data.url);
   redirect("/admin/login?error=sign-in%20did%20not%20return%20a%20redirect");
 }
@@ -52,7 +56,10 @@ export async function signOutToOperatorDoor() {
 
 export async function signUp(formData: FormData) {
   const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({ email: String(formData.get("email")), password: String(formData.get("password")) });
+  const { error } = await supabase.auth.signUp({
+    email: String(formData.get("email")),
+    password: String(formData.get("password")),
+  });
   if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
   redirect("/login?registered=1");
 }
