@@ -30,7 +30,7 @@ func (testCatalog) CheckStock(context.Context, string, int) (catalog.StockResult
 }
 
 func TestProtectedMarketRoutes(t *testing.T) {
-	handler, err := newHandler(testCatalog{}, negotiation.NewMemorySessionStore(), "http://merchant.test/a2a", "secret", nil, nil)
+	handler, err := newHandler(testCatalog{}, negotiation.NewMemorySessionStore(), "http://merchant.test/a2a", "secret", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

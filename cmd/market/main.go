@@ -22,8 +22,10 @@ import (
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
 	"agentmart/internal/negotiation"
+	"agentmart/internal/razorpay"
 	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
+	"agentmart/internal/trading"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -76,7 +78,21 @@ func main() {
 		_, pct, _, err := campaignProvider.Eligibility(ctx, negotiation.CounterInput{BuyerAccountID: accountID})
 		return pct, err
 	}
-	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant, entitlement)
+	// The shop reads its own selling rate from its records and its refund rate from
+	// the gateway. Credentials are optional here: without them the shop still prices
+	// from how fast things move, just without knowing how much comes back.
+	var tradingProvider *trading.Provider
+	if gateway, gerr := razorpay.NewClient(os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET"), &http.Client{Timeout: 10 * time.Second}); gerr == nil {
+		tradingProvider = trading.NewProvider(db, gateway)
+	} else {
+		logger.Info("pricing without gateway refund figures", "reason", gerr)
+		tradingProvider = trading.NewProvider(db, nil)
+	}
+	var conditions func(context.Context, string) (negotiation.TradingConditions, error)
+	if tradingProvider != nil {
+		conditions = tradingProvider.Conditions
+	}
+	handler, err := newHandler(service, store, agentEndpoint, os.Getenv("MARKET_SHARED_TOKEN"), merchant, entitlement, conditions)
 	if err != nil {
 		logger.Error("market handler configuration failed", "error", err)
 		return
@@ -115,7 +131,7 @@ type merchantBrain interface {
 	negotiation.Shopfront
 }
 
-func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain, entitlement func(context.Context, string) (int, error)) (http.Handler, error) {
+func newHandler(service catalogReader, store negotiation.SessionStore, agentEndpoint, sharedToken string, merchantNegotiator merchantBrain, entitlement func(context.Context, string) (int, error), conditions func(context.Context, string) (negotiation.TradingConditions, error)) (http.Handler, error) {
 	privateMux := http.NewServeMux()
 	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
 		product, err := service.GetWithCost(ctx, id)
@@ -133,6 +149,9 @@ func newHandler(service catalogReader, store negotiation.SessionStore, agentEndp
 	// shown rather than trusting a number from a model.
 	if entitlement != nil {
 		negotiationServer.WithEntitlement(entitlement)
+	}
+	if conditions != nil {
+		negotiationServer.WithConditions(conditions)
 	}
 	if merchantNegotiator != nil {
 		negotiationServer.UseNegotiator(merchantNegotiator)
