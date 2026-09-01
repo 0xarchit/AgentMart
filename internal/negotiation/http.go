@@ -30,6 +30,31 @@ type Server struct {
 	shopfront  Shopfront
 	negotiator Negotiator
 	policy     Policy
+	// entitlement reports the discount percentage the merchant has already agreed
+	// to fund for one buyer. Absent, every buyer is treated as entitled to nothing,
+	// so the floor stays at the list total.
+	entitlement func(context.Context, string) (int, error)
+}
+
+// WithEntitlement gives the server the funded discount for a buyer, which is the
+// only thing that lets a price settle below list.
+func (s *Server) WithEntitlement(reader func(context.Context, string) (int, error)) *Server {
+	s.entitlement = reader
+	return s
+}
+
+// entitlementFor reads the funded discount for one buyer. A missing reader, an
+// anonymous caller or a failed lookup all mean nothing is funded: this fails
+// closed toward the merchant's margin rather than opening the floor.
+func (s *Server) entitlementFor(ctx context.Context, accountID string) int {
+	if s.entitlement == nil || strings.TrimSpace(accountID) == "" {
+		return 0
+	}
+	pct, err := s.entitlement(ctx, accountID)
+	if err != nil || pct < 0 {
+		return 0
+	}
+	return pct
 }
 
 // WithShopfront gives the server its shop-owner voice and the stock it can look
@@ -283,11 +308,11 @@ func (s *Server) counter(ctx context.Context, request negotiationRequest) (map[s
 	if ferr != nil {
 		return nil, ferr
 	}
-	// The fulfillment contract models revenue growth only (final >= base), so
-	// the effective floor is the higher of cost and the proposal's list total.
-	if session.Proposal.BaseAmountPaise > floorPaise {
-		floorPaise = session.Proposal.BaseAmountPaise
-	}
+	// A price may settle below the list total only as far as the discount this
+	// buyer is already entitled to, and never below cost. With no entitlement the
+	// floor is the list total, which is what the fulfillment contract assumed for
+	// everyone before.
+	floorPaise = EntitledFloor(floorPaise, session.Proposal.BaseAmountPaise, s.entitlementFor(ctx, session.BuyerAccountID))
 	ask := session.Counter.FinalAmountPaise
 	session.RecordBuyer(fmt.Sprintf("Counters INR %.2f", float64(request.CounterAmountPaise)/100))
 

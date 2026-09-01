@@ -266,7 +266,7 @@ is pending, which is a one file swap rather than a redesign.
 | the price freshness rail cannot fire | `buyer/purchase.go:123` passes `PriceObservedAt` and `Now` as the same instant | `stale_price` is in the ladder, the tests and this document, and is unreachable in production |
 | the concession schedule is prose, not code | `MinAcceptablePaise` reaches the prompt and the auditor, never `clampToRails` | the strategist may concede to the buyer's bid in one round; the floor and list total still hold |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
-| no price below list is representable | `buyer/purchase.go:119` rejects a final below base, and the negotiation floor is the list total | the campaign table, the loyalty strategy and three seeded tiers cannot move money |
+| cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
 | three money paths return without a trail row | `buyer/purchase.go:100-119`, `buyer/settlement.go:60` | the amount integrity refusal, the strongest check in the buyer, records nothing |
 | the gateway sales view has no caller | `internal/razorpay/sales.go` | built and tested, and reachable by no running code |
 | the checkout signature verifier has no caller | `web/lib/razorpay.ts:41` | the wallet credits only from the webhook, so a missed webhook strands the demo |
@@ -291,15 +291,20 @@ Deferred with the reason stated. The self asserted account id stays, because the
 fix is either signing the id or issuing per buyer tokens and neither is an hour's
 work; it is an authorization hole in the personalisation path only, it cannot move
 money past the gate, and it is written down here rather than left for someone to
-find. No price below list stays, because allowing a final amount between the cost
-floor and list touches the gate contract itself, and changing the money contract
-in the last day to make a decorative table functional is the wrong trade; the
-honest position is that the merchant prices at or above list and the loyalty tier
-buys bundle value rather than money off, which is what the vocabulary should have
-said all along. The bundled goods carry, the one shot run, the constant uplifts
-and the mandate all stay as already sequenced in later phases. The stub tool is
-removed rather than implemented, since a tool that hands back its own argument is
-worse than a missing one.
+find. The bundled goods carry, the one shot run, the constant uplifts and the
+mandate all stay as already sequenced in later phases. The stub tool is removed
+rather than implemented, since a tool that hands back its own argument is worse
+than a missing one.
+
+Closed since, and worth recording because it changed the money contract rather
+than patching around it. A price could not settle below the list total, which made
+the campaign tiers and the loyalty strategy decorative. Four layers enforced that
+ordering: the gate ladder, the negotiation floor, the fulfillment function and a
+check constraint on the revenue table. All four moved together. The floor is now
+the list total less the discount a buyer is already entitled to, and never below
+cost, so a discount is bounded by data rather than by a model's judgement. The
+cost of that change is the row above: the buyer's gate no longer double covers the
+cost floor, because the alternative was publishing cost to the counterparty.
 
 Also deferred, smaller: pagination past the first hundred gateway objects, loyalty
 tiers being farmable by buying and refunding in a loop, the last write wins session

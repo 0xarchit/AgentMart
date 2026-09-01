@@ -114,10 +114,16 @@ export default async function AdminPage() {
 
         <div className="mt-8 grid gap-4 md:grid-cols-4">
           <Stat
-            label="Revenue above list"
-            value={money(figures.uplift)}
+            label="Uplift earned"
+            value={money(figures.upliftEarned)}
             basis={`${revenue.length} credited row(s)`}
             tone="moss"
+          />
+          <Stat
+            label="Discount given"
+            value={money(figures.discountGiven)}
+            basis="funded from loyalty entitlement"
+            tone={figures.discountGiven > 0 ? "coral" : "moss"}
           />
           <Stat
             label="Settled value"
@@ -274,8 +280,11 @@ export default async function AdminPage() {
                     <span className="text-ink/60">
                       {money(row.final_amount_paise)} settled
                     </span>
-                    <span className="ml-3 font-semibold text-moss">
-                      +{money(row.uplift_paise)}
+                    <span
+                      className={`ml-3 font-semibold ${row.uplift_paise < 0 ? "text-coral" : "text-moss"}`}
+                    >
+                      {row.uplift_paise < 0 ? "" : "+"}
+                      {money(row.uplift_paise)}
                     </span>
                   </>
                 ),

@@ -79,9 +79,6 @@ func rejectionReason(request Request, maxPriceAge time.Duration) string {
 	if request.BaseAmountPaise != request.UnitPricePaise*int64(request.Quantity) {
 		return "amount_mismatch"
 	}
-	if request.FinalAmountPaise < request.BaseAmountPaise {
-		return "negotiated_amount_below_base"
-	}
 	if request.Stock < request.Quantity {
 		return "insufficient_stock"
 	}

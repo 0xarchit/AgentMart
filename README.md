@@ -98,9 +98,14 @@ every transaction, which contradicts the one thing this system is for.
 
 ## Known limitations
 
-- A negotiated price can never fall below list. The merchant prices at or above
-  list, so a loyalty tier buys bundle value rather than money off. The schema
-  carries discount tiers that cannot currently apply as money.
+- A price may settle below list only as far as the buyer's funded loyalty
+  entitlement, and never below cost. With no campaign the floor is the list total,
+  which is what every anonymous caller gets.
+- Cost is enforced on the merchant side only. The buyer's gate protects the
+  person's money and has no knowledge of what anything costs, so "never below
+  cost" is proven where the price is set rather than at both ends. The alternative
+  was publishing cost to the counterparty, which we rejected. This is a deliberate
+  reduction in defence depth on that one claim.
 - A run is one shot. A follow-up message starts a new shopping run instead of
   continuing the open conversation.
 - The opening quote's uplifts are constants rather than derived from the trading

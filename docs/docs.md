@@ -87,8 +87,7 @@ missing_identity
 invalid_quantity
 invalid_amount
 amount_overflow
-amount_mismatch                 the amount does not match the live catalog row
-negotiated_amount_below_base    a final below the list total
+amount_mismatch                 the base amount does not match the live catalog row
 insufficient_stock
 human_approval_required         no limit set, or the total is above it
 insufficient_wallet_balance
@@ -98,6 +97,11 @@ approved
 
 The decision is recorded before it is returned. If the recording fails, the gate
 refuses rather than approving something it could not write down.
+
+A settled amount may sit below the list total, which is what a funded loyalty
+discount produces. That bound belongs to the merchant, not to this gate: the
+floor is the list total less whatever discount the buyer is entitled to, and
+never below cost. See the known limitation about where cost is enforced.
 
 ## Money flow
 

@@ -110,7 +110,16 @@ export default async function DashboardPage() {
   const revenue = (revenueResult.data ?? []) as Revenue[];
   const auditEvents = (auditResult.data ?? []) as AuditEvent[];
   const runs = (runsResult.data ?? []) as Run[];
-  const upliftTotal = revenue.reduce((sum, row) => sum + row.uplift_paise, 0);
+  // Reported separately rather than netted, so a funded discount cannot cancel an
+  // upsell and leave one figure that says nothing.
+  const upliftEarned = revenue.reduce(
+    (sum, row) => sum + Math.max(row.uplift_paise, 0),
+    0,
+  );
+  const discountGiven = revenue.reduce(
+    (sum, row) => sum + Math.max(-row.uplift_paise, 0),
+    0,
+  );
   return (
     <main className="min-h-screen bg-paper px-6 py-10">
       <div className="mx-auto max-w-5xl">
@@ -161,10 +170,16 @@ export default async function DashboardPage() {
             basis="Account scoped by policy"
           />
           <Stat
-            label="Revenue above list"
-            value={money(upliftTotal)}
+            label="Uplift earned"
+            value={money(upliftEarned)}
             basis="Across settled revenue rows"
             tone="moss"
+          />
+          <Stat
+            label="Discount given"
+            value={money(discountGiven)}
+            basis="Funded from loyalty entitlement"
+            tone={discountGiven > 0 ? "coral" : "moss"}
           />
         </div>
 
@@ -290,8 +305,11 @@ export default async function DashboardPage() {
                           {formatDate(row.credited_at)}
                         </p>
                       </div>
-                      <p className="font-semibold text-moss">
-                        +{money(row.uplift_paise)}
+                      <p
+                        className={`font-semibold ${row.uplift_paise < 0 ? "text-coral" : "text-moss"}`}
+                      >
+                        {row.uplift_paise < 0 ? "" : "+"}
+                        {money(row.uplift_paise)}
                       </p>
                     </div>
                     <p className="mt-1 text-xs text-ink/60">
