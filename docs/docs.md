@@ -31,10 +31,11 @@ machine.
 | Path | Purpose |
 | --- | --- |
 | `/` | storefront, reads the public catalog |
-| `/login` | sign in |
+| `/login` | customer sign in |
+| `/admin/login` | operator sign in, a separate door that grants nothing by itself |
 | `/dashboard` | allowance, spend limit, orders, wallet movements, recent runs, chat linking |
 | `/dashboard/runs` | one run read back as conversation on the left and money on the right |
-| `/admin` | operations figures, reconciled against the ledger |
+| `/admin` | operations figures, reconciled against the ledger. Open only to an account whose type is admin |
 | `/api/topups/orders` | creates a gateway order for funding the allowance |
 | `/api/razorpay/webhook` | verifies the signature and credits the allowance once per payment id |
 | `/api/account`, `/api/account/spend-limit` | read the account, change the standing limit |
@@ -129,6 +130,11 @@ Tables: `accounts`, `products`, `orders`, `wallet_ledger`, `merchant_revenue`,
 `audit_log`, `campaigns`, `human_approval_requests`, `link_tokens`,
 `telegram_links`.
 
+`accounts.account_type` is either customer or admin and decides who may read the
+operator view. A browser session cannot change it: the column privilege is revoked
+from signed in users and a trigger refuses the change regardless, so the one
+column that decides what an account can see is the one it cannot set for itself.
+
 Views: `run_summary`, `run_timeline` and `product_trading`, all with
 `security_invoker` on, so a reader sees only their own rows. `product_trading`
 carries the selling rate and stock cover an opening quote is priced from, with a
@@ -165,7 +171,6 @@ order.
 | `MARKET_SHARED_TOKEN` | the token the buyer presents to the merchant |
 | `USER_MARKET_MCP_ENDPOINT`, `USER_MARKET_A2A_ENDPOINT` | where the buyer finds the merchant |
 | `DEFAULT_SPEND_LIMIT_PAISE` | the standing limit a new account starts with |
-| `ADMIN_EMAILS` | who may open the operations view |
 
 `ADK_MODEL_NAME` is a comma separated chain. Each model is retried five times,
 three seconds apart, before the next is tried, because a free pool flaps per call

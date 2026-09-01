@@ -1,7 +1,7 @@
 // Cross-account operations view: revenue, margin, stock and the latest runs.
 // Every figure here is derived from rows read below, never from a constant.
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { currentIdentity } from "@/lib/roles";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Bars, Card, Empty, Rows, Stat, TopNav, money } from "../ui";
@@ -32,17 +32,12 @@ type RunRow = {
 };
 
 export default async function AdminPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-  const admins = (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-  if (admins.length > 0 && !admins.includes((user.email ?? "").toLowerCase()))
-    redirect("/dashboard");
+  // Operator access is a fact on the account, read through the caller's own
+  // session. A customer never reaches this page, and neither does a signed out
+  // visitor, so the service-role reads below always sit behind a real check.
+  const identity = await currentIdentity();
+  if (!identity) redirect("/admin/login");
+  if (identity.role !== "admin") redirect("/admin/login");
   // RLS scopes every table to the caller's own account, so the cross-account
   // admin views must read through the service-role client after the guard.
   const admin = createAdminClient();
