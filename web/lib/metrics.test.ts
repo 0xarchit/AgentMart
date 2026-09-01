@@ -69,6 +69,31 @@ describe("summarize", () => {
     expect(figures.marginPct).toBe(40);
   });
 
+  it("reports uplift earned and discount given separately, never netted", () => {
+    const figures = summarize([], products, [
+      {
+        order_id: "a",
+        base_amount_paise: 100_000,
+        final_amount_paise: 112_000,
+        uplift_paise: 12_000,
+        credited_at: "2026-08-25T10:00:00Z",
+      },
+      {
+        order_id: "b",
+        base_amount_paise: 100_000,
+        final_amount_paise: 88_000,
+        uplift_paise: -12_000,
+        credited_at: "2026-08-25T11:00:00Z",
+      },
+    ]);
+
+    // Netted these cancel to zero, which would hide both the upsell and the
+    // funded discount behind one meaningless figure.
+    expect(figures.upliftEarned).toBe(12_000);
+    expect(figures.discountGiven).toBe(12_000);
+    expect(figures.uplift).toBe(0);
+  });
+
   it("adds uplift from credited rows and nothing else", () => {
     const figures = summarize([], products, [
       {

@@ -47,6 +47,8 @@ export type TrailRow = { run_id: string | null; order_id: string | null };
 
 export type Figures = {
   uplift: number;
+  upliftEarned: number;
+  discountGiven: number;
   settledCount: number;
   settledValue: number;
   refundedCount: number;
@@ -160,6 +162,16 @@ export function summarize(
 
   return {
     uplift: revenue.reduce((sum, row) => sum + (row.uplift_paise ?? 0), 0),
+    // Uplift and discount are reported separately on purpose. A single net figure
+    // cancels a funded discount against an upsell and hides both.
+    upliftEarned: revenue.reduce(
+      (sum, row) => sum + Math.max(row.uplift_paise ?? 0, 0),
+      0,
+    ),
+    discountGiven: revenue.reduce(
+      (sum, row) => sum + Math.max(-(row.uplift_paise ?? 0), 0),
+      0,
+    ),
     settledCount: fulfilled.length,
     settledValue,
     refundedCount: refunded.length,
