@@ -381,3 +381,65 @@ func TestAFailedDecisionLookupDoesNotBlockShopping(t *testing.T) {
 		t.Fatalf("a failed lookup blocked shopping: %v", record.bodies)
 	}
 }
+
+// The buttons are derived from the message this file composed, so this drives the
+// real command paths rather than hand written strings. A reworded reply that
+// silently drops a button fails here instead of in front of a person.
+func TestEveryReplyThatNeedsButtonsGetsThem(t *testing.T) {
+	approval := fakePurchaser{result: buyer.PurchaseResult{
+		ApprovalRequired: true, ApprovalToken: "tok-77", AmountPaise: 314920,
+	}}
+	fulfilled := fakePurchaser{result: buyer.PurchaseResult{
+		Fulfilled: true, OrderID: "order-55", AmountPaise: 1250,
+	}}
+	refunded := fakeRefunder{result: buyer.RefundResult{
+		Approved: true, OrderID: "order-55", AmountPaise: 1250,
+	}}
+
+	cases := []struct {
+		name    string
+		buy     purchaser
+		refund  refunder
+		command []string
+		want    string
+	}{
+		{"approval needed", approval, fakeRefunder{}, []string{"/buy", "product", "1"}, "/approve tok-77"},
+		{"purchase fulfilled", fulfilled, fakeRefunder{}, []string{"/buy", "product", "1"}, "/refund order-55 Cancelled by user"},
+		{"approval resolved", fulfilled, fakeRefunder{}, []string{"/approve", "tok-77"}, "/refund order-55 Cancelled by user"},
+	}
+	for _, one := range cases {
+		t.Run(one.name, func(t *testing.T) {
+			response, err := responseForCommand(t.Context(), fakeLinker{}, one.buy, one.refund, 10, 5, one.command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			markup := replyMarkupForResponse(response)
+			if markup == nil {
+				t.Fatalf("no buttons for %q", response)
+			}
+			if got := markup.InlineKeyboard[0][0].CallbackData; got != one.want {
+				t.Fatalf("button = %q, want %q, from %q", got, one.want, response)
+			}
+		})
+	}
+
+	// An order already sent back is not one to offer sending back again.
+	response, err := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refunded, 10, 5,
+		[]string{"/refund", "order-55", "changed", "mind"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if markup := replyMarkupForResponse(response); markup != nil {
+		t.Fatalf("a refunded order was offered a refund button: %q gave %#v", response, markup)
+	}
+}
+
+func TestAnApprovalTokenSurvivesExtraLines(t *testing.T) {
+	// The conversational path appends the run summary underneath the token. Taking
+	// everything after the last colon used to swallow that whole block.
+	response := "Human approval required for INR 3149.20. Approval token: tok-9\n\nAgent decision: ask_human\nReason: over the limit"
+	markup := replyMarkupForResponse(response)
+	if markup == nil || markup.InlineKeyboard[0][0].CallbackData != "/approve tok-9" {
+		t.Fatalf("markup = %#v", markup)
+	}
+}

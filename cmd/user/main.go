@@ -720,12 +720,24 @@ func cancelMarkup(orderID string) *telegram.InlineKeyboardMarkup {
 	}}}
 }
 
+// replyMarkupForResponse decides which buttons a reply carries. It reads the
+// message this file just composed, so the two must be changed together: the test
+// beside it drives the real command paths and fails if a rewording ever leaves a
+// person holding a token with no way to answer it.
 func replyMarkupForResponse(response string) *telegram.InlineKeyboardMarkup {
-	if prefix := "Human approval required"; strings.HasPrefix(response, prefix) {
-		return approvalMarkup(strings.TrimSpace(response[strings.LastIndex(response, ":")+1:]))
+	if marker := "Approval token: "; strings.Contains(response, marker) {
+		token := response[strings.Index(response, marker)+len(marker):]
+		return approvalMarkup(strings.TrimSpace(strings.SplitN(token, "\n", 2)[0]))
+	}
+	// An order that has just been sent back is not one to offer sending back
+	// again. The duplicate guard would refuse the second attempt, but offering it
+	// at all reads as the system not knowing what it just did.
+	if strings.Contains(response, "Refund") {
+		return nil
 	}
 	if marker := "Order: "; strings.Contains(response, marker) {
-		return cancelMarkup(strings.TrimSpace(strings.SplitN(response[strings.Index(response, marker)+len(marker):], " ", 2)[0]))
+		order := response[strings.Index(response, marker)+len(marker):]
+		return cancelMarkup(strings.TrimSpace(strings.SplitN(order, " ", 2)[0]))
 	}
 	return nil
 }
