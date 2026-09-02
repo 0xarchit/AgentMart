@@ -48,6 +48,11 @@ type Result struct {
 	// QuotedAt is when the quote behind FinalPaise was received, passed to the gate
 	// so a price this run observed too long ago is refused rather than spent.
 	QuotedAt time.Time
+	// Shown is what the shop put in front of the person on this pass, in the order
+	// they saw it, so a follow up can refer to something by position or by name. It
+	// carries no money authority: the prices here are what was quoted, and the gate
+	// re-derives the amount from the catalog on every purchase.
+	Shown []PriorOption
 }
 
 // Assessment is the buyer agent's judgement on a merchant offer. The agent,

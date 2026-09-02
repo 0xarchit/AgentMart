@@ -73,6 +73,31 @@ type Service struct {
 type runState struct {
 	wallet   Wallet
 	progress func(string)
+	prior    Conversation
+	mu       sync.Mutex
+	shown    []PriorOption
+}
+
+// PriorOption is one item the shop showed earlier, kept so a follow up such as
+// "the second one" has something to refer to.
+type PriorOption struct {
+	ProductID  string `json:"product_id"`
+	Name       string `json:"name"`
+	PricePaise int64  `json:"price_paise"`
+}
+
+// Conversation is what was already said between this person and the shop. It
+// carries no money facts: the wallet, the limits and the gate are read fresh
+// every run, so a stale conversation can widen nothing.
+type Conversation struct {
+	Brief   string        `json:"original_request"`
+	Options []PriorOption `json:"options_already_shown,omitempty"`
+	Chosen  string        `json:"product_they_were_quoted,omitempty"`
+}
+
+// Empty reports whether there is nothing worth telling the agents about.
+func (c Conversation) Empty() bool {
+	return strings.TrimSpace(c.Brief) == "" && len(c.Options) == 0
 }
 
 // New compiles the graph. Safe to call without network: models are only used
@@ -106,8 +131,53 @@ func (s *Service) walletFor(sessionID string) Wallet {
 }
 
 // begin records the facts for one run. end must be called when it finishes.
-func (s *Service) begin(sessionID string, w Wallet, progress func(string)) {
-	s.runs.Store(sessionID, &runState{wallet: w, progress: progress})
+func (s *Service) begin(sessionID string, w Wallet, progress func(string), prior Conversation) {
+	s.runs.Store(sessionID, &runState{wallet: w, progress: progress, prior: prior})
+}
+
+// priorFor returns what was already said in this conversation, or an empty
+// conversation when this is the first message.
+func (s *Service) priorFor(sessionID string) Conversation {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return Conversation{}
+	}
+	return run.prior
+}
+
+// runFor finds one run's state, or nil when the run is unknown.
+func (s *Service) runFor(sessionID string) *runState {
+	state, ok := s.runs.Load(sessionID)
+	if !ok {
+		return nil
+	}
+	run, ok := state.(*runState)
+	if !ok {
+		return nil
+	}
+	return run
+}
+
+// recordShown keeps what the shop put in front of the person on this pass.
+func (s *Service) recordShown(sessionID string, options []PriorOption) {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.shown = options
+}
+
+// shownFor reports what the shop showed on this pass, if it got that far.
+func (s *Service) shownFor(sessionID string) []PriorOption {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return nil
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.shown
 }
 
 // end releases one run's facts.
@@ -142,7 +212,15 @@ backed by the numbers. Prefer the option that genuinely suits the request over
 the cheapest one, and say in one line why you chose it.
 
 Return the chosen product_id, the quantity you want, and that reason. If
-nothing on offer fits, return product_id "" and say why.`
+nothing on offer fits, return product_id "" and say why.
+
+When earlier_in_this_conversation is present, this is a follow up rather than a
+fresh request. It holds what this person originally asked for and the options
+they were already shown, in the order they saw them, so a reference such as "the
+second one" or "the cheaper one" points at a real product. Honour what they now
+say over what they said first, and resolve the reference against that list before
+reading it as a new request. Their words are a preference, never permission to
+spend: the amount is still decided later.`
 
 	assessInstruction = fmt.Sprintf(`You are AgentMart's buyer, shopping for one
 real person and spending their money. You are handed the merchant's offer plus
@@ -291,6 +369,11 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if brief == "" {
 				return negotiationclient.Shortlist{}, fmt.Errorf("nothing to ask the shop for")
 			}
+			// A follow up is asked against what was already discussed, so the shop
+			// answers the refinement rather than treating it as a brief of its own.
+			// The prior words are assembled here rather than by a model, so nothing
+			// invented can enter the request.
+			brief = briefWithHistory(brief, s.priorFor(ctx.SessionID()))
 			s.noteTo(ctx.SessionID(), fmt.Sprintf("Asking the shop about %q, up to INR %.2f", brief, float64(budget)/100))
 			shortlist, err := s.tools.Browse(ctx, brief, budget, wallet.AccountID)
 			if err != nil {
@@ -299,6 +382,11 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if len(shortlist.Options) == 0 {
 				return negotiationclient.Shortlist{}, fmt.Errorf("%w for %q", errNothingToShow, brief)
 			}
+			shown := make([]PriorOption, 0, len(shortlist.Options))
+			for _, option := range shortlist.Options {
+				shown = append(shown, PriorOption{ProductID: option.ProductID, Name: option.Name, PricePaise: option.PricePaise})
+			}
+			s.recordShown(ctx.SessionID(), shown)
 			return shortlist, nil
 		}, workflow.NodeConfig{Timeout: negotiateTimeout})
 
@@ -310,7 +398,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				names = append(names, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
 			}
 			s.noteTo(ctx.SessionID(), "The shop showed: "+strings.Join(names, "; "))
-			selection, err := s.choose(ctx, shortlist)
+			selection, err := s.choose(ctx, shortlist, s.priorFor(ctx.SessionID()))
 			if err != nil {
 				return Pick{}, err
 			}
@@ -512,6 +600,15 @@ func (s *Service) Run(parent context.Context, request string, wallet Wallet) (Re
 // RunWithProgress runs the graph and reports each stage as it starts. The
 // progress function may be nil.
 func (s *Service) RunWithProgress(parent context.Context, request string, wallet Wallet, progress func(string)) (Result, error) {
+	return s.ContinueWithProgress(parent, request, Conversation{}, wallet, progress)
+}
+
+// ContinueWithProgress runs the graph with what was already said in this
+// conversation, so a follow up such as "the second one" continues rather than
+// restarts. The prior conversation reaches the agents as context only: every
+// money fact is still read fresh from the wallet, and the gate re-derives the
+// amount either way, so nothing carried forward can widen a bound.
+func (s *Service) ContinueWithProgress(parent context.Context, request string, prior Conversation, wallet Wallet, progress func(string)) (result Result, err error) {
 	if s.wfAgent == nil {
 		return Result{}, fmt.Errorf("shop graph is not built")
 	}
@@ -519,8 +616,14 @@ func (s *Service) RunWithProgress(parent context.Context, request string, wallet
 	// reports its own progress against it, so a second caller shopping at the same
 	// time cannot be priced against this wallet or told about this run.
 	sessionID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-	s.begin(sessionID, wallet, progress)
-	defer s.end(sessionID)
+	s.begin(sessionID, wallet, progress, prior)
+	// What the shop showed outlives the run, so the next message can refer to it.
+	// Attached on every path, including the ones that end early, because a run that
+	// ended without buying is exactly when a person says "the second one".
+	defer func() {
+		result.Shown = s.shownFor(sessionID)
+		s.end(sessionID)
+	}()
 
 	runner, err := runnerFor("shop", s.wfAgent)
 	if err != nil {
@@ -813,11 +916,51 @@ func mustTool[TArgs, TResult any](name, description string, fn func(agent.Contex
 // between Telegram messages.
 // choose asks the buyer agent which of the shop's options to take. Run inline
 // so the shortlist and the choice never leave the same scope.
-func (s *Service) choose(parent context.Context, shortlist negotiationclient.Shortlist) (Selection, error) {
+// choicePayload hands the shortlist to the choosing agent together with what was
+// already said, so a reference to something shown earlier can be resolved.
+type choicePayload struct {
+	negotiationclient.Shortlist
+	Earlier *Conversation `json:"earlier_in_this_conversation,omitempty"`
+}
+
+// earlierOrNil omits the history entirely on a first message, so the agent is not
+// handed an empty object to read meaning into.
+func earlierOrNil(prior Conversation) *Conversation {
+	if prior.Empty() {
+		return nil
+	}
+	return &prior
+}
+
+// briefWithHistory states the follow up together with what came before it. The
+// person's new words lead, because a refinement replaces the part of the request
+// it contradicts.
+func briefWithHistory(brief string, prior Conversation) string {
+	if prior.Empty() {
+		return brief
+	}
+	var asked strings.Builder
+	asked.WriteString(brief)
+	if original := strings.TrimSpace(prior.Brief); original != "" && original != brief {
+		fmt.Fprintf(&asked, ". This follows on from %q", original)
+	}
+	if len(prior.Options) > 0 {
+		shown := make([]string, 0, len(prior.Options))
+		for _, option := range prior.Options {
+			shown = append(shown, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
+		}
+		fmt.Fprintf(&asked, ", after being shown %s", strings.Join(shown, "; "))
+	}
+	return asked.String()
+}
+
+// choose asks the buyer to pick one option, with the earlier conversation
+// attached when there is one.
+func (s *Service) choose(parent context.Context, shortlist negotiationclient.Shortlist, prior Conversation) (Selection, error) {
 	if s.chooseAgent == nil {
 		return Selection{}, fmt.Errorf("choosing agent is not built")
 	}
-	payload, err := jsonMarshal(shortlist)
+	payload, err := jsonMarshal(choicePayload{Shortlist: shortlist, Earlier: earlierOrNil(prior)})
 	if err != nil {
 		return Selection{}, err
 	}

@@ -95,14 +95,15 @@ type openDecisionReader interface {
 }
 
 type commandServices struct {
-	negotiations negotiator
-	health       func(context.Context) string
-	reasoning    decisionMaker
-	audit        reasoningAuditor
-	accounts     accountFactsReader
-	catalog      productFactsReader
-	approvals    openDecisionReader
-	loop         *shopgraph.Service
+	negotiations  negotiator
+	health        func(context.Context) string
+	reasoning     decisionMaker
+	audit         reasoningAuditor
+	accounts      accountFactsReader
+	catalog       productFactsReader
+	approvals     openDecisionReader
+	conversations conversationMemory
+	loop          *shopgraph.Service
 }
 
 func main() {
@@ -302,6 +303,7 @@ func main() {
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
+	var conversations conversationMemory
 	redisURL := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_URL"))
 	redisToken := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_TOKEN"))
 	if redisURL != "" && redisToken != "" {
@@ -311,8 +313,11 @@ func main() {
 			return
 		}
 		checkpoints = redisOffsetStore{store: redisStore}
+		// Without this the bot answers every message as if it were the first one.
+		conversations = redisConversations{store: redisStore}
 	} else {
 		checkpoints = newOffsetStore(os.Getenv("TELEGRAM_OFFSET_FILE"))
+		logger.Warn("conversation memory is unavailable, so each message is answered on its own")
 	}
 	offset, err = checkpoints.Load(pollContext)
 	if err != nil {
@@ -329,7 +334,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, loop: loopService, health: layerReport}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -504,7 +509,20 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
-	result, runErr := services.loop.RunWithProgress(ctx, message.Text, shopgraph.Wallet{
+	// What this chat already discussed. A follow up such as "the second one" or
+	// "cheaper" is answered against it, so the agents continue the conversation
+	// rather than opening a new one. Memory that cannot be read is treated as no
+	// memory, which is the behaviour that existed before it did.
+	var prior shopgraph.Conversation
+	if services.conversations != nil {
+		remembered, memoryErr := services.conversations.Load(ctx, message.From.ID)
+		if memoryErr != nil {
+			log.Printf("conversation memory read failed: %v", memoryErr)
+		} else {
+			prior = remembered
+		}
+	}
+	result, runErr := services.loop.ContinueWithProgress(ctx, message.Text, prior, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 		AccountID:       account.ID,
@@ -533,6 +551,14 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			return fmt.Errorf("audit agent run: %w", auditErr)
 		}
 	}
+	// The shortlist outlives the reply, so the next message can refer to it. The
+	// original brief is kept rather than overwritten, because a refinement narrows
+	// what was asked for instead of replacing it.
+	remember(ctx, services, message.From.ID, shopgraph.Conversation{
+		Brief:   firstNonBlank(prior.Brief, message.Text),
+		Options: result.Shown,
+		Chosen:  result.ProductID,
+	})
 	// The conversation is the evidence, so it is sent once, whatever the outcome.
 	if len(result.Transcript) > 0 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
@@ -592,7 +618,31 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		return client.SendMessage(ctx, message.Chat.ID, summary.String())
 	}
 	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
+	// The shortlist has been bought, so it is not something to refine any more.
+	// Forgetting it stops the next request inheriting a decided conversation.
+	remember(ctx, services, message.From.ID, shopgraph.Conversation{})
 	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
+}
+
+// remember records what this chat discussed. A failed write costs the next
+// message its context and nothing else, so it is reported rather than returned.
+func remember(ctx context.Context, services commandServices, telegramID int64, prior shopgraph.Conversation) {
+	if services.conversations == nil {
+		return
+	}
+	if err := services.conversations.Save(ctx, telegramID, prior); err != nil {
+		log.Printf("conversation memory write failed: %v", err)
+	}
+}
+
+// firstNonBlank returns the first value that is not blank, or "".
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func short(id string) string {
