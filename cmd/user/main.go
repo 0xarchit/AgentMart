@@ -797,7 +797,25 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 	negotiations := services.negotiations
 	switch command[0] {
 	case "/start", "/help":
-		return "Welcome to AgentMart. Just tell me what to buy (e.g. buy me a trimmer under 2500), or use /link TOKEN, /buy PRODUCT_ID QUANTITY, /negotiate PRODUCT_ID QUANTITY, /shop PRODUCT_ID QTY MAX_PAISE, /refund ORDER_ID REASON, /diag.", nil
+		return strings.Join([]string{
+			"Welcome to AgentMart.",
+			"",
+			"Tell me what you want in your own words and I will shop for it:",
+			"  buy me a trimmer under 2500",
+			"  something cheaper",
+			"  the second one",
+			"",
+			"I show you what the shop offers, argue the price, and buy it if it is",
+			"inside the limits you set. Anything outside them comes back to you to",
+			"approve or decline.",
+			"",
+			"If you prefer commands:",
+			"  /link TOKEN to connect the account you made on the website",
+			"  /buy PRODUCT_ID QUANTITY to buy a listed item outright",
+			"  /negotiate PRODUCT_ID QUANTITY to ask for a price first",
+			"  /refund ORDER_ID REASON to send an order back",
+			"  /diag to check that every part of the system is answering",
+		}, "\n"), nil
 	case "/diag":
 		if services.health == nil {
 			return "Layer checks are not configured in this build.", nil
@@ -912,7 +930,12 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		}
 		return fmt.Sprintf("Refund approved via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	default:
-		return "Use plain sentences like 'buy me a trimmer under 2500', or /start, /link TOKEN, /buy, /negotiate, /accept, /decline, /approve TOKEN, /reject TOKEN, /shop, or /refund ORDER_ID REASON.", nil
+		return strings.Join([]string{
+			"I did not recognise that.",
+			"",
+			"Plain sentences work best, for example: buy me a trimmer under 2500.",
+			"Send /start to see everything I can do.",
+		}, "\n"), nil
 	}
 }
 

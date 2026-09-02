@@ -122,6 +122,43 @@ export function Rows({
   );
 }
 
+/** Skeleton is the placeholder a page shows while its data is on the way, so a
+ * slow read looks like loading rather than like an empty account. */
+export function Skeleton({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="animate-pulse space-y-3" aria-hidden="true">
+      {Array.from({ length: lines }, (_, index) => (
+        <div key={index} className="h-16 bg-mint/60" />
+      ))}
+    </div>
+  );
+}
+
+/** Loading is one whole page of placeholder, navigation included, so the frame
+ * does not jump when the real content arrives. */
+export function Loading({
+  current,
+  title,
+}: {
+  current: "store" | "dashboard" | "runs" | "admin";
+  title: string;
+}) {
+  return (
+    <main className="min-h-screen bg-paper px-6 py-10">
+      <div className="mx-auto max-w-6xl">
+        <TopNav current={current} />
+        <div className="mt-8 border-b border-ink/10 pb-6">
+          <h1 className="text-3xl font-semibold">{title}</h1>
+          <p className="mt-2 text-sm text-ink/70">Reading the latest figures.</p>
+        </div>
+        <div className="mt-8">
+          <Skeleton lines={4} />
+        </div>
+      </div>
+    </main>
+  );
+}
+
 /** TopNav is the one navigation bar every page shares. */
 export function TopNav({
   current,

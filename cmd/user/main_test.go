@@ -122,8 +122,13 @@ func TestResponseForCommand(t *testing.T) {
 	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/buy"}); got == "" {
 		t.Fatal("expected purchase response")
 	}
-	if got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"}); !strings.HasPrefix(got, "Use plain sentences") {
-		t.Fatalf("unexpected fallback response: %q", got)
+	// An unknown command should point at the thing that actually works rather than
+	// list every command at someone who has just mistyped one.
+	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, fakeRefunder{}, 1, 1, []string{"/unknown"})
+	for _, want := range []string{"did not recognise", "buy me a trimmer", "/start"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the fallback is missing %q: %q", want, got)
+		}
 	}
 }
 
