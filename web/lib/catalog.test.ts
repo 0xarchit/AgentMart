@@ -30,6 +30,41 @@ describe("loadPublicProducts", () => {
     );
   });
 
+  it("shows the stock even when the image column is not there yet", async () => {
+    vi.stubEnv("SUPABASE_URL", "https://example.supabase.co");
+    vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "public-key");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("column products.image_url does not exist", {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "p1", name: "Nova" }]), {
+          status: 200,
+        }),
+      );
+
+    // Blanking the storefront over a column that only decides how a card is
+    // illustrated would turn a cosmetic gap into an outage.
+    await expect(loadPublicProducts(fetcher)).resolves.toEqual([
+      { id: "p1", name: "Nova", image_url: null },
+    ]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1][0])).not.toContain("image_url");
+  });
+
+  it("returns an empty catalog when the catalog cannot be read at all", async () => {
+    vi.stubEnv("SUPABASE_URL", "https://example.supabase.co");
+    vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "public-key");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("unavailable", { status: 503 }));
+
+    await expect(loadPublicProducts(fetcher)).resolves.toEqual([]);
+  });
+
   it("returns an empty catalog when public configuration is unavailable", async () => {
     vi.stubEnv("SUPABASE_URL", "");
     vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "");
