@@ -31,7 +31,7 @@ export default async function LoginPage({
             Continue with Google
           </button>
         </form>
-        <p className="mt-4 text-xs text-ink/50">
+        <p className="mt-4 text-xs text-ink/70">
           Google OAuth must be enabled in Supabase Auth providers.
         </p>
         <p className="mt-2 text-xs">

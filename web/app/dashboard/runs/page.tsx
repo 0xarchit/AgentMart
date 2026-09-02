@@ -104,7 +104,7 @@ export default async function RunsPage({
             Runs
           </h2>
           {runs.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-ink/50">
+            <p className="px-4 py-6 text-sm text-ink/70">
               No runs recorded yet. Ask the shopping agent for something in
               chat.
             </p>
@@ -122,7 +122,7 @@ export default async function RunsPage({
                       >
                         {run.outcome ?? "in progress"}
                       </span>
-                      <span className="text-xs text-ink/50">
+                      <span className="text-xs text-ink/70">
                         {formatTime(run.started_at)}
                       </span>
                     </span>
@@ -130,7 +130,7 @@ export default async function RunsPage({
                       {run.request ?? "No request recorded"}
                     </span>
                     {run.final_amount_paise !== null && (
-                      <span className="mt-1 block text-xs text-ink/50">
+                      <span className="mt-1 block text-xs text-ink/70">
                         {run.product_name} at{" "}
                         {formatRupees(run.final_amount_paise)}
                       </span>
@@ -143,7 +143,7 @@ export default async function RunsPage({
         </section>
 
         {!selected ? (
-          <section className="border border-ink/10 bg-white p-6 text-sm text-ink/50">
+          <section className="border border-ink/10 bg-white p-6 text-sm text-ink/70">
             Pick a run to read it back.
           </section>
         ) : (
@@ -157,13 +157,13 @@ export default async function RunsPage({
               </p>
               <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-4">
                 <div>
-                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/50">
+                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
                     Outcome
                   </dt>
                   <dd className="mt-1">{current?.outcome ?? "in progress"}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/50">
+                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
                     Settled at
                   </dt>
                   <dd className="mt-1">
@@ -173,13 +173,13 @@ export default async function RunsPage({
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/50">
+                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
                     Events
                   </dt>
                   <dd className="mt-1">{current?.events ?? timeline.length}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/50">
+                  <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
                     Run
                   </dt>
                   <dd className="mt-1 font-mono text-xs">
@@ -200,7 +200,7 @@ export default async function RunsPage({
                   What was said
                 </h3>
                 {conversation.length === 0 ? (
-                  <p className="mt-4 text-sm text-ink/50">
+                  <p className="mt-4 text-sm text-ink/70">
                     No conversation recorded for this run.
                   </p>
                 ) : (
@@ -210,7 +210,7 @@ export default async function RunsPage({
                         key={`${turn.at}-${index}`}
                         className={`border-l-2 pl-3 text-sm ${turn.actor === "merchant" ? "border-moss" : "border-ink/30"}`}
                       >
-                        <p className="text-xs uppercase tracking-[0.12em] text-ink/50">
+                        <p className="text-xs uppercase tracking-[0.12em] text-ink/70">
                           {turn.actor}
                         </p>
                         <p className="mt-1 text-ink/80">{turn.message}</p>
@@ -225,7 +225,7 @@ export default async function RunsPage({
                   What it cost
                 </h3>
                 {timeline.length === 0 ? (
-                  <p className="mt-4 text-sm text-ink/50">
+                  <p className="mt-4 text-sm text-ink/70">
                     No trail rows for this run.
                   </p>
                 ) : (
@@ -236,11 +236,11 @@ export default async function RunsPage({
                           <span className="text-xs font-semibold text-ink/70">
                             {row.action}
                           </span>
-                          <span className="text-xs text-ink/50">
+                          <span className="text-xs text-ink/70">
                             {formatTime(row.at)}
                           </span>
                         </div>
-                        <p className="mt-1 text-xs text-ink/50">
+                        <p className="mt-1 text-xs text-ink/70">
                           by {row.actor}
                           {row.amount_paise != null &&
                             ` at ${formatRupees(row.amount_paise)}`}

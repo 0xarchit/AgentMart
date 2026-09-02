@@ -8,6 +8,7 @@ import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
 import { Card, Rows, Stat, TopNav, money } from "@/app/ui";
+import { plainWords } from "@/lib/words";
 
 type Account = {
   wallet_balance_paise: number;
@@ -164,7 +165,7 @@ export default async function DashboardPage() {
           <Stat
             label="Uplift earned"
             value={money(upliftEarned)}
-            basis="Across settled revenue rows"
+            basis={`${revenue.length} credited row(s)`}
             tone="moss"
           />
           <Stat
@@ -221,7 +222,7 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold">Recent orders</h2>
             <div className="mt-4 divide-y divide-ink/10">
               {orders.length === 0 ? (
-                <p className="py-4 text-sm text-ink/50">No orders yet.</p>
+                <p className="py-4 text-sm text-ink/70">No orders yet.</p>
               ) : (
                 orders.map((order) => (
                   <div
@@ -230,7 +231,7 @@ export default async function DashboardPage() {
                   >
                     <div>
                       <p className="font-medium">{order.id.slice(0, 8)}</p>
-                      <p className="text-xs text-ink/50">
+                      <p className="text-xs text-ink/70">
                         {formatDate(order.created_at)}
                       </p>
                     </div>
@@ -238,7 +239,9 @@ export default async function DashboardPage() {
                       <p className="font-semibold">
                         {money(order.amount_paise)}
                       </p>
-                      <p className="text-xs text-moss">{order.status}</p>
+                      <p className="text-xs text-moss">
+                        {plainWords(order.status)}
+                      </p>
                     </div>
                   </div>
                 ))
@@ -249,7 +252,7 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold">Wallet movements</h2>
             <div className="mt-4 divide-y divide-ink/10">
               {ledger.length === 0 ? (
-                <p className="py-4 text-sm text-ink/50">
+                <p className="py-4 text-sm text-ink/70">
                   No wallet movements yet.
                 </p>
               ) : (
@@ -259,8 +262,10 @@ export default async function DashboardPage() {
                     className="flex items-center justify-between gap-4 py-3 text-sm"
                   >
                     <div>
-                      <p className="font-medium">{entry.entry_type}</p>
-                      <p className="text-xs text-ink/50">
+                      <p className="font-medium">
+                        {plainWords(entry.entry_type)}
+                      </p>
+                      <p className="text-xs text-ink/70">
                         {formatDate(entry.created_at)}
                       </p>
                     </div>
@@ -269,7 +274,7 @@ export default async function DashboardPage() {
                         {entry.amount_paise >= 0 ? "+" : ""}
                         {money(entry.amount_paise)}
                       </p>
-                      <p className="text-xs text-ink/50">
+                      <p className="text-xs text-ink/70">
                         Balance {money(entry.balance_after_paise)}
                       </p>
                     </div>
@@ -282,7 +287,7 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold">Merchant revenue</h2>
             <div className="mt-4 divide-y divide-ink/10">
               {revenue.length === 0 ? (
-                <p className="py-4 text-sm text-ink/50">
+                <p className="py-4 text-sm text-ink/70">
                   No fulfilled revenue yet.
                 </p>
               ) : (
@@ -293,7 +298,7 @@ export default async function DashboardPage() {
                         <p className="font-medium">
                           Order {row.order_id.slice(0, 8)}
                         </p>
-                        <p className="text-xs text-ink/50">
+                        <p className="text-xs text-ink/70">
                           {formatDate(row.credited_at)}
                         </p>
                       </div>

@@ -26,7 +26,7 @@ export function Card({
         <h2 className="text-xl font-semibold">{title}</h2>
         {action}
       </div>
-      {source ? <p className="mt-1 text-xs text-ink/50">{source}</p> : null}
+      {source ? <p className="mt-1 text-xs text-ink/70">{source}</p> : null}
       <div className="mt-4">{children}</div>
     </section>
   );
@@ -50,7 +50,7 @@ export function Stat({
     <div className="border border-ink/10 bg-white p-5">
       <p className="text-sm text-ink/60">{label}</p>
       <p className={`mt-3 text-3xl font-semibold ${colour}`}>{value}</p>
-      {basis ? <p className="mt-2 text-xs text-ink/50">{basis}</p> : null}
+      {basis ? <p className="mt-2 text-xs text-ink/70">{basis}</p> : null}
     </div>
   );
 }
@@ -82,7 +82,7 @@ export function Bars({
             style={{ height: `${Math.max(4, (point.value / peak) * 120)}px` }}
             title={`${point.label}: ${format(point.value)}`}
           />
-          <span className="text-xs text-ink/50">{point.label}</span>
+          <span className="text-xs text-ink/70">{point.label}</span>
         </div>
       ))}
     </div>
@@ -92,7 +92,7 @@ export function Bars({
 /** Empty is the placeholder for a panel whose table has no rows yet. */
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <p className="border border-dashed border-ink/20 px-4 py-6 text-sm text-ink/50">
+    <p className="border border-dashed border-ink/20 px-4 py-6 text-sm text-ink/70">
       {children}
     </p>
   );

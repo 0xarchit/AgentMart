@@ -176,7 +176,7 @@ export default async function AdminPage() {
                     <span className="font-semibold text-moss">
                       {money(entry.value)}
                     </span>
-                    <span className="ml-2 text-ink/50">
+                    <span className="ml-2 text-ink/70">
                       {entry.count} unit(s)
                     </span>
                   </>
