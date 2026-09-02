@@ -88,6 +88,12 @@ type productFactsReader interface {
 	Get(context.Context, string) (catalog.Product, error)
 }
 
+// openDecisionReader finds a decision the person was asked for and has not
+// answered. It can only read: nothing here resolves or spends.
+type openDecisionReader interface {
+	PendingFor(context.Context, int64) (buyer.PendingApproval, bool, error)
+}
+
 type commandServices struct {
 	negotiations negotiator
 	health       func(context.Context) string
@@ -95,6 +101,7 @@ type commandServices struct {
 	audit        reasoningAuditor
 	accounts     accountFactsReader
 	catalog      productFactsReader
+	approvals    openDecisionReader
 	loop         *shopgraph.Service
 }
 
@@ -157,7 +164,8 @@ func main() {
 		logger.Error("user payment configuration failed", "error", err)
 		return
 	}
-	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
+	approvalStore := buyer.NewApprovalStore(db)
+	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), approvalStore)
 	// Refusals before the gate is consulted leave a row too, so no money path in
 	// the trail is silent.
 	purchaseService.UseFailureTrail(store)
@@ -321,7 +329,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService, health: layerReport}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, loop: loopService, health: layerReport}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -470,6 +478,24 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if services.loop == nil || services.accounts == nil || services.catalog == nil || services.negotiations == nil {
 		return client.SendMessage(ctx, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.")
 	}
+	// A decision the person has not answered outranks a new request. Starting a
+	// fresh run here used to abandon the open question and quote them something
+	// else, which reads as the agent forgetting what it just asked.
+	//
+	// What they typed is never read as consent. It can only put the same question
+	// back in front of them, because interpreting words as approval would put text
+	// interpretation in the charge path.
+	if services.approvals != nil {
+		pending, open, pendingErr := services.approvals.PendingFor(ctx, message.From.ID)
+		if pendingErr != nil {
+			// A failed read must not block shopping, so this falls through to the
+			// behaviour that existed before the lookup did.
+			log.Printf("open decision lookup failed: %v", pendingErr)
+		} else if open {
+			return client.SendMessageWithMarkup(ctx, message.Chat.ID,
+				openDecisionMessage(ctx, services.catalog, pending), approvalMarkup(pending.Token))
+		}
+	}
 	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
 	if accountErr != nil {
 		log.Printf("agent loop account lookup failed: %v", accountErr)
@@ -592,6 +618,27 @@ func renderTranscript(turns []negotiation.Turn) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+// openDecisionMessage restates the decision the person was asked for and has not
+// answered. It never interprets what they typed: a typed message cannot approve a
+// spend, so the only thing this does is put the same question in front of them
+// again, with the same token and the same two buttons.
+func openDecisionMessage(ctx context.Context, products productFactsReader, pending buyer.PendingApproval) string {
+	name := "the item you were shown"
+	if products != nil {
+		if product, err := products.Get(ctx, pending.ProductID); err == nil && strings.TrimSpace(product.Name) != "" {
+			name = product.Name
+		}
+	}
+	var open strings.Builder
+	fmt.Fprintf(&open, "You still have a decision open: %s for INR %.2f.", name, float64(pending.FinalAmountPaise)/100)
+	if reason := strings.TrimSpace(pending.Reason); reason != "" {
+		fmt.Fprintf(&open, "\nWhy it needs you: %s", reason)
+	}
+	fmt.Fprintf(&open, "\n\nTap Approve or Decline below, or send /approve %s", pending.Token)
+	open.WriteString("\nNothing has moved. A typed message cannot approve a spend.")
+	return open.String()
 }
 
 // approvalMarkup puts the decision one tap away. The token is passed in rather
