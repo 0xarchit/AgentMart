@@ -176,6 +176,19 @@ export default async function DashboardPage() {
           />
         </div>
 
+        <div className="mt-8 border-b border-ink/10 pb-2">
+          <h2 className="text-lg font-semibold">What you can do</h2>
+          <p className="mt-1 text-sm text-ink/70">
+            Add money, set the limit the agents may spend without asking, and
+            connect the chat you shop from.
+          </p>
+        </div>
+        <div className="mt-4 space-y-4">
+          <TopUpButton />
+          <SpendLimitEditor currentPaise={account?.spend_limit_paise ?? 0} />
+          <LinkTelegram />
+        </div>
+
         <div className="mt-8">
           <Card
             title="Your runs"
@@ -309,7 +322,7 @@ export default async function DashboardPage() {
                         {money(row.uplift_paise)}
                       </p>
                     </div>
-                    <p className="mt-1 text-xs text-ink/60">
+                    <p className="mt-1 text-xs text-ink/70">
                       Base {money(row.base_amount_paise)} to final{" "}
                       {money(row.final_amount_paise)}
                     </p>
@@ -319,15 +332,6 @@ export default async function DashboardPage() {
             </div>
           </section>
           <AuditTimeline events={auditEvents} />
-        </div>
-        <div className="mt-8">
-          <TopUpButton />
-        </div>
-        <div className="mt-8">
-          <SpendLimitEditor currentPaise={account?.spend_limit_paise ?? 0} />
-        </div>
-        <div className="mt-8">
-          <LinkTelegram />
         </div>
       </div>
     </main>
