@@ -240,8 +240,8 @@ The absences are choices, and each one was argued rather than defaulted.
 gofmt -l internal/ cmd/
 go build ./...
 go vet ./...
-go test -short -count=1 ./internal/... ./cmd/...     # 23 packages
-cd web && npx tsc --noEmit && npx vitest run          # 17 tests, 3 files
+go test -short -count=1 ./internal/... ./cmd/...     # 28 packages
+cd web && npx tsc --noEmit && npx vitest run          # 32 tests, 5 files
 ```
 
 The Go test paths are scoped on purpose rather than written as `./...`. The

@@ -1,6 +1,7 @@
 // Read-only storefront backed by the seeded catalog. Everything shown here is a
 // product row, including what each item pairs with and on what terms.
 import { loadPublicProducts } from "@/lib/catalog";
+import { productArt } from "@/lib/product-art";
 import { createClient } from "@/lib/supabase/server";
 import { money } from "./ui";
 
@@ -113,11 +114,34 @@ export default async function HomePage() {
                 const partner = product.combo_with
                   ? nameById.get(product.combo_with)
                   : undefined;
+                const art = productArt(product);
                 return (
                   <article
                     key={product.id}
-                    className="flex flex-col border border-ink/10 bg-white p-5 shadow-sm"
+                    className="flex flex-col border border-ink/10 bg-white shadow-sm"
                   >
+                    {product.image_url ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={product.image_url}
+                        alt={product.name}
+                        className="h-40 w-full object-cover"
+                      />
+                    ) : (
+                      <div
+                        aria-hidden="true"
+                        className="flex h-40 w-full items-center justify-center"
+                        style={{
+                          backgroundColor: art.background,
+                          color: art.foreground,
+                        }}
+                      >
+                        <span className="text-4xl font-semibold tracking-[0.12em]">
+                          {art.monogram}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex flex-1 flex-col p-5">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-moss">
@@ -126,7 +150,7 @@ export default async function HomePage() {
                         <h3 className="mt-2 text-lg font-semibold">
                           {product.name}
                         </h3>
-                        <p className="mt-1 text-xs text-ink/60">
+                        <p className="mt-1 text-xs text-ink/70">
                           {product.warranty_years} year warranty
                         </p>
                       </div>
@@ -136,7 +160,7 @@ export default async function HomePage() {
                     </div>
 
                     {partner ? (
-                      <p className="mt-4 bg-paper px-3 py-2 text-xs text-ink/70">
+                      <p className="mt-4 bg-paper px-3 py-2 text-xs text-ink/80">
                         Pairs with {partner}
                         {product.combo_discount_pct
                           ? `, ${product.combo_discount_pct}% off the pair`
@@ -158,7 +182,7 @@ export default async function HomePage() {
                       </div>
                       <div className="text-right">
                         <code
-                          className="text-xs text-ink/50"
+                          className="text-xs text-ink/70"
                           title="Use this ID with /buy in Telegram"
                         >
                           {product.id.slice(0, 8)}
@@ -167,12 +191,13 @@ export default async function HomePage() {
                           className={
                             product.stock <= 3
                               ? "text-sm font-semibold text-coral"
-                              : "text-sm text-ink/60"
+                              : "text-sm text-ink/70"
                           }
                         >
                           {product.stock} in stock
                         </p>
                       </div>
+                    </div>
                     </div>
                   </article>
                 );

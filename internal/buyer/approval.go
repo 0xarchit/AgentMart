@@ -6,7 +6,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/supabase"
@@ -55,6 +58,46 @@ type ApprovalStore struct {
 
 // NewApprovalStore constructs an approval persistence service.
 func NewApprovalStore(db *supabase.Client) *ApprovalStore { return &ApprovalStore{db: db} }
+
+// PendingApproval is a decision the person has been asked for and has not
+// answered yet.
+type PendingApproval struct {
+	Token            string `json:"token"`
+	ProductID        string `json:"product_id"`
+	Quantity         int    `json:"qty"`
+	FinalAmountPaise int64  `json:"final_amount_paise"`
+	Reason           string `json:"reason"`
+	ExpiresAt        string `json:"expires_at"`
+}
+
+// PendingFor returns the open decision for one person, newest first, or false
+// when there is none. An expired request is not open: its window has closed, and
+// showing it again would ask the person to answer a question that no longer
+// stands.
+func (s *ApprovalStore) PendingFor(ctx context.Context, telegramID int64) (PendingApproval, bool, error) {
+	if s == nil || s.db == nil {
+		return PendingApproval{}, false, fmt.Errorf("approval store is not configured")
+	}
+	if telegramID <= 0 {
+		return PendingApproval{}, false, fmt.Errorf("an open decision belongs to a person")
+	}
+	query := url.Values{
+		"telegram_id": {"eq." + strconv.FormatInt(telegramID, 10)},
+		"status":      {"eq.pending"},
+		"expires_at":  {"gt." + time.Now().UTC().Format(time.RFC3339)},
+		"select":      {"token,product_id,qty,final_amount_paise,reason,expires_at"},
+		"order":       {"created_at.desc"},
+		"limit":       {"1"},
+	}
+	var rows []PendingApproval
+	if err := s.db.Get(ctx, "human_approval_requests", query, &rows); err != nil {
+		return PendingApproval{}, false, fmt.Errorf("read the open decision: %w", err)
+	}
+	if len(rows) == 0 {
+		return PendingApproval{}, false, nil
+	}
+	return rows[0], true, nil
+}
 
 // Create records an approval request once and returns its resume token.
 func (s *ApprovalStore) Create(ctx context.Context, request ApprovalRequest) (ApprovalResult, error) {

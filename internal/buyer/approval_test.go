@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"agentmart/internal/catalog"
@@ -115,5 +117,81 @@ func TestApprovalStoreResolveUsesDecisionRPC(t *testing.T) {
 	}
 	if !result.Resolved || !result.Approved || result.AccountID != "account" || result.ProductID != "product" || result.Quantity != 2 || result.FinalAmountPaise != 240 || result.IdempotencyKey != "purchase" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPendingForReturnsTheOpenDecision(t *testing.T) {
+	var query url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("the open decision was read with %s", r.Method)
+		}
+		query = r.URL.Query()
+		_, _ = w.Write([]byte(`[{"token":"tok-1","product_id":"trim-9","qty":1,"final_amount_paise":314920,"reason":"over the standing limit","expires_at":"2026-09-03T10:00:00Z"}]`))
+	}))
+	defer server.Close()
+	client, err := supabase.NewClient(server.URL, "key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending, ok, err := NewApprovalStore(client).PendingFor(t.Context(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || pending.Token != "tok-1" || pending.FinalAmountPaise != 314920 {
+		t.Fatalf("pending = %+v ok = %v", pending, ok)
+	}
+	// Only this person's own open decision, only while it is still pending, and
+	// only while it has not expired. Any of these missing would show someone a
+	// question that is not theirs or no longer stands.
+	if got := query.Get("telegram_id"); got != "eq.42" {
+		t.Fatalf("telegram filter = %q", got)
+	}
+	if got := query.Get("status"); got != "eq.pending" {
+		t.Fatalf("status filter = %q", got)
+	}
+	if got := query.Get("expires_at"); !strings.HasPrefix(got, "gt.") {
+		t.Fatalf("expiry filter = %q", got)
+	}
+	if got := query.Get("order"); got != "created_at.desc" {
+		t.Fatalf("order = %q, want the newest decision", got)
+	}
+}
+
+func TestNoOpenDecisionIsNotAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	client, err := supabase.NewClient(server.URL, "key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := NewApprovalStore(client).PendingFor(t.Context(), 42)
+	if err != nil {
+		t.Fatalf("an empty result is the normal case, not a failure: %v", err)
+	}
+	if ok {
+		t.Fatal("no rows reported an open decision")
+	}
+}
+
+func TestPendingForNeedsAPersonAndAStore(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	client, err := supabase.NewClient(server.URL, "key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := NewApprovalStore(client).PendingFor(t.Context(), 0); err == nil {
+		t.Fatal("an open decision was looked up without a person")
+	}
+	var store *ApprovalStore
+	if _, _, err := store.PendingFor(t.Context(), 42); err == nil {
+		t.Fatal("an unconfigured store answered")
 	}
 }

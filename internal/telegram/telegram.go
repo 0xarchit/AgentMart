@@ -100,14 +100,60 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 	return c.SendMessageWithMarkup(ctx, chatID, text, nil)
 }
 
+// SendMessageWithMarkup sends plain text with buttons attached.
 func (c *Client) SendMessageWithMarkup(ctx context.Context, chatID int64, text string, markup *InlineKeyboardMarkup) error {
-	query := url.Values{}
+	return c.send(ctx, chatID, text, "", markup)
+}
+
+// SendRich sends text already written as valid markup, so headings and amounts
+// read as headings and amounts instead of as one grey paragraph. Interpolate any
+// value that did not come from this codebase through Escape first: a product name
+// or a merchant's own words containing a bracket would otherwise be rejected by
+// the API and the person would see nothing at all.
+func (c *Client) SendRich(ctx context.Context, chatID int64, text string, markup *InlineKeyboardMarkup) error {
+	return c.send(ctx, chatID, text, "HTML", markup)
+}
+
+// Escape makes an arbitrary string safe to place inside rich text.
+func Escape(text string) string {
+	text = strings.ReplaceAll(text, "&", "&amp;")
+	text = strings.ReplaceAll(text, "<", "&lt;")
+	return strings.ReplaceAll(text, ">", "&gt;")
+}
+
+// SendChatAction shows that work is happening. Telegram clears the indicator
+// after a few seconds on its own, so this is sent again as a run progresses
+// rather than once at the start. A failure here costs an animation and nothing
+// else, so it is reported to the caller and never worth failing a run over.
+func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string) error {
+	if strings.TrimSpace(action) == "" {
+		action = "typing"
+	}
+	var response apiResponse[json.RawMessage]
+	payload := map[string]any{"chat_id": chatID, "action": action}
+	if err := c.call(ctx, "sendChatAction", url.Values{}, payload, &response); err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram sendChatAction: %s", response.Description)
+	}
+	return nil
+}
+
+// send posts one message, optionally as rich text and optionally with buttons.
+func (c *Client) send(ctx context.Context, chatID int64, text, parseMode string, markup *InlineKeyboardMarkup) error {
 	payload := map[string]any{"chat_id": chatID, "text": text}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
+		// Amounts and product names are the point of these messages. A link
+		// preview unfurling underneath them is not.
+		payload["link_preview_options"] = map[string]any{"is_disabled": true}
+	}
 	if markup != nil {
 		payload["reply_markup"] = markup
 	}
 	var response apiResponse[json.RawMessage]
-	if err := c.call(ctx, "sendMessage", query, payload, &response); err != nil {
+	if err := c.call(ctx, "sendMessage", url.Values{}, payload, &response); err != nil {
 		return err
 	}
 	if !response.OK {

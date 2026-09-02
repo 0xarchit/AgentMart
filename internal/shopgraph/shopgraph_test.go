@@ -216,8 +216,8 @@ func TestEachRunReadsItsOwnMoneyFacts(t *testing.T) {
 	// slot let whichever caller started last decide what the other could spend,
 	// and the wallet is what decides whether a run asks a person at all.
 	service := &Service{}
-	service.begin("run-person", Wallet{BalancePaise: 500000, SpendLimitPaise: 250000, AccountID: "account-1"}, nil)
-	service.begin("run-agent", Wallet{BalancePaise: 99999999, SpendLimitPaise: 99999999}, nil)
+	service.begin("run-person", Wallet{BalancePaise: 500000, SpendLimitPaise: 250000, AccountID: "account-1"}, nil, Conversation{})
+	service.begin("run-agent", Wallet{BalancePaise: 99999999, SpendLimitPaise: 99999999}, nil, Conversation{})
 
 	if got := service.walletFor("run-person").SpendLimitPaise; got != 250000 {
 		t.Fatalf("the person's limit read as %d after another caller started", got)
@@ -239,8 +239,8 @@ func TestEachRunReadsItsOwnMoneyFacts(t *testing.T) {
 func TestProgressGoesOnlyToTheRunBeingWatched(t *testing.T) {
 	service := &Service{}
 	var watched []string
-	service.begin("run-watched", Wallet{}, func(line string) { watched = append(watched, line) })
-	service.begin("run-unwatched", Wallet{}, nil)
+	service.begin("run-watched", Wallet{}, func(line string) { watched = append(watched, line) }, Conversation{})
+	service.begin("run-unwatched", Wallet{}, nil, Conversation{})
 
 	service.noteTo("run-watched", "asking the shop")
 	service.noteTo("run-unwatched", "this one has nobody listening")
@@ -263,7 +263,7 @@ func TestConcurrentRunsDoNotShareAWallet(t *testing.T) {
 			defer wg.Done()
 			id := fmt.Sprintf("run-%d", n)
 			limit := int64(n+1) * 1000
-			service.begin(id, Wallet{SpendLimitPaise: limit}, nil)
+			service.begin(id, Wallet{SpendLimitPaise: limit}, nil, Conversation{})
 			defer service.end(id)
 			// Read it back while every other run is storing its own.
 			for range 20 {
@@ -278,5 +278,67 @@ func TestConcurrentRunsDoNotShareAWallet(t *testing.T) {
 	close(failures)
 	for failure := range failures {
 		t.Fatal(failure)
+	}
+}
+
+func TestAFollowUpIsAskedAgainstWhatWasAlreadyShown(t *testing.T) {
+	prior := Conversation{
+		Brief: "a trimmer under 3000",
+		Options: []PriorOption{
+			{ProductID: "trim-nova", Name: "Nova 5 in 1", PricePaise: 179900},
+			{ProductID: "trim-shield", Name: "Shield Pro", PricePaise: 240000},
+		},
+	}
+	brief := briefWithHistory("the second one", prior)
+	// The new words lead, because a refinement replaces the part of the request it
+	// contradicts. Everything the reference could point at has to be present or
+	// "the second one" means nothing.
+	if !strings.HasPrefix(brief, "the second one") {
+		t.Fatalf("the follow up does not lead: %s", brief)
+	}
+	for _, want := range []string{"a trimmer under 3000", "Nova 5 in 1", "Shield Pro", "1799.00", "2400.00"} {
+		t.Run(want, func(t *testing.T) {
+			if !strings.Contains(brief, want) {
+				t.Fatalf("the brief lost %q: %s", want, brief)
+			}
+		})
+	}
+}
+
+func TestAFirstMessageIsAskedExactlyAsItWasSaid(t *testing.T) {
+	if brief := briefWithHistory("a trimmer under 3000", Conversation{}); brief != "a trimmer under 3000" {
+		t.Fatalf("a first message was rewritten: %s", brief)
+	}
+	// An empty history is omitted rather than sent as an empty object, so there is
+	// nothing for the agent to read meaning into.
+	if earlierOrNil(Conversation{}) != nil {
+		t.Fatal("an empty conversation was attached to the choice")
+	}
+	if earlierOrNil(Conversation{Brief: "a trimmer"}) == nil {
+		t.Fatal("a real conversation was dropped from the choice")
+	}
+}
+
+func TestRepeatingTheSameRequestDoesNotRepeatItBack(t *testing.T) {
+	prior := Conversation{Brief: "a trimmer"}
+	if brief := briefWithHistory("a trimmer", prior); brief != "a trimmer" {
+		t.Fatalf("the same words were echoed back at the shop: %s", brief)
+	}
+}
+
+func TestWhatTheShopShowedOutlivesTheRun(t *testing.T) {
+	service := &Service{}
+	service.begin("run-1", Wallet{}, nil, Conversation{})
+	defer service.end("run-1")
+
+	shown := []PriorOption{{ProductID: "trim-nova", Name: "Nova", PricePaise: 179900}}
+	service.recordShown("run-1", shown)
+	if got := service.shownFor("run-1"); len(got) != 1 || got[0].ProductID != "trim-nova" {
+		t.Fatalf("shown = %+v", got)
+	}
+	// A run nobody started keeps nothing, rather than writing into another run.
+	service.recordShown("run-absent", shown)
+	if got := service.shownFor("run-absent"); got != nil {
+		t.Fatalf("an unknown run reported %+v", got)
 	}
 }

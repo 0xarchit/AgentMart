@@ -88,14 +88,22 @@ type productFactsReader interface {
 	Get(context.Context, string) (catalog.Product, error)
 }
 
+// openDecisionReader finds a decision the person was asked for and has not
+// answered. It can only read: nothing here resolves or spends.
+type openDecisionReader interface {
+	PendingFor(context.Context, int64) (buyer.PendingApproval, bool, error)
+}
+
 type commandServices struct {
-	negotiations negotiator
-	health       func(context.Context) string
-	reasoning    decisionMaker
-	audit        reasoningAuditor
-	accounts     accountFactsReader
-	catalog      productFactsReader
-	loop         *shopgraph.Service
+	negotiations  negotiator
+	health        func(context.Context) string
+	reasoning     decisionMaker
+	audit         reasoningAuditor
+	accounts      accountFactsReader
+	catalog       productFactsReader
+	approvals     openDecisionReader
+	conversations conversationMemory
+	loop          *shopgraph.Service
 }
 
 func main() {
@@ -157,7 +165,8 @@ func main() {
 		logger.Error("user payment configuration failed", "error", err)
 		return
 	}
-	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), buyer.NewApprovalStore(db))
+	approvalStore := buyer.NewApprovalStore(db)
+	purchaseService := buyer.NewPurchaseService(catalogReader, store, gateService, artifactClient, wallet.NewService(db), approvalStore)
 	// Refusals before the gate is consulted leave a row too, so no money path in
 	// the trail is silent.
 	purchaseService.UseFailureTrail(store)
@@ -294,6 +303,7 @@ func main() {
 	pollContext := ctx
 	offset := 0
 	var checkpoints telegramOffsetStore
+	var conversations conversationMemory
 	redisURL := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_URL"))
 	redisToken := strings.TrimSpace(os.Getenv("UPSTASH_REDIS_REST_TOKEN"))
 	if redisURL != "" && redisToken != "" {
@@ -303,8 +313,11 @@ func main() {
 			return
 		}
 		checkpoints = redisOffsetStore{store: redisStore}
+		// Without this the bot answers every message as if it were the first one.
+		conversations = redisConversations{store: redisStore}
 	} else {
 		checkpoints = newOffsetStore(os.Getenv("TELEGRAM_OFFSET_FILE"))
+		logger.Warn("conversation memory is unavailable, so each message is answered on its own")
 	}
 	offset, err = checkpoints.Load(pollContext)
 	if err != nil {
@@ -321,7 +334,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, loop: loopService, health: layerReport}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -460,7 +473,7 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 			log.Printf("acknowledging the tapped button failed: %v", err)
 		}
 	}
-	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
+	return sendReply(ctx, client, message.Chat.ID, response, replyMarkupForResponse(response))
 }
 
 // conversationalBuy routes free-text requests ("buy me a trimmer under 2500")
@@ -468,31 +481,66 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 // the same Gate-guarded purchase path as every other command.
 func conversationalBuy(ctx context.Context, client *telegram.Client, purchases purchaser, services commandServices, message *telegram.Message) error {
 	if services.loop == nil || services.accounts == nil || services.catalog == nil || services.negotiations == nil {
-		return client.SendMessage(ctx, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.")
+		return sendReply(ctx, client, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.", nil)
+	}
+	// A decision the person has not answered outranks a new request. Starting a
+	// fresh run here used to abandon the open question and quote them something
+	// else, which reads as the agent forgetting what it just asked.
+	//
+	// What they typed is never read as consent. It can only put the same question
+	// back in front of them, because interpreting words as approval would put text
+	// interpretation in the charge path.
+	if services.approvals != nil {
+		pending, open, pendingErr := services.approvals.PendingFor(ctx, message.From.ID)
+		if pendingErr != nil {
+			// A failed read must not block shopping, so this falls through to the
+			// behaviour that existed before the lookup did.
+			log.Printf("open decision lookup failed: %v", pendingErr)
+		} else if open {
+			return sendReply(ctx, client, message.Chat.ID,
+				openDecisionMessage(ctx, services.catalog, pending), approvalMarkup(pending.Token))
+		}
 	}
 	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
 	if accountErr != nil {
 		log.Printf("agent loop account lookup failed: %v", accountErr)
-		return client.SendMessage(ctx, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.")
+		return sendReply(ctx, client, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.", nil)
 	}
-	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
+	working(ctx, client, message.Chat.ID)
+	if err := sendReply(ctx, client, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text)), nil); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
-	result, runErr := services.loop.RunWithProgress(ctx, message.Text, shopgraph.Wallet{
+	// What this chat already discussed. A follow up such as "the second one" or
+	// "cheaper" is answered against it, so the agents continue the conversation
+	// rather than opening a new one. Memory that cannot be read is treated as no
+	// memory, which is the behaviour that existed before it did.
+	var prior shopgraph.Conversation
+	if services.conversations != nil {
+		remembered, memoryErr := services.conversations.Load(ctx, message.From.ID)
+		if memoryErr != nil {
+			log.Printf("conversation memory read failed: %v", memoryErr)
+		} else {
+			prior = remembered
+		}
+	}
+	result, runErr := services.loop.ContinueWithProgress(ctx, message.Text, prior, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 		AccountID:       account.ID,
 	}, func(line string) {
 		// The person watches the conversation happen. A stalled run then shows
 		// which step it stalled on.
-		if noteErr := client.SendMessage(ctx, message.Chat.ID, line); noteErr != nil {
+		// The indicator is refreshed here because Telegram drops it after a few
+		// seconds and a negotiation takes longer than that.
+		working(ctx, client, message.Chat.ID)
+		if noteErr := sendReply(ctx, client, message.Chat.ID, line, nil); noteErr != nil {
 			log.Printf("send progress note failed: %v", noteErr)
 		}
 	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent
 		// scripted purchase.
-		return client.SendMessage(ctx, message.Chat.ID, failure.Explain(runErr))
+		return sendReply(ctx, client, message.Chat.ID, failure.Explain(runErr), nil)
 	}
 	// Explainability: persist the graph's decision and node trace before any
 	// money moves, so the dashboard can justify the purchase afterwards.
@@ -507,6 +555,14 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			return fmt.Errorf("audit agent run: %w", auditErr)
 		}
 	}
+	// The shortlist outlives the reply, so the next message can refer to it. The
+	// original brief is kept rather than overwritten, because a refinement narrows
+	// what was asked for instead of replacing it.
+	remember(ctx, services, message.From.ID, shopgraph.Conversation{
+		Brief:   firstNonBlank(prior.Brief, message.Text),
+		Options: result.Shown,
+		Chosen:  result.ProductID,
+	})
 	// The conversation is the evidence, so it is sent once, whatever the outcome.
 	if len(result.Transcript) > 0 {
 		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
@@ -521,11 +577,11 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		}
 	}
 	if result.Action == shopgraph.ActionDecline {
-		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
 	product, perr := services.catalog.Get(ctx, result.ProductID)
 	if perr != nil {
-		return client.SendMessage(ctx, message.Chat.ID, "The selected product is no longer available.")
+		return sendReply(ctx, client, message.Chat.ID, "The selected product is no longer available.", nil)
 	}
 	baseAmount := product.PricePaise * int64(result.Quantity)
 	purchaseRequest := buyer.PurchaseRequest{
@@ -549,7 +605,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			product.Name, float64(pending.AmountPaise)/100, pending.ApprovalToken)
 		ask += "\nTap Approve or Decline below, or send /approve " + pending.ApprovalToken
 		ask += "\n\n" + summary.String()
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
+		return sendReply(ctx, client, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
 	}
 
 	purchase, err := purchases.Purchase(ctx, purchaseRequest)
@@ -559,14 +615,38 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if purchase.ApprovalRequired {
 		approval := fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(purchase.AmountPaise)/100, purchase.ApprovalToken)
 		approval += "\n\n" + summary.String()
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
+		return sendReply(ctx, client, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
 	}
 	if !purchase.Fulfilled {
 		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
-		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
 	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
-	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
+	// The shortlist has been bought, so it is not something to refine any more.
+	// Forgetting it stops the next request inheriting a decided conversation.
+	remember(ctx, services, message.From.ID, shopgraph.Conversation{})
+	return sendReply(ctx, client, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
+}
+
+// remember records what this chat discussed. A failed write costs the next
+// message its context and nothing else, so it is reported rather than returned.
+func remember(ctx context.Context, services commandServices, telegramID int64, prior shopgraph.Conversation) {
+	if services.conversations == nil {
+		return
+	}
+	if err := services.conversations.Save(ctx, telegramID, prior); err != nil {
+		log.Printf("conversation memory write failed: %v", err)
+	}
+}
+
+// firstNonBlank returns the first value that is not blank, or "".
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func short(id string) string {
@@ -592,6 +672,27 @@ func renderTranscript(turns []negotiation.Turn) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+// openDecisionMessage restates the decision the person was asked for and has not
+// answered. It never interprets what they typed: a typed message cannot approve a
+// spend, so the only thing this does is put the same question in front of them
+// again, with the same token and the same two buttons.
+func openDecisionMessage(ctx context.Context, products productFactsReader, pending buyer.PendingApproval) string {
+	name := "the item you were shown"
+	if products != nil {
+		if product, err := products.Get(ctx, pending.ProductID); err == nil && strings.TrimSpace(product.Name) != "" {
+			name = product.Name
+		}
+	}
+	var open strings.Builder
+	fmt.Fprintf(&open, "You still have a decision open: %s for INR %.2f.", name, float64(pending.FinalAmountPaise)/100)
+	if reason := strings.TrimSpace(pending.Reason); reason != "" {
+		fmt.Fprintf(&open, "\nWhy it needs you: %s", reason)
+	}
+	fmt.Fprintf(&open, "\n\nTap Approve or Decline below, or send /approve %s", pending.Token)
+	open.WriteString("\nNothing has moved. A typed message cannot approve a spend.")
+	return open.String()
 }
 
 // approvalMarkup puts the decision one tap away. The token is passed in rather

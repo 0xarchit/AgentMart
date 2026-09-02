@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"agentmart/internal/catalog"
 	"agentmart/internal/negotiationclient"
 	buyerreasoning "agentmart/internal/reasoning"
+	"agentmart/internal/shopgraph"
 	"agentmart/internal/telegram"
 )
 
@@ -259,5 +261,118 @@ func TestRefundCommandRejected(t *testing.T) {
 	got, _ := responseForCommand(t.Context(), fakeLinker{}, fakePurchaser{}, refund, 10, 5, []string{"/refund", "order", "changed", "mind"})
 	if got != "Refund rejected: refund window has expired" {
 		t.Fatalf("response = %q", got)
+	}
+}
+
+// fakeOpenDecision answers with a fixed open decision or a refusal.
+type fakeOpenDecision struct {
+	pending buyer.PendingApproval
+	open    bool
+	err     error
+	asked   int
+}
+
+// PendingFor implements openDecisionReader.
+func (f *fakeOpenDecision) PendingFor(context.Context, int64) (buyer.PendingApproval, bool, error) {
+	f.asked++
+	return f.pending, f.open, f.err
+}
+
+// telegramCalls records what the bot sent, so a test can assert the person got
+// the open question back rather than a new quote.
+type telegramCalls struct {
+	paths  []string
+	bodies []string
+}
+
+// botRecording returns a client whose calls land in the returned record.
+func botRecording(t *testing.T) (*telegram.Client, *telegramCalls) {
+	t.Helper()
+	record := &telegramCalls{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		record.paths = append(record.paths, r.URL.Path)
+		record.bodies = append(record.bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := telegram.NewClient("token", &http.Client{Transport: rewriteTelegramTransport{base: server.URL, next: server.Client().Transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, record
+}
+
+func TestFreeTextWithADecisionOpenAnswersItInsteadOfShoppingAgain(t *testing.T) {
+	client, record := botRecording(t)
+	decisions := &fakeOpenDecision{open: true, pending: buyer.PendingApproval{
+		Token: "tok-9", ProductID: "trim-9", Quantity: 1,
+		FinalAmountPaise: 314920, Reason: "over the standing limit",
+	}}
+	// A real graph service that would error if it were reached, so a regression
+	// shows up as a failed run rather than as a silent pass.
+	services := commandServices{
+		loop: &shopgraph.Service{}, accounts: escalatingAccounts{}, catalog: stockCatalog{},
+		negotiations: fakeNegotiator{}, approvals: decisions,
+	}
+	message := &telegram.Message{MessageID: 8, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "actually make it cheaper"}
+
+	if err := handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{}, fakeRefunder{}, services, message); err != nil {
+		t.Fatal(err)
+	}
+	if decisions.asked != 1 {
+		t.Fatalf("the open decision was looked up %d times, want once", decisions.asked)
+	}
+	if len(record.bodies) != 1 {
+		t.Fatalf("sent %d messages, want one: %v", len(record.bodies), record.bodies)
+	}
+	sent := record.bodies[0]
+	// The same token and the same buttons, and the rail said out loud.
+	for _, want := range []string{"tok-9", "/approve", "cannot approve a spend", "3149.20"} {
+		if !strings.Contains(sent, want) {
+			t.Fatalf("the reminder is missing %q: %s", want, sent)
+		}
+	}
+	if strings.Contains(sent, "Working on it") {
+		t.Fatalf("a new shopping run was started while a decision was open: %s", sent)
+	}
+}
+
+func TestFreeTextShopsWhenNoDecisionIsOpen(t *testing.T) {
+	client, record := botRecording(t)
+	decisions := &fakeOpenDecision{open: false}
+	services := commandServices{
+		loop: &shopgraph.Service{}, accounts: escalatingAccounts{}, catalog: stockCatalog{},
+		negotiations: fakeNegotiator{}, approvals: decisions,
+	}
+	message := &telegram.Message{MessageID: 9, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "buy me a trimmer"}
+
+	// The graph is not built, so this reports a failure. What matters is that the
+	// run was attempted at all: nothing was short circuited.
+	_ = handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{}, fakeRefunder{}, services, message)
+	if decisions.asked != 1 {
+		t.Fatalf("the open decision was looked up %d times, want once", decisions.asked)
+	}
+	joined := strings.Join(record.bodies, " ")
+	if !strings.Contains(joined, "Working on it") {
+		t.Fatalf("no shopping run was started: %v", record.bodies)
+	}
+}
+
+func TestAFailedDecisionLookupDoesNotBlockShopping(t *testing.T) {
+	client, record := botRecording(t)
+	decisions := &fakeOpenDecision{err: errors.New("records are unreachable")}
+	services := commandServices{
+		loop: &shopgraph.Service{}, accounts: escalatingAccounts{}, catalog: stockCatalog{},
+		negotiations: fakeNegotiator{}, approvals: decisions,
+	}
+	message := &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 10}, Text: "buy me a trimmer"}
+
+	_ = handleMessage(t.Context(), client, fakeLinker{}, fakePurchaser{}, fakeRefunder{}, services, message)
+	// A read failure falls through to the behaviour that existed before the lookup
+	// did, rather than refusing to shop.
+	if joined := strings.Join(record.bodies, " "); !strings.Contains(joined, "Working on it") {
+		t.Fatalf("a failed lookup blocked shopping: %v", record.bodies)
 	}
 }
