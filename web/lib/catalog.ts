@@ -11,6 +11,9 @@ export type Product = {
   warranty_years: number;
   combo_with: string | null;
   combo_discount_pct: number | null;
+  // Optional. Null means the storefront draws its own placeholder, so a catalog
+  // without photography still reads as a shop rather than as a list.
+  image_url: string | null;
 };
 
 export async function loadPublicProducts(
@@ -23,7 +26,7 @@ export async function loadPublicProducts(
   }
 
   const response = await fetcher(
-    `${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct&order=name.asc`,
+    `${baseURL}/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct,image_url&order=name.asc`,
     {
       headers: {
         apikey: publishableKey,

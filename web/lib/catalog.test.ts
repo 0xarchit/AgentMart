@@ -20,7 +20,7 @@ describe("loadPublicProducts", () => {
 
     expect(products).toEqual([{ id: "p1" }]);
     expect(fetcher).toHaveBeenCalledWith(
-      "https://example.supabase.co/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct&order=name.asc",
+      "https://example.supabase.co/rest/v1/products?select=id,name,category,price_paise,stock,trust_score,warranty_years,combo_with,combo_discount_pct,image_url&order=name.asc",
       expect.objectContaining({
         headers: {
           apikey: "public-key",
