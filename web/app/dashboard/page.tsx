@@ -147,9 +147,7 @@ export default async function DashboardPage() {
         />
         <div className="mt-8 border-b border-ink/10 pb-6">
           <h1 className="text-3xl font-semibold">Your account</h1>
-          <p className="mt-2 text-sm text-ink/70">
-            Signed in as {user.email}
-          </p>
+          <p className="mt-2 text-sm text-ink/70">Signed in as {user.email}</p>
         </div>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           <Stat

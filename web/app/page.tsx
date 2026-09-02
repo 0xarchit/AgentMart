@@ -51,8 +51,8 @@ export default async function HomePage() {
 
           {products.length === 0 ? (
             <div className="mt-8 border border-dashed border-ink/20 bg-white p-8 text-sm text-ink/70">
-              The shelf could not be read just now. Nothing has been lost, so try
-              again in a moment.
+              The shelf could not be read just now. Nothing has been lost, so
+              try again in a moment.
             </div>
           ) : (
             <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

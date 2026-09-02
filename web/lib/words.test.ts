@@ -1,10 +1,6 @@
 // Tests for the shopper facing wording of stored values.
 import { describe, expect, it } from "vitest";
-import {
-  ledgerEntryTypes,
-  orderStatuses,
-  plainWords,
-} from "./words";
+import { ledgerEntryTypes, orderStatuses, plainWords } from "./words";
 
 describe("plainWords", () => {
   it("words every value the schema allows", () => {

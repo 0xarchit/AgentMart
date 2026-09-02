@@ -75,7 +75,9 @@ export default async function RunsPage({
     selected
       ? supabase
           .from("run_timeline")
-          .select("run_id,at,actor,action,reason,order_id,amount_paise,payload,gateway_order_id")
+          .select(
+            "run_id,at,actor,action,reason,order_id,amount_paise,payload,gateway_order_id",
+          )
           .eq("run_id", selected)
           .order("at", { ascending: true })
       : Promise.resolve({ data: [] as TimelineRow[] }),
