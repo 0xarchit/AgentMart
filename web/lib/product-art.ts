@@ -41,7 +41,10 @@ export function monogramFor(name: string): string {
   if (words.length === 1) {
     return words[0].slice(0, 2).toUpperCase();
   }
-  return words.map((word) => word[0]).join("").toUpperCase();
+  return words
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
 }
 
 // productArt returns the tile for one product.

@@ -562,7 +562,14 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	})
 	// The conversation is the evidence, so it is sent once, whatever the outcome.
 	if len(result.Transcript) > 0 {
-		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), renderTranscript(result.Transcript)); docErr != nil {
+		document := renderTranscript(transcriptHeader{
+			Request:   message.Text,
+			Product:   result.ProductName,
+			Outcome:   string(result.Action),
+			Amount:    result.FinalPaise,
+			SessionID: result.SessionID,
+		}, result.Transcript)
+		if docErr := client.SendDocument(ctx, message.Chat.ID, transcriptFileName(result.SessionID), document); docErr != nil {
 			log.Printf("send negotiation transcript failed: %v", docErr)
 		}
 	}
@@ -657,16 +664,65 @@ func transcriptFileName(sessionID string) string {
 	return fmt.Sprintf("negotiation_%s.txt", short(sessionID))
 }
 
-func renderTranscript(turns []negotiation.Turn) string {
+// transcriptHeader is what the conversation was about, so the file explains
+// itself when it is opened away from the chat it came from.
+type transcriptHeader struct {
+	Request   string
+	Product   string
+	Outcome   string
+	Amount    int64
+	SessionID string
+}
+
+// speakerName gives each side the name a reader would use rather than the name
+// the rows are stored under.
+func speakerName(actor string) string {
+	switch strings.ToLower(strings.TrimSpace(actor)) {
+	case "buyer":
+		return "Shopper"
+	case "merchant":
+		return "Shop"
+	default:
+		return actor
+	}
+}
+
+// renderTranscript writes the conversation as evidence: what was asked, what was
+// said in order, and what it settled at. The turns are recorded elsewhere and only
+// read here, so nothing in this file can change what happened.
+func renderTranscript(header transcriptHeader, turns []negotiation.Turn) string {
 	var builder strings.Builder
 	builder.WriteString("AgentMart negotiation transcript\n")
+	builder.WriteString(strings.Repeat("=", 33))
+	builder.WriteString("\n\n")
+	if request := strings.TrimSpace(header.Request); request != "" {
+		fmt.Fprintf(&builder, "Asked for:  %s\n", request)
+	}
+	if product := strings.TrimSpace(header.Product); product != "" {
+		fmt.Fprintf(&builder, "Product:    %s\n", product)
+	}
+	if outcome := strings.TrimSpace(header.Outcome); outcome != "" {
+		fmt.Fprintf(&builder, "Outcome:    %s\n", outcome)
+	}
+	if header.Amount > 0 {
+		fmt.Fprintf(&builder, "Settled at: INR %.2f\n", float64(header.Amount)/100)
+	}
+	if session := strings.TrimSpace(header.SessionID); session != "" {
+		fmt.Fprintf(&builder, "Session:    %s\n", session)
+	}
+	if len(turns) > 0 {
+		fmt.Fprintf(&builder, "Turns:      %d\n", len(turns))
+	}
+	builder.WriteString("\nConversation\n")
+	builder.WriteString(strings.Repeat("-", 33))
+	builder.WriteString("\n\n")
+	if len(turns) == 0 {
+		builder.WriteString("No turns were recorded for this run.\n")
+		return builder.String()
+	}
 	for _, turn := range turns {
-		builder.WriteString(turn.At.Format("15:04:05"))
-		builder.WriteString(" [")
-		builder.WriteString(turn.Actor)
-		builder.WriteString("] ")
-		builder.WriteString(turn.Message)
-		builder.WriteString("\n")
+		fmt.Fprintf(&builder, "[%s] %s\n", turn.At.Format("15:04:05"), speakerName(turn.Actor))
+		fmt.Fprintf(&builder, "    %s\n\n", strings.TrimSpace(turn.Message))
 	}
 	return builder.String()
 }

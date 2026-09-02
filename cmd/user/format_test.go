@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"agentmart/internal/negotiation"
 	"agentmart/internal/telegram"
 )
 
@@ -127,5 +129,51 @@ func TestALongRunDoesNotGrowWithoutBound(t *testing.T) {
 	}
 	if got := strings.Count(last, "step "); got > maxNoteLines {
 		t.Fatalf("the note carries %d lines, want at most %d", got, maxNoteLines)
+	}
+}
+
+func TestTheTranscriptExplainsItselfAwayFromTheChat(t *testing.T) {
+	at := time.Date(2026, 9, 3, 14, 5, 9, 0, time.UTC)
+	document := renderTranscript(transcriptHeader{
+		Request:   "buy me a trimmer under 3000",
+		Product:   "TrimPro Nova 5-in-1",
+		Outcome:   "buy",
+		Amount:    181339,
+		SessionID: "session-9",
+	}, []negotiation.Turn{
+		{Actor: "merchant", Message: "I have three that fit.", At: at},
+		{Actor: "buyer", Message: "The Nova, if you can do better on price.", At: at.Add(time.Second)},
+	})
+
+	// Opened on its own, the file has to say what was asked, what it settled at,
+	// and who said what.
+	for _, want := range []string{
+		"buy me a trimmer under 3000",
+		"TrimPro Nova 5-in-1",
+		"INR 1813.39",
+		"session-9",
+		"Turns:      2",
+		"Shop",
+		"Shopper",
+		"I have three that fit.",
+	} {
+		if !strings.Contains(document, want) {
+			t.Fatalf("the transcript is missing %q:\n%s", want, document)
+		}
+	}
+	// The stored actor names are not what a reader should see.
+	if strings.Contains(document, "[merchant]") || strings.Contains(document, "[buyer]") {
+		t.Fatalf("the transcript shows the stored actor names:\n%s", document)
+	}
+}
+
+func TestATranscriptWithNoTurnsSaysSo(t *testing.T) {
+	document := renderTranscript(transcriptHeader{Request: "buy me a trimmer"}, nil)
+	if !strings.Contains(document, "No turns were recorded") {
+		t.Fatalf("an empty transcript is silent about being empty:\n%s", document)
+	}
+	// An amount nobody settled must not be printed as a settlement.
+	if strings.Contains(document, "Settled at") {
+		t.Fatalf("an unsettled run claimed a settlement:\n%s", document)
 	}
 }
