@@ -473,7 +473,7 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 			log.Printf("acknowledging the tapped button failed: %v", err)
 		}
 	}
-	return client.SendMessageWithMarkup(ctx, message.Chat.ID, response, replyMarkupForResponse(response))
+	return sendReply(ctx, client, message.Chat.ID, response, replyMarkupForResponse(response))
 }
 
 // conversationalBuy routes free-text requests ("buy me a trimmer under 2500")
@@ -481,7 +481,7 @@ func handleMessage(ctx context.Context, client *telegram.Client, linker linkRede
 // the same Gate-guarded purchase path as every other command.
 func conversationalBuy(ctx context.Context, client *telegram.Client, purchases purchaser, services commandServices, message *telegram.Message) error {
 	if services.loop == nil || services.accounts == nil || services.catalog == nil || services.negotiations == nil {
-		return client.SendMessage(ctx, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.")
+		return sendReply(ctx, client, message.Chat.ID, "The shopping agent is not configured here. Use /start to see available commands.", nil)
 	}
 	// A decision the person has not answered outranks a new request. Starting a
 	// fresh run here used to abandon the open question and quote them something
@@ -497,16 +497,17 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			// behaviour that existed before the lookup did.
 			log.Printf("open decision lookup failed: %v", pendingErr)
 		} else if open {
-			return client.SendMessageWithMarkup(ctx, message.Chat.ID,
+			return sendReply(ctx, client, message.Chat.ID,
 				openDecisionMessage(ctx, services.catalog, pending), approvalMarkup(pending.Token))
 		}
 	}
 	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
 	if accountErr != nil {
 		log.Printf("agent loop account lookup failed: %v", accountErr)
-		return client.SendMessage(ctx, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.")
+		return sendReply(ctx, client, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.", nil)
 	}
-	if err := client.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text))); err != nil {
+	working(ctx, client, message.Chat.ID)
+	if err := sendReply(ctx, client, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text)), nil); err != nil {
 		return fmt.Errorf("send agent ack failed: %w", err)
 	}
 	// What this chat already discussed. A follow up such as "the second one" or
@@ -529,14 +530,17 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	}, func(line string) {
 		// The person watches the conversation happen. A stalled run then shows
 		// which step it stalled on.
-		if noteErr := client.SendMessage(ctx, message.Chat.ID, line); noteErr != nil {
+		// The indicator is refreshed here because Telegram drops it after a few
+		// seconds and a negotiation takes longer than that.
+		working(ctx, client, message.Chat.ID)
+		if noteErr := sendReply(ctx, client, message.Chat.ID, line, nil); noteErr != nil {
 			log.Printf("send progress note failed: %v", noteErr)
 		}
 	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent
 		// scripted purchase.
-		return client.SendMessage(ctx, message.Chat.ID, failure.Explain(runErr))
+		return sendReply(ctx, client, message.Chat.ID, failure.Explain(runErr), nil)
 	}
 	// Explainability: persist the graph's decision and node trace before any
 	// money moves, so the dashboard can justify the purchase afterwards.
@@ -573,11 +577,11 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		}
 	}
 	if result.Action == shopgraph.ActionDecline {
-		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
 	product, perr := services.catalog.Get(ctx, result.ProductID)
 	if perr != nil {
-		return client.SendMessage(ctx, message.Chat.ID, "The selected product is no longer available.")
+		return sendReply(ctx, client, message.Chat.ID, "The selected product is no longer available.", nil)
 	}
 	baseAmount := product.PricePaise * int64(result.Quantity)
 	purchaseRequest := buyer.PurchaseRequest{
@@ -601,7 +605,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			product.Name, float64(pending.AmountPaise)/100, pending.ApprovalToken)
 		ask += "\nTap Approve or Decline below, or send /approve " + pending.ApprovalToken
 		ask += "\n\n" + summary.String()
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
+		return sendReply(ctx, client, message.Chat.ID, ask, approvalMarkup(pending.ApprovalToken))
 	}
 
 	purchase, err := purchases.Purchase(ctx, purchaseRequest)
@@ -611,17 +615,17 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 	if purchase.ApprovalRequired {
 		approval := fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(purchase.AmountPaise)/100, purchase.ApprovalToken)
 		approval += "\n\n" + summary.String()
-		return client.SendMessageWithMarkup(ctx, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
+		return sendReply(ctx, client, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
 	}
 	if !purchase.Fulfilled {
 		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
-		return client.SendMessage(ctx, message.Chat.ID, summary.String())
+		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
 	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
 	// The shortlist has been bought, so it is not something to refine any more.
 	// Forgetting it stops the next request inheriting a decided conversation.
 	remember(ctx, services, message.From.ID, shopgraph.Conversation{})
-	return client.SendMessageWithMarkup(ctx, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
+	return sendReply(ctx, client, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
 }
 
 // remember records what this chat discussed. A failed write costs the next
