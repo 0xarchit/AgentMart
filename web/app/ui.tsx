@@ -125,8 +125,10 @@ export function Rows({
 /** TopNav is the one navigation bar every page shares. */
 export function TopNav({
   current,
+  action,
 }: {
-  current: "store" | "dashboard" | "admin";
+  current: "store" | "dashboard" | "runs" | "admin";
+  action?: ReactNode;
 }) {
   const link = (href: string, label: string, key: string) => (
     <Link
@@ -142,14 +144,16 @@ export function TopNav({
     </Link>
   );
   return (
-    <nav className="flex items-center justify-between border-b border-ink/10 pb-5">
+    <nav className="flex flex-wrap items-center justify-between gap-4 border-b border-ink/10 pb-5">
       <Link className="font-semibold text-moss" href="/">
         AgentMart
       </Link>
-      <div className="flex gap-4 text-sm">
-        {link("/", "Storefront", "store")}
-        {link("/dashboard", "User portal", "dashboard")}
-        {link("/admin", "Admin", "admin")}
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        {link("/", "Shop", "store")}
+        {link("/dashboard", "Your account", "dashboard")}
+        {link("/dashboard/runs", "Deal room", "runs")}
+        {link("/admin", "Merchant", "admin")}
+        {action}
       </div>
     </nav>
   );

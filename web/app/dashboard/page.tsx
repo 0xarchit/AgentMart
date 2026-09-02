@@ -7,7 +7,7 @@ import { TopUpButton } from "@/app/dashboard/topup-button";
 import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
-import { Card, Rows, Stat, money } from "@/app/ui";
+import { Card, Rows, Stat, TopNav, money } from "@/app/ui";
 
 type Account = {
   wallet_balance_paise: number;
@@ -61,6 +61,7 @@ export default async function DashboardPage() {
   const [
     accountResult,
     ordersResult,
+    orderCountResult,
     ledgerResult,
     revenueResult,
     auditResult,
@@ -77,6 +78,12 @@ export default async function DashboardPage() {
       .eq("account_id", user.id)
       .order("created_at", { ascending: false })
       .limit(5),
+    // Counted separately from the list above. Reading the length of a five row
+    // page reports "5" forever once an account has bought six things.
+    supabase
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", user.id),
     supabase
       .from("wallet_ledger")
       .select("id,entry_type,amount_paise,balance_after_paise,created_at")
@@ -106,6 +113,7 @@ export default async function DashboardPage() {
   ]);
   const account = accountResult.data as Account | null;
   const orders = (ordersResult.data ?? []) as Order[];
+  const orderCount = orderCountResult.count ?? orders.length;
   const ledger = (ledgerResult.data ?? []) as LedgerEntry[];
   const revenue = (revenueResult.data ?? []) as Revenue[];
   const auditEvents = (auditResult.data ?? []) as AuditEvent[];
@@ -123,40 +131,24 @@ export default async function DashboardPage() {
   return (
     <main className="min-h-screen bg-paper px-6 py-10">
       <div className="mx-auto max-w-5xl">
-        <div className="flex items-start justify-between border-b border-ink/10 pb-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-moss">
-              Authenticated workspace
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold">
-              Operations dashboard
-            </h1>
-            <p className="mt-2 text-sm text-ink/60">{user.email}</p>
-          </div>
-          <div className="flex flex-col items-end gap-3">
-            <nav className="flex gap-4 text-sm">
-              <Link className="text-moss hover:underline" href="/">
-                Storefront
-              </Link>
-              <Link
-                className="text-moss hover:underline"
-                href="/dashboard/runs"
-              >
-                Deal room
-              </Link>
-              <Link className="text-moss hover:underline" href="/admin">
-                Admin
-              </Link>
-            </nav>
+        <TopNav
+          current="dashboard"
+          action={
             <form action={signOut}>
               <button
-                className="border border-ink/20 px-4 py-2 text-sm font-medium"
+                className="border border-ink/20 px-3 py-2 text-sm font-medium"
                 type="submit"
               >
                 Sign out
               </button>
             </form>
-          </div>
+          }
+        />
+        <div className="mt-8 border-b border-ink/10 pb-6">
+          <h1 className="text-3xl font-semibold">Your account</h1>
+          <p className="mt-2 text-sm text-ink/70">
+            Signed in as {user.email}
+          </p>
         </div>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           <Stat
@@ -165,9 +157,9 @@ export default async function DashboardPage() {
             basis={`Spend limit ${money(account?.spend_limit_paise ?? 0)}`}
           />
           <Stat
-            label="Recent orders"
-            value={String(orders.length)}
-            basis="Account scoped by policy"
+            label="Orders placed"
+            value={String(orderCount)}
+            basis="Only ever your own account"
           />
           <Stat
             label="Uplift earned"

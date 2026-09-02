@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { TopNav } from "@/app/ui";
 
 type RunSummary = {
   run_id: string;
@@ -88,22 +89,13 @@ export default async function RunsPage({
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-ink/10 pb-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Deal room</h1>
-          <p className="mt-1 text-sm text-ink/60">
-            Every run the agents completed for this account, with the words and
-            the money side by side.
-          </p>
-        </div>
-        <nav className="flex gap-4 text-sm">
-          <Link className="text-moss hover:underline" href="/dashboard">
-            Dashboard
-          </Link>
-          <Link className="text-moss hover:underline" href="/">
-            Storefront
-          </Link>
-        </nav>
+      <TopNav current="runs" />
+      <header className="mt-8 border-b border-ink/10 pb-6">
+        <h1 className="text-2xl font-semibold">Deal room</h1>
+        <p className="mt-1 text-sm text-ink/70">
+          Every run the agents completed for this account, with the words and
+          the money side by side.
+        </p>
       </header>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[20rem_1fr]">

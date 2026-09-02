@@ -3,7 +3,7 @@
 import { loadPublicProducts } from "@/lib/catalog";
 import { productArt } from "@/lib/product-art";
 import { createClient } from "@/lib/supabase/server";
-import { money } from "./ui";
+import { TopNav, money } from "./ui";
 
 export default async function HomePage() {
   const [products, supabase] = [
@@ -14,99 +14,45 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
   const buyHref = user ? "/dashboard#telegram" : "/login";
-  const buyLabel = user ? "Buy via Telegram agent" : "Sign in to buy";
+  const buyLabel = user ? "Buy in Telegram" : "Sign in to buy";
   const nameById = new Map(
     products.map((product) => [product.id, product.name]),
   );
   return (
-    <main className="min-h-screen bg-paper">
-      <header className="border-b border-ink/10 bg-ink text-paper">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mint">
-              Operations
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold">AgentMart</h1>
-          </div>
-          <nav className="flex items-center gap-4 text-sm">
-            <a className="text-mint hover:text-white" href="#catalog">
-              Catalog
+    <main className="min-h-screen bg-paper px-6 py-10">
+      <div className="mx-auto max-w-7xl">
+        <TopNav
+          current="store"
+          action={
+            <a
+              className="bg-moss px-3 py-2 font-semibold text-paper"
+              href={user ? "/dashboard" : "/login"}
+            >
+              {user ? "Your account" : "Sign in"}
             </a>
-            <a className="text-mint hover:text-white" href="/dashboard">
-              User portal
-            </a>
-            {user ? (
-              <a
-                className="border border-mint/40 px-3 py-2 font-semibold text-white"
-                href="/dashboard"
-              >
-                Dashboard
-              </a>
-            ) : (
-              <a
-                className="border border-mint/40 px-3 py-2 font-semibold text-white"
-                href="/login"
-              >
-                Sign in
-              </a>
-            )}
-          </nav>
-        </div>
-      </header>
+          }
+        />
 
-      <div className="mx-auto grid max-w-7xl gap-8 px-6 py-8 lg:grid-cols-[220px_1fr]">
-        <aside className="border-r border-ink/10 pr-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-moss">
-            Workspace
-          </p>
-          <nav className="mt-4 space-y-2 text-sm">
-            <a
-              className="block border-l-2 border-moss bg-mint px-3 py-2 font-medium text-ink"
-              href="#catalog"
-            >
-              Catalog
-            </a>
-            <a
-              className="block px-3 py-2 text-ink/70 hover:bg-mint"
-              href="/dashboard"
-            >
-              Wallet and orders
-            </a>
-            <a
-              className="block px-3 py-2 text-ink/70 hover:bg-mint"
-              href="/dashboard#telegram"
-            >
-              Telegram agent
-            </a>
-            <a
-              className="block px-3 py-2 text-ink/70 hover:bg-mint"
-              href="/admin"
-            >
-              Admin revenue
-            </a>
-          </nav>
-        </aside>
-
-        <section id="catalog" className="min-w-0">
+        <section id="catalog" className="mt-8 min-w-0">
           <div className="flex flex-wrap items-end justify-between gap-4 border-b border-ink/10 pb-5">
             <div>
-              <p className="text-sm font-medium text-moss">Merchant catalog</p>
+              <p className="text-sm font-medium text-moss">The shelf</p>
               <h2 className="mt-1 text-3xl font-semibold tracking-tight">
-                Available products
+                Everything in stock
               </h2>
             </div>
-            <div className="text-right text-sm text-ink/60">
+            <div className="text-right text-sm text-ink/70">
               <p>{products.length} products on the shelf</p>
               <p className="mt-1">
-                Price, stock and pairing as the agents see them
+                Price, stock and pairing exactly as the shop quotes them
               </p>
             </div>
           </div>
 
           {products.length === 0 ? (
-            <div className="mt-8 border border-dashed border-ink/20 bg-white p-8 text-sm text-ink/60">
-              Catalog data is unavailable. Check the Supabase environment and
-              service status.
+            <div className="mt-8 border border-dashed border-ink/20 bg-white p-8 text-sm text-ink/70">
+              The shelf could not be read just now. Nothing has been lost, so try
+              again in a moment.
             </div>
           ) : (
             <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -142,62 +88,62 @@ export default async function HomePage() {
                       </div>
                     )}
                     <div className="flex flex-1 flex-col p-5">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-moss">
-                          {product.category}
-                        </p>
-                        <h3 className="mt-2 text-lg font-semibold">
-                          {product.name}
-                        </h3>
-                        <p className="mt-1 text-xs text-ink/70">
-                          {product.warranty_years} year warranty
-                        </p>
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-moss">
+                            {product.category}
+                          </p>
+                          <h3 className="mt-2 text-lg font-semibold">
+                            {product.name}
+                          </h3>
+                          <p className="mt-1 text-xs text-ink/70">
+                            {product.warranty_years} year warranty
+                          </p>
+                        </div>
+                        <span className="bg-mint px-2 py-1 text-xs font-semibold text-moss">
+                          Trust {product.trust_score}
+                        </span>
                       </div>
-                      <span className="bg-mint px-2 py-1 text-xs font-semibold text-moss">
-                        Trust {product.trust_score}
-                      </span>
-                    </div>
 
-                    {partner ? (
-                      <p className="mt-4 bg-paper px-3 py-2 text-xs text-ink/80">
-                        Pairs with {partner}
-                        {product.combo_discount_pct
-                          ? `, ${product.combo_discount_pct}% off the pair`
-                          : ""}
-                      </p>
-                    ) : null}
+                      {partner ? (
+                        <p className="mt-4 bg-paper px-3 py-2 text-xs text-ink/80">
+                          Pairs with {partner}
+                          {product.combo_discount_pct
+                            ? `, ${product.combo_discount_pct}% off the pair`
+                            : ""}
+                        </p>
+                      ) : null}
 
-                    <div className="mt-6 flex items-end justify-between border-t border-ink/10 pt-4">
-                      <div>
-                        <p className="text-xl font-semibold">
-                          {money(product.price_paise)}
-                        </p>
-                        <a
-                          href={buyHref}
-                          className="mt-3 inline-block text-sm font-semibold text-moss hover:underline"
-                        >
-                          {buyLabel}
-                        </a>
+                      <div className="mt-6 flex items-end justify-between border-t border-ink/10 pt-4">
+                        <div>
+                          <p className="text-xl font-semibold">
+                            {money(product.price_paise)}
+                          </p>
+                          <a
+                            href={buyHref}
+                            className="mt-3 inline-block text-sm font-semibold text-moss hover:underline"
+                          >
+                            {buyLabel}
+                          </a>
+                        </div>
+                        <div className="text-right">
+                          <code
+                            className="text-xs text-ink/70"
+                            title="Send this with /buy in the chat"
+                          >
+                            {product.id.slice(0, 8)}
+                          </code>
+                          <p
+                            className={
+                              product.stock <= 3
+                                ? "text-sm font-semibold text-coral"
+                                : "text-sm text-ink/70"
+                            }
+                          >
+                            {product.stock} in stock
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <code
-                          className="text-xs text-ink/70"
-                          title="Use this ID with /buy in Telegram"
-                        >
-                          {product.id.slice(0, 8)}
-                        </code>
-                        <p
-                          className={
-                            product.stock <= 3
-                              ? "text-sm font-semibold text-coral"
-                              : "text-sm text-ink/70"
-                          }
-                        >
-                          {product.stock} in stock
-                        </p>
-                      </div>
-                    </div>
                     </div>
                   </article>
                 );
