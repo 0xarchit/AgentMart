@@ -12,3 +12,4 @@ tsconfig.tsbuildinfo
 .mcp.json
 bin/
 *.exe
+.codegraph
