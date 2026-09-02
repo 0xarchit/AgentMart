@@ -106,8 +106,11 @@ every transaction, which contradicts the one thing this system is for.
   cost" is proven where the price is set rather than at both ends. The alternative
   was publishing cost to the counterparty, which we rejected. This is a deliberate
   reduction in defence depth on that one claim.
-- A run is one shot. A follow-up message starts a new shopping run instead of
-  continuing the open conversation.
+- A run is one shot for pricing, but no longer for conversation. A follow-up such
+  as "the second one" or "cheaper" continues against the shortlist the shop last
+  showed, and a message sent while a decision is outstanding answers that decision
+  instead of starting again. What is carried forward is the conversation only:
+  every amount is re-derived and every bound re-read on each run.
 - The opening quote's bounds are chosen, even though the amounts inside them are
   not. What the shop may add for cover, handling and scarcity is argued from the
   selling rate, stock cover and the gateway's refund rate, and nothing is charged
@@ -123,4 +126,5 @@ every transaction, which contradicts the one thing this system is for.
 
 The design contract behind these choices is in `docs/architecture.md`, and the
 implementation map, routes, data model and verification steps are in
-`docs/docs.md`.
+`docs/docs.md`. The measured comparison against a fixed price list, with its
+methodology stated above its own numbers, is in `docs/benchmark.md`.
