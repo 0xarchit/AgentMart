@@ -523,19 +523,16 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			prior = remembered
 		}
 	}
+	notes := &liveNotes{client: client, chatID: message.Chat.ID}
 	result, runErr := services.loop.ContinueWithProgress(ctx, message.Text, prior, shopgraph.Wallet{
 		BalancePaise:    account.WalletBalancePaise,
 		SpendLimitPaise: account.SpendLimitPaise,
 		AccountID:       account.ID,
 	}, func(line string) {
-		// The person watches the conversation happen. A stalled run then shows
-		// which step it stalled on.
-		// The indicator is refreshed here because Telegram drops it after a few
-		// seconds and a negotiation takes longer than that.
-		working(ctx, client, message.Chat.ID)
-		if noteErr := sendReply(ctx, client, message.Chat.ID, line, nil); noteErr != nil {
-			log.Printf("send progress note failed: %v", noteErr)
-		}
+		// The person watches the conversation happen in one message that grows, so
+		// a stalled run still shows which step it stalled on without burying the
+		// answer under a bubble per step.
+		notes.add(ctx, line)
 	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent

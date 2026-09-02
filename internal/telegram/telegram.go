@@ -142,6 +142,43 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 
 // send posts one message, optionally as rich text and optionally with buttons.
 func (c *Client) send(ctx context.Context, chatID int64, text, parseMode string, markup *InlineKeyboardMarkup) error {
+	_, err := c.post(ctx, chatID, text, parseMode, markup)
+	return err
+}
+
+// sentMessage carries back only the identifier a later edit needs.
+type sentMessage struct {
+	MessageID int `json:"message_id"`
+}
+
+// SendTracked sends rich text and reports the message identifier, so a later note
+// can replace this message rather than stack another one underneath it.
+func (c *Client) SendTracked(ctx context.Context, chatID int64, text string) (int, error) {
+	return c.post(ctx, chatID, text, "HTML", nil)
+}
+
+// EditTracked replaces the text of a message this bot already sent.
+func (c *Client) EditTracked(ctx context.Context, chatID int64, messageID int, text string) error {
+	if messageID <= 0 {
+		return fmt.Errorf("a message to edit is required")
+	}
+	payload := map[string]any{
+		"chat_id": chatID, "message_id": messageID, "text": text,
+		"parse_mode":           "HTML",
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
+	var response apiResponse[json.RawMessage]
+	if err := c.call(ctx, "editMessageText", url.Values{}, payload, &response); err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram editMessageText: %s", response.Description)
+	}
+	return nil
+}
+
+// post sends one message and reports which message it became.
+func (c *Client) post(ctx context.Context, chatID int64, text, parseMode string, markup *InlineKeyboardMarkup) (int, error) {
 	payload := map[string]any{"chat_id": chatID, "text": text}
 	if parseMode != "" {
 		payload["parse_mode"] = parseMode
@@ -152,14 +189,14 @@ func (c *Client) send(ctx context.Context, chatID int64, text, parseMode string,
 	if markup != nil {
 		payload["reply_markup"] = markup
 	}
-	var response apiResponse[json.RawMessage]
+	var response apiResponse[sentMessage]
 	if err := c.call(ctx, "sendMessage", url.Values{}, payload, &response); err != nil {
-		return err
+		return 0, err
 	}
 	if !response.OK {
-		return fmt.Errorf("telegram sendMessage: %s", response.Description)
+		return 0, fmt.Errorf("telegram sendMessage: %s", response.Description)
 	}
-	return nil
+	return response.Result.MessageID, nil
 }
 
 // AnswerCallbackQuery clears the pending spinner on a tapped button. The API

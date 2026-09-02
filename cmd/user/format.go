@@ -3,7 +3,10 @@ package main
 
 import (
 	"context"
+	"log"
 	"regexp"
+	"strings"
+	"sync"
 
 	"agentmart/internal/telegram"
 )
@@ -40,4 +43,45 @@ func sendReply(ctx context.Context, client *telegram.Client, chatID int64, text 
 // worth interrupting a purchase for.
 func working(ctx context.Context, client *telegram.Client, chatID int64) {
 	_ = client.SendChatAction(ctx, chatID, "typing")
+}
+
+// maxNoteLines keeps the running note inside one screen. A long negotiation would
+// otherwise grow past what the API will carry in a single message.
+const maxNoteLines = 12
+
+// liveNotes turns a run's progress into one message that grows, rather than a new
+// message for every step. A run reports six or seven times, and six or seven
+// separate bubbles bury the answer that arrives after them.
+type liveNotes struct {
+	client    *telegram.Client
+	chatID    int64
+	mu        sync.Mutex
+	messageID int
+	lines     []string
+}
+
+// add records one step and shows it. Losing the live view costs the person the
+// commentary and nothing else, so a failure here is reported and stepped over.
+func (n *liveNotes) add(ctx context.Context, line string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.lines = append(n.lines, line)
+	if len(n.lines) > maxNoteLines {
+		n.lines = n.lines[len(n.lines)-maxNoteLines:]
+	}
+	body := highlight(telegram.Escape(strings.Join(n.lines, "\n")))
+
+	working(ctx, n.client, n.chatID)
+	if n.messageID == 0 {
+		sent, err := n.client.SendTracked(ctx, n.chatID, body)
+		if err != nil {
+			log.Printf("send progress note failed: %v", err)
+			return
+		}
+		n.messageID = sent
+		return
+	}
+	if err := n.client.EditTracked(ctx, n.chatID, n.messageID, body); err != nil {
+		log.Printf("update progress note failed: %v", err)
+	}
 }
