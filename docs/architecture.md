@@ -202,16 +202,12 @@ No scripted fallback on the shipped decision path. When a provider fails inside
 the buyer graph or the merchant graph, the error surfaces. A demo that silently
 degrades to `if` statements is not an agentic demo.
 
-That sentence used to be written without its qualifier, and the qualifier is
-load bearing. `internal/reasoning` is an older decider that is still wired into
-the bot and does fall back to a deterministic branch when no model is
-configured, writing its decisions to the trail as the buyer agent. Nothing in
-the graphs routes through it and the benchmark never exercises it, so the
-unqualified claim was true of the path that matters and false of the repository.
-A reader who greps for `deterministic` finds a scripted purchase decider, and at
-that point the qualifier is worth more than the shorter sentence. Removing the
-older decider entirely is the better end state and is listed as pre-submission
-work in the internal upgrade plan.
+One exception is deliberate and named here rather than left to a reader's grep:
+with no merchant model configured, `marketgraph.New` returns no negotiator and
+each round is priced by the orchestrator's own concession schedule
+(`concedeSchedule` in `internal/negotiation/orchestrator.go`) under the same cost
+floor, so a merchant with no provider key still negotiates and still cannot sell
+below cost.
 
 ---
 

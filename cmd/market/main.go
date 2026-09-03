@@ -21,9 +21,9 @@ import (
 	"agentmart/internal/marketgraph"
 	"agentmart/internal/markettools"
 	"agentmart/internal/merchantagent"
+	"agentmart/internal/modelconfig"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/razorpay"
-	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/supabase"
 	"agentmart/internal/trading"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,7 +55,7 @@ func main() {
 	if !strings.HasSuffix(agentEndpoint, "/") {
 		agentEndpoint += "/"
 	}
-	merchantConfig := buyerreasoning.FromEnv("MARKET")
+	merchantConfig := modelconfig.FromEnv("MARKET")
 	// One campaign provider serves both the strategist's facts and the price floor,
 	// so the discount a buyer is offered and the discount the floor allows come
 	// from the same read.

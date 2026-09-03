@@ -27,7 +27,7 @@ func (s *recordingOffsetStore) Save(_ context.Context, offset int) error {
 func TestProcessUpdatesDoesNotAdvanceWhenCheckpointFails(t *testing.T) {
 	wantErr := errors.New("checkpoint unavailable")
 	store := &recordingOffsetStore{err: wantErr}
-	updates := []telegram.Update{{UpdateID: 7, Message: &telegram.Message{Text: "/shop product 1"}}}
+	updates := []telegram.Update{{UpdateID: 7, Message: &telegram.Message{Text: "/buy product 1"}}}
 	offset, err := processUpdates(t.Context(), updates, 7, store, func(context.Context, *telegram.Message) error {
 		return nil
 	})
@@ -42,7 +42,7 @@ func TestProcessUpdatesDoesNotAdvanceWhenCheckpointFails(t *testing.T) {
 func TestProcessUpdatesAdvancesPastHandlerFailure(t *testing.T) {
 	store := &recordingOffsetStore{}
 	updates := []telegram.Update{
-		{UpdateID: 7, Message: &telegram.Message{Text: "/shop product 1"}},
+		{UpdateID: 7, Message: &telegram.Message{Text: "/buy product 1"}},
 		{UpdateID: 8, Message: &telegram.Message{Text: "/refund order reason"}},
 	}
 	wantErr := errors.New("temporary failure")
@@ -62,7 +62,7 @@ func TestProcessUpdatesAdvancesPastHandlerFailure(t *testing.T) {
 func TestProcessUpdatesPersistsSuccessfulUpdates(t *testing.T) {
 	store := &recordingOffsetStore{}
 	updates := []telegram.Update{
-		{UpdateID: 7, Message: &telegram.Message{Text: "/shop product 1"}},
+		{UpdateID: 7, Message: &telegram.Message{Text: "/buy product 1"}},
 		{UpdateID: 8, Message: &telegram.Message{Text: "/refund order reason"}},
 	}
 	processed := 0

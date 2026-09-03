@@ -24,10 +24,10 @@ import (
 	"agentmart/internal/llmchat"
 	"agentmart/internal/marketauth"
 	"agentmart/internal/marketclient"
+	"agentmart/internal/modelconfig"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 	"agentmart/internal/razorpay"
-	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/remotemerchant"
 	"agentmart/internal/runid"
 	"agentmart/internal/shopgraph"
@@ -71,12 +71,7 @@ type negotiator interface {
 	Counter(context.Context, string, int64) (negotiationclient.Resolution, error)
 }
 
-type decisionMaker interface {
-	Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error)
-}
-
 type reasoningAuditor interface {
-	RecordReasoningDecision(context.Context, int64, buyerreasoning.Input, buyerreasoning.Decision) error
 	RecordAgentRun(context.Context, int64, string, buyer.AgentRun) error
 }
 
@@ -97,7 +92,6 @@ type openDecisionReader interface {
 type commandServices struct {
 	negotiations  negotiator
 	health        func(context.Context) string
-	reasoning     decisionMaker
 	audit         reasoningAuditor
 	accounts      accountFactsReader
 	catalog       productFactsReader
@@ -174,12 +168,7 @@ func main() {
 	// A cancellation credits the allowance and then reverses the captured payments
 	// that funded it, so the failure path leaves evidence outside our own tables.
 	refundService.UseReversal(buyer.NewGatewayReversal(store, artifactClient), store)
-	buyerModel := buyerreasoning.FromEnv("USER")
-	reasoningService, err := buyerreasoning.New(ctx, buyerModel)
-	if err != nil {
-		logger.Error("user reasoning configuration failed", "error", err)
-		return
-	}
+	buyerModel := modelconfig.FromEnv("USER")
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
 	if negotiationEndpoint != "" {
@@ -334,7 +323,7 @@ func main() {
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, reasoning: reasoningService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
+			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
 			if err != nil {
 				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
 				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
@@ -834,7 +823,7 @@ func conversationProbe(endpoint string) func(context.Context) error {
 // reasoningProbe asks the model provider for one trivial structured answer. This
 // is the layer that fails most often, so it is worth a real call.
 func reasoningProbe() func(context.Context) error {
-	model := buyerreasoning.FromEnv("USER")
+	model := modelconfig.FromEnv("USER")
 	if model.Model == "" || model.APIKey == "" {
 		return nil
 	}
@@ -985,8 +974,6 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 			return "Approval result: " + result.Reason, nil
 		}
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
-	case "/shop":
-		return shopWithReasoning(ctx, purchases, services, telegramID, messageID, command)
 	case "/refund":
 		if len(command) < 3 {
 			return "Use /refund ORDER_ID REASON.", nil
@@ -1010,75 +997,4 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 			"Send /start to see everything I can do.",
 		}, "\n"), nil
 	}
-}
-
-func shopWithReasoning(ctx context.Context, purchases purchaser, services commandServices, telegramID int64, messageID int, command []string) (string, error) {
-	if len(command) != 4 {
-		return "Usage: /shop PRODUCT_ID QUANTITY MAX_PAISE", nil
-	}
-	if services.negotiations == nil || services.reasoning == nil || services.audit == nil || services.accounts == nil || services.catalog == nil {
-		return "Shopping reasoning is not configured.", nil
-	}
-	quantity, err := strconv.Atoi(command[2])
-	if err != nil || quantity <= 0 {
-		return "Quantity must be a positive integer.", nil
-	}
-	limit, err := strconv.ParseInt(command[3], 10, 64)
-	if err != nil || limit <= 0 {
-		return "Maximum spend must be a positive amount in paise.", nil
-	}
-	proposal, err := services.negotiations.Propose(ctx, command[1], quantity)
-	if err != nil {
-		return "Merchant offer unavailable.", err
-	}
-	product, err := services.catalog.Get(ctx, proposal.ProductID)
-	if err != nil {
-		return "Catalog facts unavailable.", err
-	}
-	account, err := services.accounts.AccountForTelegram(ctx, telegramID)
-	if err != nil {
-		return "Shopping account unavailable.", err
-	}
-	input := buyerreasoning.Input{
-		Request: strings.Join(command[1:], " "), ProductID: proposal.ProductID,
-		ProductName: product.Name, Category: product.Category, Quantity: proposal.Quantity,
-		Stock: product.Stock, WarrantyYears: product.WarrantyYears, TrustScore: product.TrustScore,
-		ComboWith: stringValue(product.ComboWith), ComboDiscountPct: product.ComboDiscountPct,
-		OfferReason:     proposal.Reason,
-		BaseAmountPaise: proposal.BaseAmountPaise, FinalAmountPaise: proposal.FinalAmountPaise,
-		PricePaise:  product.PricePaise,
-		WalletPaise: account.WalletBalancePaise, TotalPaise: proposal.FinalAmountPaise,
-		SpendLimitPaise: account.SpendLimitPaise,
-	}
-	if input.SpendLimitPaise <= 0 || input.SpendLimitPaise > limit {
-		input.SpendLimitPaise = limit
-	}
-	decision, err := services.reasoning.Decide(ctx, input)
-	if err != nil {
-		return "Shopping decision failed.", err
-	}
-	if err := services.audit.RecordReasoningDecision(ctx, telegramID, input, decision); err != nil {
-		return "Shopping decision could not be audited.", err
-	}
-	if decision.Action != buyerreasoning.ActionBuy {
-		return fmt.Sprintf("Shopping decision: %s. %s", decision.Action, decision.Rationale), nil
-	}
-	result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: proposal.ProductID, Quantity: proposal.Quantity, BaseAmountPaise: proposal.BaseAmountPaise, FinalAmountPaise: proposal.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:shop:%d:%d", telegramID, messageID)})
-	if err != nil {
-		return "Purchase failed.", err
-	}
-	if result.ApprovalRequired {
-		return fmt.Sprintf("Human approval required for INR %.2f. Approval token: %s", float64(result.AmountPaise)/100, result.ApprovalToken), nil
-	}
-	if !result.Fulfilled {
-		return "Purchase was not fulfilled.", nil
-	}
-	return fmt.Sprintf("Reasoned purchase fulfilled via wallet for INR %.2f. Decision: %s. Order: %s", float64(result.AmountPaise)/100, decision.Rationale, result.OrderID), nil
-}
-
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }

@@ -11,9 +11,7 @@ import (
 	"testing"
 
 	"agentmart/internal/buyer"
-	"agentmart/internal/catalog"
 	"agentmart/internal/negotiationclient"
-	buyerreasoning "agentmart/internal/reasoning"
 	"agentmart/internal/shopgraph"
 	"agentmart/internal/telegram"
 )
@@ -43,43 +41,6 @@ type fakeRefunder struct {
 }
 
 type fakeNegotiator struct{}
-
-type fakeDecisionMaker struct {
-	decision buyerreasoning.Decision
-}
-
-type fakeReasoningAuditor struct {
-	input    buyerreasoning.Input
-	decision buyerreasoning.Decision
-	runs     []buyer.AgentRun
-}
-
-type fakeAccountFacts struct{}
-
-func (fakeAccountFacts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
-	return buyer.Account{WalletBalancePaise: 500, SpendLimitPaise: 200}, nil
-}
-
-type fakeProductFacts struct{}
-
-func (fakeProductFacts) Get(context.Context, string) (catalog.Product, error) {
-	return catalog.Product{ID: "product", Name: "Trusted Product", PricePaise: 100, Stock: 4, WarrantyYears: 3, TrustScore: 92}, nil
-}
-
-func (f *fakeReasoningAuditor) RecordReasoningDecision(_ context.Context, _ int64, input buyerreasoning.Input, decision buyerreasoning.Decision) error {
-	f.input = input
-	f.decision = decision
-	return nil
-}
-
-func (f *fakeReasoningAuditor) RecordAgentRun(_ context.Context, _ int64, _ string, run buyer.AgentRun) error {
-	f.runs = append(f.runs, run)
-	return nil
-}
-
-func (f fakeDecisionMaker) Decide(context.Context, buyerreasoning.Input) (buyerreasoning.Decision, error) {
-	return f.decision, nil
-}
 
 func (fakeNegotiator) Browse(context.Context, string, int64, string) (negotiationclient.Shortlist, error) {
 	return negotiationclient.Shortlist{
@@ -224,22 +185,6 @@ func TestNegotiationCommands(t *testing.T) {
 	accepted, _ := responseForCommand(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/accept", "session"}, negotiator)
 	if accepted != "Negotiated purchase fulfilled via wallet for INR 1.40. Order: order" {
 		t.Fatalf("accepted = %q", accepted)
-	}
-}
-
-func TestShopCommandUsesReasoningBeforePurchase(t *testing.T) {
-	purchase := fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, OrderID: "order"}}
-	auditor := &fakeReasoningAuditor{}
-	services := commandServices{negotiations: fakeNegotiator{}, reasoning: fakeDecisionMaker{decision: buyerreasoning.Decision{Action: buyerreasoning.ActionBuy, Rationale: "within budget"}}, audit: auditor, accounts: fakeAccountFacts{}, catalog: fakeProductFacts{}}
-	got, err := responseForCommandWithServices(t.Context(), fakeLinker{}, purchase, fakeRefunder{}, 10, 5, []string{"/shop", "product", "1", "200"}, services)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "Reasoned purchase fulfilled via wallet for INR 1.40. Decision: within budget. Order: order" {
-		t.Fatalf("response = %q", got)
-	}
-	if auditor.input.BaseAmountPaise != 100 || auditor.input.FinalAmountPaise != 140 || auditor.input.PricePaise != 100 || auditor.input.TotalPaise != 140 || auditor.input.WalletPaise != 500 || auditor.input.SpendLimitPaise != 200 || auditor.input.TrustScore != 92 || auditor.decision.Rationale != "within budget" {
-		t.Fatalf("audit input = %+v, decision = %+v", auditor.input, auditor.decision)
 	}
 }
 
