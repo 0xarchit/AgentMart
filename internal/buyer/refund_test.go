@@ -3,6 +3,7 @@ package buyer
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"agentmart/internal/wallet"
@@ -97,5 +98,37 @@ func TestASecondTapRefundsOnceAndReportsItAlreadyApplied(t *testing.T) {
 	}
 	if len(refunder.keys) != 2 || refunder.keys[0] != refunder.keys[1] {
 		t.Fatalf("keys = %v, want the same key twice so the guard can fire", refunder.keys)
+	}
+}
+
+// refundTrail records what the refund path reports. A refusal that leaves no row
+// shows up here as a missing one.
+type refundTrail struct{ refusals []string }
+
+func (r *refundTrail) RecordReversal(context.Context, string, string, ReverseResult) error {
+	return nil
+}
+
+func (r *refundTrail) RecordReversalFailure(context.Context, string, string, error) error {
+	return nil
+}
+
+func (r *refundTrail) RecordRefundFailure(_ context.Context, _ int64, orderID string, cause error) error {
+	r.refusals = append(r.refusals, orderID+": "+cause.Error())
+	return nil
+}
+
+// A refused refund is money the person was promised and did not get, so it has to
+// leave a row even though it never reached the credit.
+func TestARefundRefusedBeforeTheCreditIsRecorded(t *testing.T) {
+	trail := &refundTrail{}
+	service := NewRefundService(fakeRefundAccounts{}, &fakeRefunder{})
+	service.UseReversal(nil, trail)
+
+	if _, err := service.Refund(t.Context(), RefundRequest{TelegramID: 7, MessageID: 9, OrderID: "order"}); err == nil {
+		t.Fatal("a refund with no reason must be refused")
+	}
+	if len(trail.refusals) != 1 || !strings.Contains(trail.refusals[0], "order") {
+		t.Fatalf("refusals = %v, want the refusal recorded against the order asked about", trail.refusals)
 	}
 }

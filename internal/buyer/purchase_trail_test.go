@@ -1,6 +1,7 @@
-// Proves the purchase boundary records its refusals. Three money paths used to
-// return with no trail row at all, including the amount integrity check, which is
-// the strongest refusal in the buyer and happens before the gate is consulted.
+// Proves the purchase boundary records its refusals. Every money path here used to
+// be able to return with no trail row at all, including the amount integrity check,
+// which is the strongest refusal in the buyer and happens before the gate is
+// consulted.
 package buyer
 
 import (
@@ -146,5 +147,47 @@ func TestAFailureToRecordIsNotAllowedToHideTheFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "lookup failed") || !strings.Contains(err.Error(), "trail unavailable") {
 		t.Fatalf("error = %v, want both the refusal and the recording failure", err)
+	}
+}
+
+// The buyer agent can ask for a human decision without the gate having refused
+// anything. That entry point had its own set of refusals and recorded none of them.
+func TestAnApprovalRequestThatCannotBeBuiltIsRecorded(t *testing.T) {
+	trail := &failureTrail{}
+	service := trailedService(t, missingShelf{}, trail)
+
+	_, err := service.RequestApproval(t.Context(), PurchaseRequest{TelegramID: 42, ProductID: "gone", Quantity: 1, IdempotencyKey: "ask"}, "the agent wants a person to decide")
+	if err == nil {
+		t.Fatal("an approval request over a catalog that cannot answer must be refused")
+	}
+	if len(trail.rows) != 1 || !strings.Contains(trail.rows[0].cause, "lookup failed") {
+		t.Fatalf("rows = %+v, want the refusal recorded", trail.rows)
+	}
+}
+
+// Resolving a handover resumes the original purchase, and the purchase records its
+// own refusals. One refusal is one row: resolving must not write a second for the
+// same event.
+func TestAResumedPurchaseIsRecordedOnceNotTwice(t *testing.T) {
+	trail := &failureTrail{}
+	moneyGate, err := gate.New(&stagedAuditor{}, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The authorised amount no longer agrees with the catalog, so the resumed
+	// purchase refuses on amount integrity rather than settling.
+	approvals := &stagedApprovals{asked: ApprovalRequest{
+		Token: "token", ProductID: "trimmer", Quantity: 1,
+		BaseAmountPaise: stagedShelfPaise + 50_000, FinalAmountPaise: stagedShelfPaise + 50_000,
+		IdempotencyKey: "resumed",
+	}}
+	service := NewPurchaseService(stagedShelf{}, stagedPerson{}, moneyGate, &fakeArtifacts{}, &fakeWallet{}, approvals)
+	service.UseFailureTrail(trail)
+
+	if _, err := service.ResolveApproval(t.Context(), 42, "token", "approve"); err == nil {
+		t.Fatal("an authorised amount that no longer matches the catalog must be refused")
+	}
+	if len(trail.rows) != 1 {
+		t.Fatalf("trail rows = %d, want exactly one row for one refusal: %+v", len(trail.rows), trail.rows)
 	}
 }
