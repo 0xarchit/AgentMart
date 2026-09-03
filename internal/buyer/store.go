@@ -225,7 +225,7 @@ type AgentRun struct {
 	Quantity    int      `json:"quantity"`
 	FinalPaise  int64    `json:"final_amount_paise"`
 	SessionID   string   `json:"session_id,omitempty"`
-	Accepted    bool     `json:"a2a_accepted"`
+	Accepted    bool     `json:"accepted"`
 	NeedsHuman  bool     `json:"needs_human"`
 	Rationale   string   `json:"-"`
 	Steps       []string `json:"steps,omitempty"`
