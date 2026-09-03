@@ -103,7 +103,15 @@ func (c *Client) SalesFacts(ctx context.Context, since time.Time) (SalesFacts, e
 
 	if facts.CapturedCount > 0 {
 		facts.AverageCapture = facts.CapturedPaise / int64(facts.CapturedCount)
-		facts.RefundRatePct = int(int64(facts.RefundedCount) * 100 / int64(facts.CapturedCount))
+	}
+	// How much of what the shop sells comes back is money against money. Dividing
+	// refunds by payments answered a different question and answered it badly: four
+	// one rupee refunds against a single payment read as a shop where everything
+	// comes back, and that figure is what prices standing behind the goods. It can
+	// still pass a hundred honestly, when a refund inside the window settles a
+	// payment captured before the window began.
+	if facts.CapturedPaise > 0 {
+		facts.RefundRatePct = int(facts.RefundedPaise * 100 / facts.CapturedPaise)
 	}
 	return facts, nil
 }

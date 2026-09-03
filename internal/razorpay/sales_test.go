@@ -61,7 +61,10 @@ func TestSalesFactsCountOnlyWhatTheGatewayConfirms(t *testing.T) {
 	if facts.SettledPaise != 800_000 {
 		t.Fatalf("settled = %d, only a processed settlement has paid out", facts.SettledPaise)
 	}
-	if facts.AverageCapture != 600_000 || facts.RefundRatePct != 50 {
+	// Three percent, not fifty. One refund against two captured payments is not a
+	// shop where half of everything comes back: 45,000 paise went back out of
+	// 1,200,000 taken.
+	if facts.AverageCapture != 600_000 || facts.RefundRatePct != 3 {
 		t.Fatalf("average %d at refund rate %d", facts.AverageCapture, facts.RefundRatePct)
 	}
 }
