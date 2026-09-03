@@ -3,6 +3,7 @@ package shopgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -376,7 +377,7 @@ func TestAChoiceHasToBeSomethingTheShopShowed(t *testing.T) {
 		{"never shown", Selection{ProductID: "oil-1", Quantity: 1, Rationale: "invented"},
 			"", `chose "oil-1", which the shop did not show`},
 		{"nothing chosen", Selection{ProductID: "   ", Rationale: "nothing suited the ask"},
-			"", "chose nothing: nothing suited the ask"},
+			"", "nothing on the shelf was worth buying: nothing suited the ask"},
 	}
 	for _, one := range cases {
 		t.Run(one.name, func(t *testing.T) {
@@ -419,6 +420,32 @@ func TestAChoiceHasToBeSomethingTheShopShowed(t *testing.T) {
 }
 
 // A model that names a product but no count means one of it, not none of it.
+// TestRefusingEverythingOnTheShelfIsAJudgementNotALostRun pins the difference
+// between the two ways a buyer can end up with nothing. Both are the agent
+// refusing the shelf, and both must decline: a plain error here scored the more
+// deliberate of the two, the one where the agent explained itself, as a failed
+// run, so the same refusal read as a decline or a fault depending only on whether
+// the model bothered to give a reason.
+func TestRefusingEverythingOnTheShelfIsAJudgementNotALostRun(t *testing.T) {
+	service := &Service{}
+	shortlist := negotiationclient.Shortlist{
+		Options: []negotiationclient.ShortlistOption{{ProductID: "cream-1", Name: "CalmSkin", PricePaise: 49900}},
+	}
+	_, err := service.pickFrom("run-1", shortlist, Conversation{},
+		Selection{Rationale: "the only thing on offer is a cream, not a trimmer"})
+	if err == nil {
+		t.Fatal("an empty choice was accepted")
+	}
+	if !errors.Is(err, errNothingWorthBuying) {
+		t.Fatalf("error = %v, want the run loop to recognise it and decline", err)
+	}
+	// The agent's own words have to survive, because that reason is what the person
+	// is shown and what the trail records.
+	if !strings.Contains(err.Error(), "not a trimmer") {
+		t.Fatalf("error = %v, want it to carry the agent's reason", err)
+	}
+}
+
 func TestAChoiceWithNoCountMeansOne(t *testing.T) {
 	service := &Service{}
 	shortlist := negotiationclient.Shortlist{

@@ -340,7 +340,11 @@ func (s *Service) pickFrom(sessionID string, shortlist negotiationclient.Shortli
 	// on to be priced is the one the shop can look up.
 	selection.ProductID = strings.TrimSpace(selection.ProductID)
 	if selection.ProductID == "" {
-		return Pick{}, fmt.Errorf("buyer agent chose nothing: %s", selection.Rationale)
+		// Wrapped rather than plain, because a buyer that looked at the shelf and
+		// explained why nothing fits has made a judgement, not failed. Only the
+		// sentinel reaches the decline branch in the run loop; a plain error here
+		// scored the most deliberate refusal there is as a lost run.
+		return Pick{}, fmt.Errorf("%w: %s", errNothingWorthBuying, selection.Rationale)
 	}
 	// The choice has to be something the person was actually shown. A model
 	// answering with a catalog id nobody offered would otherwise be priced,
@@ -716,11 +720,11 @@ func (s *Service) ContinueWithProgress(parent context.Context, request string, p
 		if runErr != nil {
 			if errors.Is(runErr, errNothingToShow) {
 				s.noteTo(sessionID, "The shop had nothing within the budget, so nothing was bought.")
-				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingToShow.Error()}, nil
+				return Result{Action: ActionDecline, Quantity: 1, Rationale: runErr.Error()}, nil
 			}
 			if errors.Is(runErr, errNothingWorthBuying) {
 				s.noteTo(sessionID, "Nothing the shop showed was worth buying, so nothing was bought.")
-				return Result{Action: ActionDecline, Quantity: 1, Rationale: errNothingWorthBuying.Error()}, nil
+				return Result{Action: ActionDecline, Quantity: 1, Rationale: runErr.Error()}, nil
 			}
 			// The quote is already in hand, so whatever broke after it, the person
 			// can still decide. Hand the offer over with the reason rather than
