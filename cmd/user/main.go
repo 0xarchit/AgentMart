@@ -375,8 +375,16 @@ func (p loggingPurchaser) RequestApproval(ctx context.Context, request buyer.Pur
 	return result, err
 }
 
+// The wrapper has this method whatever it wraps, so the caller's own check that
+// the purchaser can resolve approvals always passes and the real question lands
+// here. Answer it with an error: the bot says approval is unavailable and stays
+// up, where an unchecked conversion would take the process down mid conversation.
 func (p loggingPurchaser) ResolveApproval(ctx context.Context, telegramID int64, token, decision string) (buyer.PurchaseResult, error) {
-	result, err := p.inner.(approvalResolver).ResolveApproval(ctx, telegramID, token, decision)
+	resolver, ok := p.inner.(approvalResolver)
+	if !ok {
+		return buyer.PurchaseResult{}, errors.New("this purchaser cannot resolve approvals")
+	}
+	result, err := resolver.ResolveApproval(ctx, telegramID, token, decision)
 	if err != nil {
 		log.Printf("approval error: %v", err)
 	}

@@ -443,3 +443,25 @@ func TestAnApprovalTokenSurvivesExtraLines(t *testing.T) {
 		t.Fatalf("markup = %#v", markup)
 	}
 }
+
+// A purchaser that can buy but cannot resolve an approval, which is the case the
+// logging wrapper used to convert unchecked.
+type buyOnlyPurchaser struct{}
+
+func (buyOnlyPurchaser) Purchase(context.Context, buyer.PurchaseRequest) (buyer.PurchaseResult, error) {
+	return buyer.PurchaseResult{}, nil
+}
+
+func (buyOnlyPurchaser) RequestApproval(context.Context, buyer.PurchaseRequest, string) (buyer.PurchaseResult, error) {
+	return buyer.PurchaseResult{}, nil
+}
+
+func TestResolvingAnApprovalWithoutAResolverErrors(t *testing.T) {
+	// The wrapper carries this method whatever it wraps, so the caller's check that
+	// the purchaser can resolve approvals passes and the answer has to come from
+	// here. An error keeps the bot up; the conversion this replaced did not.
+	_, err := loggingPurchaser{inner: buyOnlyPurchaser{}}.ResolveApproval(t.Context(), 10, "tok-9", "approve")
+	if err == nil {
+		t.Fatal("a purchaser that cannot resolve approvals returned no error")
+	}
+}
