@@ -35,3 +35,17 @@ export function plainWords(value: string): string {
   }
   return value.replace(/_/g, " ").trim() || "unknown";
 }
+
+/**
+ * spendLimitAction names what happened to the ceiling the agents may spend under
+ * without asking. The direction is in the action rather than only in the payload
+ * because the account owner's own dashboard lists the action and not the payload,
+ * and "your agent's ceiling went up" is the half of this a person needs to see.
+ * Getting the comparison backwards would record a widening of spending authority
+ * as a narrowing, which is why it is a named function with a test rather than a
+ * ternary inside a route.
+ */
+export function spendLimitAction(fromPaise: number, toPaise: number): string {
+  if (fromPaise === toPaise) return "spend_limit_unchanged";
+  return toPaise > fromPaise ? "spend_limit_raised" : "spend_limit_lowered";
+}

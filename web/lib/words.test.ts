@@ -1,6 +1,11 @@
 // Tests for the shopper facing wording of stored values.
 import { describe, expect, it } from "vitest";
-import { ledgerEntryTypes, orderStatuses, plainWords } from "./words";
+import {
+  ledgerEntryTypes,
+  orderStatuses,
+  plainWords,
+  spendLimitAction,
+} from "./words";
 
 describe("plainWords", () => {
   it("words every value the schema allows", () => {
@@ -26,5 +31,25 @@ describe("plainWords", () => {
   it("never renders an empty label", () => {
     expect(plainWords("")).toBe("unknown");
     expect(plainWords("__")).toBe("unknown");
+  });
+});
+
+describe("spendLimitAction", () => {
+  it("names a widening of the agent's authority as a raise", () => {
+    expect(spendLimitAction(250_000, 500_000)).toBe("spend_limit_raised");
+  });
+
+  it("names a narrowing as a lowering", () => {
+    expect(spendLimitAction(500_000, 250_000)).toBe("spend_limit_lowered");
+  });
+
+  it("does not claim a change when the ceiling is re-set to itself", () => {
+    expect(spendLimitAction(250_000, 250_000)).toBe("spend_limit_unchanged");
+  });
+
+  it("reads as plain words on the owner's own dashboard", () => {
+    // The wording map does not carry these, and it does not need to: the fallback
+    // is what a person reads, so it has to be readable.
+    expect(plainWords(spendLimitAction(1, 2))).toBe("spend limit raised");
   });
 });
