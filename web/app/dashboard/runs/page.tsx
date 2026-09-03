@@ -1,6 +1,8 @@
 // The deal room: one shopping run read back as the conversation that set the
 // price next to the money that moved because of it.
 import { money } from "@/lib/money";
+import { currentIdentity } from "@/lib/roles";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -54,11 +56,16 @@ export default async function RunsPage({
 }: {
   searchParams: Promise<{ run?: string }>;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const identity = await currentIdentity();
+  if (!identity) redirect("/login");
+  // An operator reaches this page from /admin, which links each run to whichever
+  // account earned it. Row level security scopes run_summary and run_timeline to
+  // the caller, so the session client returned nothing for another account's run
+  // and the deal room reported "Nothing spent" about a settled order. Reading
+  // through the service role for an operator opens nothing new: /admin already
+  // shows them every run, and the role is read from the caller's own session.
+  const operator = identity.role === "admin";
+  const supabase = operator ? createAdminClient() : await createClient();
 
   const { run: selected } = await searchParams;
   const [summaryResult, timelineResult] = await Promise.all([
@@ -92,8 +99,9 @@ export default async function RunsPage({
       <header className="mt-8 border-b border-ink/10 pb-6">
         <h1 className="text-2xl font-semibold">Deal room</h1>
         <p className="mt-1 text-sm text-ink/70">
-          Every run the agents completed for this account, with the words and
-          the money side by side.
+          {operator
+            ? "Every run the agents completed, across all accounts, with the words and the money side by side."
+            : "Every run the agents completed for this account, with the words and the money side by side."}
         </p>
       </header>
 
