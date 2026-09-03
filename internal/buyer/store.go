@@ -145,6 +145,23 @@ func (s *Store) RecordPurchaseFailure(ctx context.Context, telegramID int64, pro
 	})
 }
 
+// RecordRefundFailure writes a refund refusal that never reached the credit. Like
+// a purchase refusal the account is left unresolved, because the failure may be
+// the account lookup itself. The order id is written into the payload rather than
+// the order_id column for the same reason: it is what the person asked for, not
+// necessarily an order that exists.
+func (s *Store) RecordRefundFailure(ctx context.Context, telegramID int64, orderID string, cause error) error {
+	return s.insertTrail(ctx, map[string]any{
+		"actor":  "buyer_agent",
+		"action": "refund_failed",
+		"reason": cause.Error(),
+		"payload": map[string]any{
+			"telegram_id": telegramID,
+			"order_id":    orderID,
+		},
+	})
+}
+
 // RecordGateDecision persists every purchase approval and rejection.
 func (s *Store) RecordGateDecision(ctx context.Context, decision gate.Decision) error {
 	action := "gate_rejected"
