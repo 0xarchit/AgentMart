@@ -114,8 +114,10 @@ never below cost. See the known limitation about where cost is enforced.
    rails and records the offer before returning it.
 3. The buyer judges the quote against the person's money facts.
 4. The gate re-derives the amount from the catalog and decides. Above the limit
-   means a person is asked, and nothing is spent while that answer is
-   outstanding.
+   means a person is asked, and that ask spends nothing. A later instruction the
+   person types themselves still runs and still meets the gate, which asks its
+   own question rather than spending above the limit; the balance is re-read
+   every time, so open questions cannot add up to an overdraft.
 5. A settlement creates a gateway order object and moves the allowance in one
    atomic database call, under an advisory lock keyed on the idempotency key.
 6. A cancellation inside the refund window credits the allowance back, restocks

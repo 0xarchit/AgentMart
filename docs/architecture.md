@@ -72,7 +72,14 @@ appends two turns to the session transcript.
 - **ask_human**: an approval row is written with a token, and the person gets
   the amount, the reasoning, the buttons, and the transcript. No money moves.
   The negotiation session stays open, because the deal is genuinely pending a
-  person. On approval the purchase resumes through the same gate.
+  person. On approval the purchase resumes through the same gate. A standing
+  question holds free text only, because starting a fresh run would abandon the
+  question it was asked about. An explicit `/buy` or `/accept` still runs: each
+  names the purchase it means, so it is a new instruction rather than an answer
+  to the open one, and it reaches the same gate. Above the standing limit it
+  raises its own question instead of spending, and the balance is re-read on
+  every attempt, so two open questions cannot overdraw the allowance between
+  them.
 - **decline**: the session is closed with a reason. Nothing moves.
 
 ### What gets recorded
