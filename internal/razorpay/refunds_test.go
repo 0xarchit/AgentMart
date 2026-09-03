@@ -4,7 +4,9 @@
 package razorpay
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -210,5 +212,59 @@ func TestAReversalNeedsAPaymentAndAnAmount(t *testing.T) {
 	}
 	if _, err := client.PaymentRefunds(t.Context(), " "); err == nil {
 		t.Fatal("listing reversals for no payment should refuse")
+	}
+}
+
+// The notes are the gateway's own copy of the trail. Reconciliation reads the
+// order back out of them, and the run a reversal is owed under lives there rather
+// than in the retry key so that a replay inside one run is exact. Nothing
+// asserted they reach the wire: dropping them from the body left every test in
+// this repository green while every reversal went out anonymous.
+func TestAReversalCarriesItsTrailIntoTheGatewayBody(t *testing.T) {
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":"reversal-1","payment_id":"pay_1","amount":45000,"status":"processed"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("key", "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = server.URL
+
+	notes := map[string]string{
+		"order_id":      "order-1",
+		"account_id":    "account-9",
+		"run_id":        "run-4",
+		"reason":        "Cancelled by user",
+		"part_of_paise": "80000",
+	}
+	if _, err := client.CreateRefund(t.Context(), "pay_1", 45000, "telegram:42:refund:7", notes); err != nil {
+		t.Fatal(err)
+	}
+
+	var sent struct {
+		Amount int64             `json:"amount"`
+		Speed  string            `json:"speed"`
+		Notes  map[string]string `json:"notes"`
+	}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	if sent.Amount != 45000 {
+		t.Fatalf("body carried amount %d, want the amount asked for", sent.Amount)
+	}
+	// Instant costs the merchant a fee and is irreversible sooner. The normal
+	// speed is the deliberate choice, so it is stated rather than left to whatever
+	// the gateway defaults to this year.
+	if sent.Speed != "normal" {
+		t.Fatalf("body carried speed %q, want normal", sent.Speed)
+	}
+	for key, want := range notes {
+		if sent.Notes[key] != want {
+			t.Fatalf("notes[%q] = %q, want %q. These are the only record tying a refund back to the order, the account and the run it is owed under.", key, sent.Notes[key], want)
+		}
 	}
 }
