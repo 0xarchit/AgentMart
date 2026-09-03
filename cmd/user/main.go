@@ -624,10 +624,10 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		return sendReply(ctx, client, message.Chat.ID, approval, approvalMarkup(purchase.ApprovalToken))
 	}
 	if !purchase.Fulfilled {
-		summary.WriteString("\nPurchase rejected: " + purchase.Reason)
+		fmt.Fprintf(&summary, "\nPurchase rejected: %s", purchase.Reason)
 		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
-	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
+	fmt.Fprintf(&summary, "\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID)
 	forget(ctx, services, message.From.ID)
 	return sendReply(ctx, client, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
 }
