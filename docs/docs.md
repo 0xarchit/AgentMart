@@ -179,6 +179,7 @@ filename order.
 | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ADK_MODEL_NAME` | reasoning access and the model chain |
 | `MARKET_SHARED_TOKEN` | the token the buyer presents to the merchant |
 | `USER_MARKET_MCP_ENDPOINT`, `USER_MARKET_A2A_ENDPOINT` | where the buyer finds the merchant |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | the Upstash Redis REST endpoint and token; the merchant exits at startup without them, the buyer starts and silently loses per chat conversation memory, so a follow up referring back to what was already shown stops resolving |
 | `DEFAULT_SPEND_LIMIT_PAISE` | the standing limit a new account starts with |
 
 `ADK_MODEL_NAME` is a comma separated chain. Each model is retried five times,
