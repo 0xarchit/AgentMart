@@ -248,10 +248,42 @@ strands the money.
 What was rejected, and why it matters. A payment link the person pays was the
 obvious way to give the approval path a payment object, and it was turned down:
 it puts a human in the per purchase loop, which is the one thing this design is
-about not doing. The correct primitive is a mandate granted once, drawn against
-by the agent. On the current test key a mandate can be granted but not drawn
-against, so the honest position is that the adapter is ready and the capability
-is pending, which is a one file swap rather than a redesign.
+about not doing. The correct primitive is a mandate granted once and drawn
+against by the agent, and whether that primitive is actually reachable was
+settled by probing the live gateway rather than by reading the product pages.
+
+It is not reachable, and the reason is an account level feature grant rather
+than anything about test mode. Three findings say so independently. The one
+route that charges a mandate with nobody present,
+`POST /v1/payments/create/recurring`, answers a bad request error reading "The
+requested URL was not found on the server." with its source given as internal,
+on four request shapes including an empty body, so it refuses before it reads a
+payload at all; a path that genuinely does not exist is refused earlier and
+differently, by the edge, with "no Route matched with those values".
+Subscriptions and plans, the other way to charge on a schedule, answer
+"Unauthorized" on the live secret while a deliberately wrong secret answers
+"Authentication failed" on the same call, and ten other endpoints answered
+normally on that same credential in the same session: two different refusals for
+a good key and a bad one mean the key is fine and the feature is shut. Both
+documentation trees then say so in prose, that this is granted on request
+through their support team, and no sandbox override exists.
+
+What makes it worth writing down is how convincingly the first half works. A
+registration validates the frequency and the maximum amount, returns a real
+NACH mandate form naming the bank, and hands back a working authorisation link.
+The token echoed back with it has no id, its recurring status is null, and
+listing that customer's tokens returns none. Registration is open and charging
+is closed, so a build that stopped at a successful registration would have
+reported a working mandate and been wrong.
+
+The alternative that also needs no person, authorising a payment and capturing
+it later, was investigated in the same round and deliberately not adopted. The
+amount is fixed when the authorisation is taken, and the whole point here is an
+agent that arrives at an amount by negotiating it. A mechanism that wants the
+number before the conversation contradicts the premise, so it is recorded as
+examined and rejected rather than built. The position is therefore that the
+adapter is ready and the capability is withheld, which stays a one file swap and
+not a redesign.
 
 ## 6. Known defects in the contract
 
@@ -260,7 +292,7 @@ is pending, which is a one file swap rather than a redesign.
 | bundled goods not carried through the settling agent | `shopgraph/builder.go` negotiate branch | a negotiated bundle is still measured against the main product alone |
 | a run is one shot | buyer graph | a follow up message starts over instead of continuing |
 | the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
-| no drawable mandate on the test key | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object |
+| no drawable mandate on this account | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object, and the route that would charge a mandate is withheld per account rather than by test mode |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
 | cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
 | the gateway sales view has no caller | `internal/razorpay/sales.go` | built and tested, and reachable by no running code |
@@ -291,7 +323,9 @@ asserted account id stays, because the fix is either signing the id or issuing p
 buyer tokens and neither is an hour's work; it is an authorization hole in the
 personalisation path only, it cannot move money past the gate, and it is written
 down here rather than left for someone to find. The bundled goods carry and the one
-shot run stay as already sequenced in later phases, as does the mandate.
+shot run stay as already sequenced in later phases. The mandate is not deferred by
+us at all: the route that charges one is withheld at the account level, which
+section 5 now evidences, so that deferral belongs to the gateway.
 
 One change is not in that table because it was never on the defect list, and it
 matters more than most of what was: a price could not settle below the list total,

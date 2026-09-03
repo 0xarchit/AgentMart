@@ -87,14 +87,23 @@ capabilities this system does not have yet, which is recorded rather than hidden
 
 Not real yet: the settling step itself moves money inside our own ledger rather
 than drawing on the gateway. The design for that is a mandate authorised once and
-drawn per purchase with no person in the loop, and it is not available on a test
-key today: an authorisation can be granted and not charged against. Settlement is
-therefore one interface behind the gate, so enabling it is a one file change and
-not one bound moves.
+drawn per purchase with no person in the loop, and that draw is not available to
+this account. We probed it rather than assuming: the one route that charges a
+mandate with nobody present refuses every request shape, including an empty body,
+before it reads a payload, while ten other endpoints answer normally on the same
+credential in the same session, and the scheduled charging APIs refuse a good
+secret differently from a wrong one. It is a capability granted per account on
+request, not a test mode restriction, and registering a mandate succeeds
+convincingly right up to the point of charging it. `docs/architecture.md` section
+5 carries the evidence. Settlement is therefore one interface behind the gate, so
+enabling it is a one file change and not one bound moves.
 
 We deliberately rejected the easier route of a payment link per purchase. It would
 have produced a real captured payment for every sale, and it puts a person in
-every transaction, which contradicts the one thing this system is for.
+every transaction, which contradicts the one thing this system is for. Authorising
+a payment and capturing it later needs no person either, and we turned that down
+too: the amount is fixed at authorisation, and an agent that settles on a price by
+negotiating it cannot supply that number in advance.
 
 ## Known limitations
 
