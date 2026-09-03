@@ -3,6 +3,7 @@
 // paths race harmlessly: whichever arrives first credits, and the other is told the
 // payment was already applied. Having both matters because a browser callback can
 // be lost when the tab closes, and a webhook can be delayed.
+import { serverFault } from "@/lib/errors";
 import { fetchRazorpayPayment, refuseTopUp, verifyCheckoutSignature } from "@/lib/razorpay";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -35,14 +36,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "signature verification failed" }, { status: 500 });
+    return NextResponse.json({ error: serverFault("checkout signature", error) }, { status: 500 });
   }
 
   let payment;
   try {
     payment = await fetchRazorpayPayment(paymentID);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "payment lookup failed" }, { status: 502 });
+    return NextResponse.json({ error: serverFault("payment lookup", error) }, { status: 502 });
   }
   const refusal = refuseTopUp(payment, orderID, user.id);
   if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
     p_razorpay_order_id: payment.order_id,
     p_razorpay_payment_id: payment.id,
   });
-  if (error) return NextResponse.json({ error: error.message }, { status: 409 });
+  if (error) return NextResponse.json({ error: serverFault("wallet credit", error) }, { status: 409 });
   const outcome = data as { approved?: boolean; duplicate?: boolean; balance_paise?: number; reason?: string } | null;
   if (outcome?.approved === false) {
     return NextResponse.json({ error: outcome.reason ?? "top-up was refused" }, { status: 409 });

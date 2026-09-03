@@ -1,4 +1,5 @@
 // Authenticated spend-limit update endpoint.
+import { serverFault } from "@/lib/errors";
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
@@ -19,6 +20,6 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "spend limit must be a positive integer within the allowed maximum" }, { status: 400 });
   }
   const { data, error } = await supabase.from("accounts").update({ spend_limit_paise: value }).eq("id", user.id).select("id,spend_limit_paise").single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 502 });
+  if (error) return NextResponse.json({ error: serverFault("spend limit update", error) }, { status: 502 });
   return NextResponse.json(data);
 }

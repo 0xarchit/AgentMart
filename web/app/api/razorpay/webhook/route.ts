@@ -1,4 +1,5 @@
 // Verifies Razorpay webhooks before crediting the internal wallet.
+import { serverFault } from "@/lib/errors";
 import { refuseWalletCredit, verifyWebhookSignature } from "@/lib/razorpay";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
@@ -36,12 +37,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   } catch (error) {
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "webhook verification failed",
-      },
+      { error: serverFault("webhook signature", error) },
       { status: 500 },
     );
   }
@@ -96,7 +92,10 @@ export async function POST(request: Request) {
     p_razorpay_payment_id: payment.id,
   });
   if (error)
-    return NextResponse.json({ error: error.message }, { status: 409 });
+    return NextResponse.json(
+      { error: serverFault("webhook wallet credit", error) },
+      { status: 409 },
+    );
   return NextResponse.json({ received: true });
 }
 
@@ -133,6 +132,9 @@ async function recordGatewayEvent(
     },
   });
   if (error)
-    return NextResponse.json({ error: error.message }, { status: 409 });
+    return NextResponse.json(
+      { error: serverFault("gateway event record", error) },
+      { status: 409 },
+    );
   return NextResponse.json({ received: true, recorded: name });
 }

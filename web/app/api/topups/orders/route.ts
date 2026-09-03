@@ -1,4 +1,5 @@
 // Creates authenticated Razorpay Checkout orders for wallet top-ups.
+import { serverFault } from "@/lib/errors";
 import { money } from "@/lib/money";
 import { createRazorpayOrder } from "@/lib/razorpay";
 import { createClient } from "@/lib/supabase/server";
@@ -28,6 +29,6 @@ export async function POST(request: Request) {
     const order = await createRazorpayOrder(amountPaise, receipt, { account_id: user.id, purpose: "wallet_topup" });
     return NextResponse.json({ order_id: order.id, amount_paise: order.amount, currency: order.currency, key_id: process.env.RAZORPAY_KEY_ID, account_id: user.id });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "order creation failed" }, { status: 502 });
+    return NextResponse.json({ error: serverFault("top-up order", error) }, { status: 502 });
   }
 }
