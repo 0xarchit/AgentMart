@@ -117,12 +117,24 @@ func (s *Service) GetWithCost(ctx context.Context, id string) (Product, error) {
 	query.Set("select", "id,name,category,price_paise,stock,warranty_years,trust_score,combo_with,combo_discount_pct,cost_paise")
 	query.Set("id", "eq."+escapeFilter(id))
 	query.Set("limit", "1")
-	var products []Product
-	if err := s.db.Get(ctx, "products", query, &products); err != nil {
+	// The cost is decoded through a local field rather than through Product.
+	// Product.CostPaise is tagged json:"-" so the cost can never leave through a
+	// buyer-facing payload, and that same tag makes encoding/json skip it coming
+	// back from the database too. Selecting the column was not enough on its own:
+	// every product decoded with a zero cost, which silently flattened the
+	// merchant's cost floor to zero wherever a funded discount opened the floor
+	// below list.
+	var rows []struct {
+		Product
+		CostPaise int64 `json:"cost_paise"`
+	}
+	if err := s.db.Get(ctx, "products", query, &rows); err != nil {
 		return Product{}, err
 	}
-	if len(products) == 0 {
+	if len(rows) == 0 {
 		return Product{}, fmt.Errorf("product %q not found", id)
 	}
-	return products[0], nil
+	product := rows[0].Product
+	product.CostPaise = rows[0].CostPaise
+	return product, nil
 }
