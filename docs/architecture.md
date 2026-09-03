@@ -290,7 +290,6 @@ not a redesign.
 | Defect | Where | Effect |
 | --- | --- | --- |
 | bundled goods not carried through the settling agent | `shopgraph/builder.go` negotiate branch | a negotiated bundle is still measured against the main product alone |
-| a run is one shot | buyer graph | a follow up message starts over instead of continuing |
 | the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
 | no drawable mandate on this account | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object, and the route that would charge a mandate is withheld per account rather than by test mode |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
@@ -323,13 +322,14 @@ asserting it.
 | the gateway refund rate counted refund objects against captured payments, so four one rupee test refunds read as a shop where nearly everything comes back, and that figure is what prices cover into a quote | refunded paise against captured paise, under its own divisor guard, `razorpay/sales.go:114` | `sales_test.go:67`, where one refund of 45,000 paise against 1,200,000 taken is three percent and not fifty |
 | the gateway sales view had no caller | `cmd/market/main.go:68` hands the gateway to the trading provider, which reads it per five minute window at `trading/trading.go:112` and feeds the refund rate into the conditions the shop prices from | the row above it in the open table, which is the narrower defect that remains once the view is reached: it reads only the first page |
 | an interrupted reversal was never resumed, so a gateway leg that failed or a process that stopped after the allowance was credited left the credit standing with no gateway evidence behind it, and the next refund returned before retrying it | the three things a resumed leg cannot reconstruct, the amount, the wording of the reason and the run, are written down beside the credit in the same transaction, migration `20260903000600`, and read back at `buyer/refund.go:185` instead of being rebuilt from the request in front of us | `refund_test.go`, where a second refund the wallet refuses still finishes the first attempt's reversal under that attempt's key, amount, reason and run rather than this one's, and `reversal_test.go`, where a leg the gateway already holds is counted and not sent again |
+| a run was one shot, so a follow up message started over instead of continuing | what the shop showed is harvested out of the run and kept per chat under `agentmart:chat:{id}` for two hours, written before the failure check rather than after it, and the next message is asked against it at `shopgraph/builder.go:413` | `shopgraph_test.go:284` fails if the follow up does not lead the brief or if the earlier shortlist is missing from it; `cmd/user/conversation_test.go:205` drives a run that breaks after the shop has answered and fails if the shortlist was lost with it; `:160` drives a real graph against a remembered shortlist and then requires a settled purchase to clear it, so a bought shortlist is never refined |
 
 Deferred with the reason stated, and on the merits rather than for time. The self
 asserted account id stays, because the fix is either signing the id or issuing per
 buyer tokens and neither is an hour's work; it is an authorization hole in the
 personalisation path only, it cannot move money past the gate, and it is written
-down here rather than left for someone to find. The bundled goods carry and the one
-shot run stay as already sequenced in later phases. The mandate is not deferred by
+down here rather than left for someone to find. The bundled goods carry stays as
+already sequenced in a later phase. The mandate is not deferred by
 us at all: the route that charges one is withheld at the account level, which
 section 5 now evidences, so that deferral belongs to the gateway. Resuming an
 interrupted reversal is no longer deferred and is the last closed row above. The
@@ -391,5 +391,6 @@ with a reason, alternates the two shops per scenario so neither meets a differen
 provider, and splits revenue into settled and pending a person's approval so a
 gate that did its job is not scored as a lost sale.
 
-The remaining sequence, in order: hold conversation state across messages, then
-move policy out of code into account rows, then learn from outcomes.
+The remaining sequence, in order: move policy out of code into account rows, then
+learn from outcomes. Conversation state was the first item on it and is the last
+closed row in section 6.
