@@ -75,9 +75,14 @@ export default async function AdminPage() {
       .select("run_id,order_id,action,payload")
       .order("created_at", { ascending: false })
       .limit(500),
+    // Ordered, because the reconciliation tile compares these movements against
+    // the newest orders. With no order by, Postgres returns an arbitrary 500 rows,
+    // so the debits belonging to the newest orders could simply be missing and the
+    // tile reported a disagreement that was only a gap in what had been read.
     admin
       .from("wallet_ledger")
       .select("order_id,entry_type,amount_paise")
+      .order("created_at", { ascending: false })
       .limit(500),
   ]);
 
