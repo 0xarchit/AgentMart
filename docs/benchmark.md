@@ -16,7 +16,7 @@ seed shelf. The buyer is identical in both passes and every judgement in
 both passes is made live by the agents: nothing is scripted, replayed or
 mocked, and no outcome is chosen by the harness.
 
-The only difference between the passes is what the shop may do with the price.
+The passes differ in what the shop may do with the price.
 
 First pass, negotiating: the shop quotes from the seeded shelf, prices with
 its own judgement, may pair a partner product, and may concede between the
