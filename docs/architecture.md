@@ -221,7 +221,7 @@ What exists today, stated without flattery.
 
 | Step | Mechanism | Payment object |
 | --- | --- | --- |
-| funding the allowance | hosted checkout, webhook verified, credited once by key | a real captured payment |
+| funding the allowance | hosted checkout, verified from the webhook and from the browser callback alike, credited once by key | a real captured payment |
 | agent purchase | order artifact created, then an atomic wallet debit | an order, no payment |
 | human approval | approval row plus a token, resumed through the gate, settled through a swappable adapter | none yet |
 | cancellation | wallet credit against the order id | none |
@@ -240,11 +240,14 @@ refusal is a test rather than a paragraph.
 What is built and not wired, stated separately because the distinction matters.
 `internal/razorpay/sales.go` is a read-only view of gateway sales, structurally
 read-only in that the file contains no write verb, and it has no caller outside
-its own tests. `verifyCheckoutSignature` in `web/lib/razorpay.ts` is the same:
-written, tested, and reached by nothing. Both were described as shipped in this
-document until it was pointed out that shipped has to mean a stranger can reach
-it. They are packages, not features, until something
-calls them.
+its own tests. It was described as shipped in this document until it was pointed
+out that shipped has to mean a stranger can reach it. It is a package, not a
+feature, until something calls it. `verifyCheckoutSignature` in
+`web/lib/razorpay.ts` sat in this paragraph for the same reason and has since left
+it: the browser callback now posts to `web/app/api/topups/confirm/route.ts`, which
+verifies the signature and credits the wallet under the same idempotency key the
+webhook uses, so the two paths race harmlessly and a lost webhook no longer
+strands the money.
 
 What was rejected, and why it matters. A payment link the person pays was the
 obvious way to give the approval path a payment object, and it was turned down:
@@ -262,49 +265,47 @@ is pending, which is a one file swap rather than a redesign.
 | a run is one shot | buyer graph | a follow up message starts over instead of continuing |
 | the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
 | no drawable mandate on the test key | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object |
-| one shared negotiation slot for all callers | `marketgraph/nodes.go:230`, read at `:106` and `:127` | two concurrent buyers cross wires or fail with no input in flight |
-| the price freshness rail cannot fire | `buyer/purchase.go:123` passes `PriceObservedAt` and `Now` as the same instant | `stale_price` is in the ladder, the tests and this document, and is unreachable in production |
-| the concession schedule is prose, not code | `MinAcceptablePaise` reaches the prompt and the auditor, never `clampToRails` | the strategist may concede to the buyer's bid in one round; the floor and list total still hold |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
 | cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
-| three money paths return without a trail row | `buyer/purchase.go:100-119`, `buyer/settlement.go:60` | the amount integrity refusal, the strongest check in the buyer, records nothing |
 | the gateway sales view has no caller | `internal/razorpay/sales.go` | built and tested, and reachable by no running code |
-| the checkout signature verifier has no caller | `web/lib/razorpay.ts:41` | the wallet credits only from the webhook, so a missed webhook strands the demo |
-| a tool returns its own argument | `get_current_terms` in `shopgraph/builder.go` | the description promises the latest terms of an open session and hands back the session id |
 
 Every row above was verified against the code, with a file and a line, rather
 than carried over from notes. The list is deliberately complete: a defect that is
 written down can be scheduled or accepted on purpose, and one that is not gets
 found by someone else.
 
-Which of these are being addressed and which are accepted. To be exact about the
-state: as of this commit none of the rows above is fixed. What follows is a plan,
-not a report.
+Closed since this list was written, and kept here rather than deleted, because a
+defect that was found and fixed is evidence about how this was built and a defect
+quietly removed from a list is not. Each row names what proves the fix instead of
+asserting it.
 
-Intended to close before submitting: the shared negotiation slot, both dead rails,
-the missing trail rows on the three rejection paths, and a caller for the checkout
-signature verifier. Each is under an hour, each is either a correctness claim this
-document makes or a live demo hazard, and the shared slot additionally blocks
-anything public.
+| Was | Closed by | Proved by |
+| --- | --- | --- |
+| one shared negotiation slot for all callers | the in flight input is keyed by the graph pass that stored it, `marketgraph/nodes.go:275`, and deleted on the way out | structure rather than a test: `nodes.go:38-42` is a `sync.Map` keyed per pass, so there is no shared cell left to cross |
+| the price freshness rail could not fire | the instant a quote was observed travels with the request instead of being read as now, `buyer/purchase.go:174` | `stale_price_test.go:39` refuses a quote older than the window, `:49` still buys inside it, and `:56` treats no observation as priced now |
+| thirteen money path refusals returning with no trail row, where this list said three, including the amount integrity refusal that fires before the gate is consulted | one recorder per boundary that every refusal leaves through, `buyer/purchase.go:129` and `buyer/refund.go:67` | `purchase_trail_test.go` and `refund_test.go`, which fail both on a missing row and on a doubled one |
+| the concession schedule was prose, not code | this round's concession floor is one of the bounds `clampToRails` chooses between, `marketgraph/graph.go:133` | `marketgraph_test.go:39`, which fails if the round's floor is only advisory |
+| the checkout signature verifier had no caller | `web/app/api/topups/confirm/route.ts` credits the wallet from the browser callback, under the idempotency key the webhook already uses | `razorpay.test.ts` covers the four facts that decide the credit, including a captured payment replayed by an account it was not opened for |
+| a tool returned its own argument | `get_current_terms` is removed rather than implemented, since a tool that hands back its own argument is worse than a missing one | no toolset registers the name and no code refers to it |
+| a ten minute window on account and product refused purchases that were not duplicates: a second unit, a gift, a fresh attempt after an unrelated failure | the idempotency key is left to be the duplicate check it already is, migration `20260903000400` | every purchase key is derived from the message or the negotiation session that asked for it, so a retry carries the same key and a genuinely new purchase carries a new one; runaway repetition is bounded by the balance, the spend limit and the approval rail instead of by a clock |
 
-Deferred with the reason stated. The self asserted account id stays, because the
-fix is either signing the id or issuing per buyer tokens and neither is an hour's
-work; it is an authorization hole in the personalisation path only, it cannot move
-money past the gate, and it is written down here rather than left for someone to
-find. The bundled goods carry and the one shot run stay as already sequenced in
-later phases, as does the mandate. The stub tool is removed
-rather than implemented, since a tool that hands back its own argument is worse
-than a missing one.
+Deferred with the reason stated, and on the merits rather than for time. The self
+asserted account id stays, because the fix is either signing the id or issuing per
+buyer tokens and neither is an hour's work; it is an authorization hole in the
+personalisation path only, it cannot move money past the gate, and it is written
+down here rather than left for someone to find. The bundled goods carry and the one
+shot run stay as already sequenced in later phases, as does the mandate.
 
-Closed since, and worth recording because it changed the money contract rather
-than patching around it. A price could not settle below the list total, which made
-the campaign tiers and the loyalty strategy decorative. Four layers enforced that
-ordering: the gate ladder, the negotiation floor, the fulfillment function and a
-check constraint on the revenue table. All four moved together. The floor is now
-the list total less the discount a buyer is already entitled to, and never below
-cost, so a discount is bounded by data rather than by a model's judgement. The
-cost of that change is the row above: the buyer's gate no longer double covers the
-cost floor, because the alternative was publishing cost to the counterparty.
+One change is not in that table because it was never on the defect list, and it
+matters more than most of what was: a price could not settle below the list total,
+which made the campaign tiers and the loyalty strategy decorative. Four layers
+enforced that ordering: the gate ladder, the negotiation floor, the fulfillment
+function and a check constraint on the revenue table. All four moved together. The
+floor is now the list total less the discount a buyer is already entitled to, and
+never below cost, so a discount is bounded by data rather than by a model's
+judgement. The cost of that change is a row above: the buyer's gate no longer
+double covers the cost floor, because the alternative was publishing cost to the
+counterparty.
 
 Also deferred, smaller: pagination past the first hundred gateway objects, loyalty
 tiers being farmable by buying and refunding in a loop, the last write wins session
