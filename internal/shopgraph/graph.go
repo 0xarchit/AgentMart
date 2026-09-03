@@ -134,15 +134,24 @@ type Offer struct {
 
 // Outcome is the settled negotiation state flowing into finalize.
 type Outcome struct {
-	Action      string `json:"action"`
-	Status      string `json:"status"` // accepted | countered | declined | needs_human
-	ProductID   string `json:"product_id"`
+	Action string `json:"action"`
+	Status string `json:"status"` // accepted | countered | declined | needs_human
+	// ProductID, Quantity and BundledPaise describe the basket this run priced.
+	// All three are out of the negotiating agent's reach for the same reason
+	// QuotedAt is: the agent settles the price of one basket it was handed, so it
+	// has no business changing what is in it. A substituted product would still
+	// price and gate cleanly while charging for goods the person never saw, and an
+	// inflated count or attached amount would raise the list total that the
+	// premium band is measured against, letting an over-band ask through as if it
+	// were ordinary. The function nodes fill these from the offer; settlement
+	// prefers what the shop actually quoted.
+	ProductID   string `json:"-"`
 	ProductName string `json:"product_name"`
-	Quantity    int    `json:"quantity"`
+	Quantity    int    `json:"-"`
 	FinalPaise  int64  `json:"final_amount_paise"`
 	// BundledPaise carries the attached goods forward so the settled amount is
 	// still measured against everything the buyer receives.
-	BundledPaise int64              `json:"bundled_paise,omitempty"`
+	BundledPaise int64              `json:"-"`
 	Rationale    string             `json:"rationale"`
 	Steps        []string           `json:"steps,omitempty"`
 	SessionID    string             `json:"session_id"`

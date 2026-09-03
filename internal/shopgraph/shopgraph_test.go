@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"agentmart/internal/catalog"
+	"agentmart/internal/llmchat"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/negotiationclient"
 )
@@ -429,5 +430,70 @@ func TestAChoiceWithNoCountMeansOne(t *testing.T) {
 	}
 	if pick.Quantity != 1 {
 		t.Fatalf("quantity = %d, want one", pick.Quantity)
+	}
+}
+
+// TestTheNegotiatingAgentCannotChangeWhatIsBeingBought pins the trust boundary on
+// the one node whose output a model writes. The agent settles the price of a
+// basket it was handed; the basket itself must not be in its reach, or a real but
+// different product, a larger count, or an invented attached amount would settle
+// and gate cleanly while charging for something nobody chose. The whole fence
+// rests on schema derivation honouring json:"-", so this asserts that too.
+func TestTheNegotiatingAgentCannotChangeWhatIsBeingBought(t *testing.T) {
+	schema, err := llmchat.SchemaFor[Outcome]()
+	if err != nil {
+		t.Fatalf("derive the settled outcome schema: %v", err)
+	}
+	for _, field := range []string{"product_id", "quantity", "bundled_paise", "quoted_at"} {
+		if _, reachable := schema.Properties[field]; reachable {
+			t.Fatalf("%q is in the negotiating agent's output schema, so it can change what is bought", field)
+		}
+	}
+	// The fence is worthless if it silently removed everything: the agent still has
+	// to be able to report what it settled at and why.
+	for _, field := range []string{"action", "final_amount_paise", "rationale"} {
+		if _, reachable := schema.Properties[field]; !reachable {
+			t.Fatalf("%q left the output schema, so the agent can no longer report what it did", field)
+		}
+	}
+}
+
+// TestASettledOutcomeDescribesTheBasketTheShopPriced is the other half of that
+// fence: settlement reads the basket back from the run rather than from the
+// outcome, so even an outcome that names different goods cannot redirect the
+// money.
+func TestASettledOutcomeDescribesTheBasketTheShopPriced(t *testing.T) {
+	service := &Service{}
+	service.begin("run-1", Wallet{}, nil, Conversation{})
+	defer service.end("run-1")
+	service.recordPriced("run-1", pricedGoods{productID: "trim-9", quantity: 2, bundledPaise: 39920})
+
+	substituted := Outcome{
+		Action: string(ActionBuy), ProductID: "oil-1", Quantity: 9,
+		BundledPaise: 500000, FinalPaise: 388013, SessionID: "session-1",
+	}
+	result, err := service.resultFrom("run-1", nil, substituted)
+	if err != nil {
+		t.Fatalf("a settled outcome must still settle: %v", err)
+	}
+	if result.ProductID != "trim-9" {
+		t.Fatalf("product = %q, want the product the shop priced", result.ProductID)
+	}
+	if result.Quantity != 2 {
+		t.Fatalf("quantity = %d, want the count the shop priced", result.Quantity)
+	}
+	if result.FinalPaise != 388013 {
+		t.Fatalf("amount = %d, want the negotiated amount, which is the agent's to report", result.FinalPaise)
+	}
+
+	// A caller that never began a run has nothing to hold the outcome to, and must
+	// not be silently handed an empty basket instead.
+	loose := &Service{}
+	fallback, err := loose.resultFrom("run-2", nil, substituted)
+	if err != nil {
+		t.Fatalf("resultFrom without a run: %v", err)
+	}
+	if fallback.ProductID != "oil-1" || fallback.Quantity != 9 {
+		t.Fatalf("without a priced basket the outcome is all there is: %+v", fallback)
 	}
 }

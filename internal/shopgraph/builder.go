@@ -76,6 +76,17 @@ type runState struct {
 	prior    Conversation
 	mu       sync.Mutex
 	shown    []PriorOption
+	priced   pricedGoods
+}
+
+// pricedGoods is the basket the shop quoted on one pass: the goods, how many, and
+// what was attached. The negotiating agent settles the price of this basket, so it
+// is deliberately not the agent's to change: none of these three fields is in its
+// output schema, and settlement reads them back from here.
+type pricedGoods struct {
+	productID    string
+	quantity     int
+	bundledPaise int64
 }
 
 // PriorOption is one item the shop showed earlier, kept so a follow up such as
@@ -178,6 +189,30 @@ func (s *Service) shownFor(sessionID string) []PriorOption {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	return run.shown
+}
+
+// recordPriced keeps the basket the shop actually quoted on this pass, so the
+// settled outcome can be held to it.
+func (s *Service) recordPriced(sessionID string, goods pricedGoods) {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.priced = goods
+}
+
+// pricedFor reports the basket this pass was quoted for. A zero value means the
+// run never got as far as a price.
+func (s *Service) pricedFor(sessionID string) pricedGoods {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return pricedGoods{}
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.priced
 }
 
 // end releases one run's facts.
@@ -463,6 +498,12 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if proposal.Bundle != nil {
 				offer.BundledPaise = proposal.Bundle.PricePaise * int64(offer.Quantity)
 			}
+			// The shop has now named, counted and priced one basket. Settlement is
+			// held to it, so a later stage cannot swap the goods, change how many, or
+			// invent attached goods that would flatter the premium band.
+			s.recordPriced(ctx.SessionID(), pricedGoods{
+				productID: offer.ProductID, quantity: offer.Quantity, bundledPaise: offer.BundledPaise,
+			})
 			premium, pct := premiumOver(offer.FinalPaise, offer.BasePaise+offer.BundledPaise)
 			view := OfferView{
 				Offer:              offer,
@@ -585,15 +626,16 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if !ok {
 				return Result{}, fmt.Errorf("finalize received %T instead of an Outcome", raw)
 			}
-			product, err := s.tools.Get(ctx, outcome.ProductID)
+			goods := s.settledGoods(ctx.SessionID(), outcome)
+			product, err := s.tools.Get(ctx, goods.productID)
 			if err != nil {
 				return Result{}, fmt.Errorf("verify candidate: %w", err)
 			}
-			qty := outcome.Quantity
+			qty := goods.quantity
 			if qty <= 0 {
 				qty = 1
 			}
-			listPaise := product.PricePaise*int64(qty) + outcome.BundledPaise
+			listPaise := product.PricePaise*int64(qty) + goods.bundledPaise
 			premium, _ := premiumOver(outcome.FinalPaise, listPaise)
 			action := Action(outcome.Action)
 			if action == "" {
@@ -706,6 +748,19 @@ func (s *Service) ContinueWithProgress(parent context.Context, request string, p
 	return s.resultFrom(sessionID, lastResult, lastOutput)
 }
 
+// settledGoods is the basket a settled outcome is allowed to describe: whatever
+// the shop actually quoted on this pass. The goods, the count and the attached
+// amount are all out of the negotiating agent's output schema, so an outcome
+// carrying them got them from a function node that read them off the offer. The
+// run's own record still wins, and the outcome is only the fallback for a caller
+// that never began a run.
+func (s *Service) settledGoods(sessionID string, outcome Outcome) pricedGoods {
+	if priced := s.pricedFor(sessionID); priced.productID != "" {
+		return priced
+	}
+	return pricedGoods{productID: outcome.ProductID, quantity: outcome.Quantity, bundledPaise: outcome.BundledPaise}
+}
+
 // resultFrom turns what the graph finished holding into a result. A settled
 // outcome is used as is; a quote that nothing settled becomes the person's call
 // rather than a lost run.
@@ -714,9 +769,10 @@ func (s *Service) resultFrom(sessionID string, lastResult *Result, lastOutput an
 		return normalized(*lastResult), nil
 	}
 	if outcome, ok := lastOutput.(Outcome); ok {
+		goods := s.settledGoods(sessionID, outcome)
 		return normalized(Result{
-			Action: Action(outcome.Action), ProductID: outcome.ProductID,
-			ProductName: outcome.ProductName, Quantity: outcome.Quantity,
+			Action: Action(outcome.Action), ProductID: goods.productID,
+			ProductName: outcome.ProductName, Quantity: goods.quantity,
 			FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
 			Steps: outcome.Steps, SessionID: outcome.SessionID,
 			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
