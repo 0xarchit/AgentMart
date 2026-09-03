@@ -1,4 +1,5 @@
 // Creates authenticated Razorpay Checkout orders for wallet top-ups.
+import { money } from "@/lib/money";
 import { createRazorpayOrder } from "@/lib/razorpay";
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
   if (!Number.isInteger(amountPaise) || amountPaise < MIN_TOPUP_PAISE || amountPaise > MAX_TOPUP_PAISE) {
-    return NextResponse.json({ error: "top-up amount must be between ₹100 and ₹100,000" }, { status: 400 });
+    return NextResponse.json({ error: `top-up amount must be between ${money(MIN_TOPUP_PAISE)} and ${money(MAX_TOPUP_PAISE)}` }, { status: 400 });
   }
   const receipt = `topup_${user.id.replaceAll("-", "").slice(0, 12)}_${Date.now().toString(36)}`;
   try {

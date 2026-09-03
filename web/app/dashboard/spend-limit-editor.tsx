@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { money } from "@/lib/money";
 
 export function SpendLimitEditor({ currentPaise }: { currentPaise: number }) {
   const [rupees, setRupees] = useState(String(Math.round(currentPaise / 100)));
@@ -57,7 +58,7 @@ export function SpendLimitEditor({ currentPaise }: { currentPaise: number }) {
       </div>
       {saved !== null ? (
         <p className="mt-3 text-sm text-moss">
-          Active limit: ₹{(saved / 100).toLocaleString("en-IN")}
+          Active limit: {money(saved)}
         </p>
       ) : null}
       {message ? <p className="mt-3 text-sm text-coral">{message}</p> : null}

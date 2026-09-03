@@ -4,7 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { currentIdentity } from "@/lib/roles";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Bars, Card, Empty, Rows, Stat, TopNav, money } from "../ui";
+import { money } from "@/lib/money";
+import { Bars, Card, Empty, Rows, Stat, TopNav } from "../ui";
 import {
   summarize,
   type LedgerRow,

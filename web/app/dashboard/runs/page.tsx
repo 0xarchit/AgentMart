@@ -1,5 +1,6 @@
 // The deal room: one shopping run read back as the conversation that set the
 // price next to the money that moved because of it.
+import { money } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -34,10 +35,6 @@ type TimelineRow = {
   gateway_order_id: string | null;
   payload: { run?: { transcript?: Turn[] } } | null;
 };
-
-function formatRupees(paise: number): string {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("en-IN", {
@@ -134,7 +131,7 @@ export default async function RunsPage({
                     {run.final_amount_paise !== null && (
                       <span className="mt-1 block text-xs text-ink/70">
                         {run.product_name} at{" "}
-                        {formatRupees(run.final_amount_paise)}
+                        {money(run.final_amount_paise)}
                       </span>
                     )}
                   </Link>
@@ -170,7 +167,7 @@ export default async function RunsPage({
                   </dt>
                   <dd className="mt-1">
                     {current?.final_amount_paise != null
-                      ? formatRupees(current.final_amount_paise)
+                      ? money(current.final_amount_paise)
                       : "Nothing spent"}
                   </dd>
                 </div>
@@ -245,7 +242,7 @@ export default async function RunsPage({
                         <p className="mt-1 text-xs text-ink/70">
                           by {row.actor}
                           {row.amount_paise != null &&
-                            ` at ${formatRupees(row.amount_paise)}`}
+                            ` at ${money(row.amount_paise)}`}
                         </p>
                         {row.reason && (
                           <p className="mt-1 text-ink/70">{row.reason}</p>

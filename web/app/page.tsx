@@ -1,9 +1,10 @@
 // Read-only storefront backed by the seeded catalog. Everything shown here is a
 // product row, including what each item pairs with and on what terms.
 import { loadPublicProducts } from "@/lib/catalog";
+import { money } from "@/lib/money";
 import { productArt } from "@/lib/product-art";
 import { createClient } from "@/lib/supabase/server";
-import { TopNav, money } from "./ui";
+import { TopNav } from "./ui";
 
 export default async function HomePage() {
   const [products, supabase] = [

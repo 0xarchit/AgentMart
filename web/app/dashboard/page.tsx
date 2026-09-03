@@ -7,7 +7,8 @@ import { TopUpButton } from "@/app/dashboard/topup-button";
 import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
-import { Card, Rows, Stat, TopNav, money } from "@/app/ui";
+import { Card, Rows, Stat, TopNav } from "@/app/ui";
+import { money } from "@/lib/money";
 import { plainWords } from "@/lib/words";
 
 type Account = {

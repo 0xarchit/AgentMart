@@ -3,11 +3,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-/** money renders paise as rupees, the only currency this project handles. */
-export function money(paise: number): string {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
-
 /** Card is a titled panel. The source line names the rows a figure came from. */
 export function Card({
   title,
