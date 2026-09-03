@@ -904,6 +904,16 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		}
 		return "Telegram is now linked to your AgentMart wallet.", nil
 	case "/buy":
+		// No open decision check here, deliberately, and the same for /accept. Free
+		// text is blocked while a question is standing because starting a fresh run
+		// would abandon that question and quote something else, and because words
+		// must never be read as consent. Neither applies to a command that names its
+		// own product and quantity: it is an unambiguous instruction, not something
+		// to interpret, and it abandons nothing. Each escalation carries its own
+		// token and its own buttons, so a second one does not hide the first, and a
+		// resumed approval goes back through the gate, where the balance is checked
+		// after the human step and before anything is spent. Asking for two things
+		// at once cannot overspend the wallet.
 		if len(command) != 3 {
 			return "Use /buy PRODUCT_ID QUANTITY.", nil
 		}
