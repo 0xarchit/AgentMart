@@ -54,6 +54,11 @@ type Session struct {
 	// identifies itself, so later rounds can personalise campaign offers
 	// without the buyer resending identity on every message.
 	BuyerAccountID string `json:"buyer_account_id,omitempty"`
+	// FloorPaise is the lowest total this session may record, which is the cost
+	// floor raised to the list total less whatever discount this buyer is funded
+	// for. It is written by the caller that computed it, because the floor needs
+	// the product's cost and the buyer's campaign and the session knows neither.
+	FloorPaise int64 `json:"floor_amount_paise,omitempty"`
 }
 
 // New creates a proposed negotiation session.
@@ -64,7 +69,7 @@ func New(proposal Proposal) (Session, error) {
 	return Session{Proposal: proposal, Status: StatusProposed}, nil
 }
 
-// CounterOffer records a merchant counter amount that is not below the proposal.
+// CounterOffer records a merchant counter amount that is not below the floor.
 func (s *Session) CounterOffer(counter Counter) error {
 	if s.Status != StatusProposed {
 		return fmt.Errorf("counter offer requires proposed state")
@@ -98,8 +103,15 @@ func (s *Session) Renegotiate(counter Counter) error {
 }
 
 func validateCounter(s *Session, counter Counter) error {
-	if counter.FinalAmountPaise < s.Proposal.BaseAmountPaise {
-		return fmt.Errorf("counter amount cannot be below proposal")
+	// The merchant's floor is what a recorded amount may not cross. With no floor
+	// written the list total stands in, which is what a caller without a funded
+	// entitlement gets and what this check enforced for everyone before.
+	floor := s.FloorPaise
+	if floor <= 0 {
+		floor = s.Proposal.BaseAmountPaise
+	}
+	if counter.FinalAmountPaise < floor {
+		return fmt.Errorf("counter amount cannot be below the merchant floor")
 	}
 	if strings.TrimSpace(counter.Reason) == "" {
 		return fmt.Errorf("counter reason is required")

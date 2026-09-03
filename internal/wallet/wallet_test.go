@@ -12,10 +12,23 @@ import (
 	"agentmart/internal/supabase"
 )
 
-func TestFulfillRejectsDiscountBelowProposal(t *testing.T) {
-	err := (FulfillRequest{AccountID: "a", ProductID: "p", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 99, RazorpayOrderID: "r", IdempotencyKey: "k", RefundWindowMinutes: 60}).validate()
-	if err == nil {
-		t.Fatal("expected final amount validation error")
+// A funded loyalty discount is exactly a final amount below the list total, so
+// this layer must let one through. How far below list is allowed needs the buyer's
+// campaign and the product's cost, and fulfill_wallet_order is the only place that
+// holds both.
+func TestFulfillAcceptsAFundedDiscountBelowTheListTotal(t *testing.T) {
+	request := settlement()
+	request.FinalAmountPaise = request.BaseAmountPaise - 5000
+	if err := request.validate(); err != nil {
+		t.Fatalf("validate() = %v, want a discount below list to reach the bound in the database", err)
+	}
+}
+
+func TestFulfillRejectsAnAmountThatIsNotReal(t *testing.T) {
+	request := settlement()
+	request.FinalAmountPaise = 0
+	if err := request.validate(); err == nil {
+		t.Fatal("expected a zero final amount to be rejected")
 	}
 }
 
