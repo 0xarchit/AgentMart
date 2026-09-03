@@ -43,6 +43,13 @@ const (
 	catalogToolTimeout  = 45 * time.Second
 	conversationTimeout = 300 * time.Second
 	paymentTimeout      = 30 * time.Second
+	// pollBackoff is how long a failed long poll waits before asking again. A bare
+	// continue span the loop at full speed, so a bad token or a network outage
+	// hammered the API and filled the log as fast as it could. Fixed rather than
+	// exponential on purpose: the ceiling here is twelve failed requests a minute,
+	// which is quiet enough, and a backoff that grows needs state and a reset rule
+	// to go with it.
+	pollBackoff = 5 * time.Second
 )
 
 type linkRedeemer interface {
@@ -320,13 +327,28 @@ func main() {
 				return
 			}
 			logger.Error("telegram polling failed", "error", err)
+			select {
+			case <-pollContext.Done():
+				return
+			case <-time.After(pollBackoff):
+			}
 			continue
 		}
 		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
 			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
 			if err != nil {
-				_ = client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+"\nRecorded for review.")
-				_ = store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err)
+				// The row is written before the person is told it exists. Telling them
+				// a failure was recorded and then discarding the write is the one
+				// thing this trail is not allowed to do: it claims evidence that is
+				// not there.
+				note := "\nRecorded for review."
+				if recordErr := store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err); recordErr != nil {
+					logger.Error("dead letter write failed", "error", recordErr, "cause", err)
+					note = "\nThis could not be recorded, so please mention it if it happens again."
+				}
+				if sendErr := client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+note); sendErr != nil {
+					logger.Error("failure reply failed", "error", sendErr, "cause", err)
+				}
 			}
 			return nil
 		})
