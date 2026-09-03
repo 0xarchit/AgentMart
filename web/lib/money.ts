@@ -13,3 +13,13 @@ export function money(paise: number): string {
     maximumFractionDigits: 2,
   })}`;
 }
+
+/**
+ * ledgerMoney renders one wallet movement with the direction it went. Every
+ * wallet_ledger row is stored positive, the column carries a `> 0` constraint,
+ * so the sign has to come from the kind of entry rather than from the number.
+ * Reading the number alone printed a purchase as money arriving.
+ */
+export function ledgerMoney(entryType: string, paise: number): string {
+  return `${entryType === "purchase_debit" ? "-" : "+"}${money(paise)}`;
+}

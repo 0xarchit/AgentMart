@@ -8,7 +8,7 @@ import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
 import { Card, Rows, Stat, TopNav } from "@/app/ui";
-import { money } from "@/lib/money";
+import { ledgerMoney, money } from "@/lib/money";
 import { plainWords } from "@/lib/words";
 
 type Account = {
@@ -114,6 +114,10 @@ export default async function DashboardPage() {
       .limit(5),
   ]);
   const account = accountResult.data as Account | null;
+  // A refused or broken read is not an empty wallet. Rendering it as one told the
+  // person their money was gone, and prefilled the limit editor with zero, which
+  // a single tap would then have made true.
+  const accountUnreadable = accountResult.error !== null;
   const orders = (ordersResult.data ?? []) as Order[];
   const orderCount = orderCountResult.count ?? orders.length;
   const ledger = (ledgerResult.data ?? []) as LedgerEntry[];
@@ -153,8 +157,17 @@ export default async function DashboardPage() {
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           <Stat
             label="Wallet balance"
-            value={money(account?.wallet_balance_paise ?? 0)}
-            basis={`Spend limit ${money(account?.spend_limit_paise ?? 0)}`}
+            value={
+              accountUnreadable
+                ? "Unavailable"
+                : money(account?.wallet_balance_paise ?? 0)
+            }
+            basis={
+              accountUnreadable
+                ? "Your account could not be read just now, so this is not a balance. Reload before acting on this page."
+                : `Spend limit ${money(account?.spend_limit_paise ?? 0)}`
+            }
+            tone={accountUnreadable ? "coral" : undefined}
           />
           <Stat
             label="Orders placed"
@@ -184,7 +197,14 @@ export default async function DashboardPage() {
         </div>
         <div className="mt-4 space-y-4">
           <TopUpButton />
-          <SpendLimitEditor currentPaise={account?.spend_limit_paise ?? 0} />
+          {accountUnreadable ? (
+            <section className="border border-coral/40 bg-white p-5 text-sm text-ink/70">
+              The spending limit is hidden because your account could not be read.
+              Editing it from a guessed figure would set a limit you never chose.
+            </section>
+          ) : (
+            <SpendLimitEditor currentPaise={account?.spend_limit_paise ?? 0} />
+          )}
           <LinkTelegram />
         </div>
 
@@ -283,8 +303,7 @@ export default async function DashboardPage() {
                     </div>
                     <div className="text-right">
                       <p className="font-semibold">
-                        {entry.amount_paise >= 0 ? "+" : ""}
-                        {money(entry.amount_paise)}
+                        {ledgerMoney(entry.entry_type, entry.amount_paise)}
                       </p>
                       <p className="text-xs text-ink/70">
                         Balance {money(entry.balance_after_paise)}

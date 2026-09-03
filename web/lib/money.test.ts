@@ -1,6 +1,6 @@
 // Tests for the one rupee formatter every page reads its figures through.
 import { describe, expect, it } from "vitest";
-import { money } from "./money";
+import { ledgerMoney, money } from "./money";
 
 describe("money", () => {
   it("keeps the paise on a settled amount", () => {
@@ -24,5 +24,18 @@ describe("money", () => {
 
   it("rounds a half paise rather than truncating it", () => {
     expect(money(1)).toBe("₹0.01");
+  });
+});
+
+describe("ledgerMoney", () => {
+  it("shows a purchase as money leaving the wallet", () => {
+    // Every ledger row is stored positive, so reading the sign off the number
+    // printed a debit as a credit: the person saw their own spending as income.
+    expect(ledgerMoney("purchase_debit", 181_339)).toBe("-₹1,813.39");
+  });
+
+  it("shows a top up and a refund as money arriving", () => {
+    expect(ledgerMoney("topup", 500_000)).toBe("+₹5,000.00");
+    expect(ledgerMoney("purchase_refund", 181_339)).toBe("+₹1,813.39");
   });
 });
