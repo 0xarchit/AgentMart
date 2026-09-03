@@ -297,7 +297,7 @@ not a redesign.
 | no drawable mandate on this account | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object, and the route that would charge a mandate is withheld per account rather than by test mode |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
 | cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
-| the gateway sales view reads one page | `internal/razorpay/sales.go:57`, `count=100` with no paging | the refund rate and the average capture behind an opening quote are computed from the first hundred payments, refunds and settlements in the window rather than from all of them |
+| the gateway sales view reads one page | `internal/razorpay/sales.go:41`, `count=100` with no paging | the refund rate behind an opening quote is computed from the first hundred payments and refunds in the window rather than from all of them |
 
 Every row above was verified against the code, with a file and a line, rather
 than carried over from notes. The list is deliberately complete: a defect that is
