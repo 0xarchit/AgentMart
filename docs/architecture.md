@@ -234,16 +234,19 @@ creating tool is kept out of every toolset a reasoning layer can see, and that
 refusal is a test rather than a paragraph.
 
 What is built and not wired, stated separately because the distinction matters.
-`internal/razorpay/sales.go` is a read-only view of gateway sales, structurally
-read-only in that the file contains no write verb, and it has no caller outside
-its own tests. It was described as shipped in this document until it was pointed
-out that shipped has to mean a stranger can reach it. It is a package, not a
-feature, until something calls it. `verifyCheckoutSignature` in
-`web/lib/razorpay.ts` sat in this paragraph for the same reason and has since left
-it: the browser callback now posts to `web/app/api/topups/confirm/route.ts`, which
-verifies the signature and credits the wallet under the same idempotency key the
-webhook uses, so the two paths race harmlessly and a lost webhook no longer
-strands the money.
+The category is empty now, and the heading stays because both things that were in
+it left by being reached rather than by being reclassified.
+`internal/razorpay/sales.go`, a read-only view of gateway sales, structurally
+read-only in that the file contains no write verb, was described as shipped in
+this document until it was pointed out that shipped has to mean a stranger can
+reach it: it was a package, not a feature, until something called it.
+`cmd/market/main.go:68` now hands the gateway to the trading provider, which reads
+the view per five minute window at `trading/trading.go:112` and feeds its refund
+rate into the conditions the shop prices from. `verifyCheckoutSignature` in
+`web/lib/razorpay.ts` left for the same reason: the browser callback now posts to
+`web/app/api/topups/confirm/route.ts`, which verifies the signature and credits
+the wallet under the same idempotency key the webhook uses, so the two paths race
+harmlessly and a lost webhook no longer strands the money.
 
 What was rejected, and why it matters. A payment link the person pays was the
 obvious way to give the approval path a payment object, and it was turned down:
