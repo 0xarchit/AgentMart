@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/negotiation"
@@ -159,13 +160,30 @@ type recordingAuditor struct {
 	ids      []int64
 	requests []string
 	runs     []buyer.AgentRun
+	// delay makes this write take measurable time. It is the seam that lets a
+	// test tell the moment the shop quoted apart from the moment the purchase was
+	// assembled, because everything between the two is otherwise instant.
+	delay time.Duration
 }
 
 func (a *recordingAuditor) RecordAgentRun(_ context.Context, telegramID int64, request string, run buyer.AgentRun) error {
 	a.ids = append(a.ids, telegramID)
 	a.requests = append(a.requests, request)
 	a.runs = append(a.runs, run)
+	time.Sleep(a.delay)
 	return nil
+}
+
+// capturingPurchaser keeps the request the conversation assembled, so what the
+// gate is told can be compared with what the shop actually said.
+type capturingPurchaser struct {
+	fakePurchaser
+	seen []buyer.PurchaseRequest
+}
+
+func (c *capturingPurchaser) Purchase(_ context.Context, request buyer.PurchaseRequest) (buyer.PurchaseResult, error) {
+	c.seen = append(c.seen, request)
+	return c.result, c.err
 }
 
 // The store is wired, but nothing proved the request path used it. This drives a
@@ -340,5 +358,43 @@ func TestAnAgentRunIsRecordedBeforeTheMoneyMoves(t *testing.T) {
 	}
 	if run.Rationale == "" {
 		t.Fatalf("the trail does not say why: %+v", run)
+	}
+}
+
+// TestTheGateIsToldWhenTheShopQuoted pins the one wire that gives the gate's
+// stale price rail something to measure. The rail itself is covered, and it
+// refuses a zero observation time, so deleting the plumbing would be loud.
+// Handing the gate the clock instead would be silent: every purchase would look
+// freshly quoted forever and every other test would still pass, because they all
+// build the gate request themselves. This one drives the real graph and reads
+// what the conversation actually sent.
+func TestTheGateIsToldWhenTheShopQuoted(t *testing.T) {
+	buyerService, _ := shoppingSystem(t)
+	client, _ := recordingBot(t)
+	purchases := &capturingPurchaser{fakePurchaser: fakePurchaser{
+		result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 388013, OrderID: "order-1"},
+	}}
+	// Long enough to separate the two moments well past any clock granularity,
+	// short enough that the suite does not notice.
+	const held = 60 * time.Millisecond
+
+	err := conversationalBuy(t.Context(), client, purchases,
+		commandServices{
+			loop: buyerService, accounts: fundedAccounts{}, catalog: stockCatalog{},
+			negotiations: fakeNegotiator{}, audit: &recordingAuditor{delay: held},
+		},
+		&telegram.Message{MessageID: 9, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 77}, Text: "buy me a good trimmer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(purchases.seen) != 1 {
+		t.Fatalf("sent %d purchases, want exactly one", len(purchases.seen))
+	}
+	quoted := purchases.seen[0].PriceObservedAt
+	if quoted.IsZero() {
+		t.Fatal("the gate was told nothing about when the price was quoted, so every purchase is stale")
+	}
+	if age := time.Since(quoted); age < held {
+		t.Fatalf("the observed price is %s old, want at least %s. The gate is being handed the clock at purchase time rather than when the shop quoted, which makes a stale price impossible to detect.", age, held)
 	}
 }
