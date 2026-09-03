@@ -117,12 +117,23 @@ func (s *PurchaseService) UseFailureTrail(recorder purchaseFailureRecorder) {
 // this trail is not allowed to contain.
 func (s *PurchaseService) Purchase(ctx context.Context, request PurchaseRequest) (PurchaseResult, error) {
 	result, err := s.attempt(ctx, request)
-	if err != nil && s.failures != nil {
-		if recordErr := s.failures.RecordPurchaseFailure(ctx, request.TelegramID, request.ProductID, request.Quantity, err); recordErr != nil {
-			return PurchaseResult{}, fmt.Errorf("%w (recording it also failed: %v)", err, recordErr)
-		}
+	if err != nil {
+		return PurchaseResult{}, s.recordFailure(ctx, request.TelegramID, request.ProductID, request.Quantity, err)
 	}
-	return result, err
+	return result, nil
+}
+
+// recordFailure writes one refusal to the trail and returns the refusal to be
+// returned to the caller. A trail write that itself fails is folded into that
+// error rather than dropped, because a silent trail is worse than a noisy one.
+func (s *PurchaseService) recordFailure(ctx context.Context, telegramID int64, productID string, quantity int, cause error) error {
+	if cause == nil || s.failures == nil {
+		return cause
+	}
+	if recordErr := s.failures.RecordPurchaseFailure(ctx, telegramID, productID, quantity, cause); recordErr != nil {
+		return fmt.Errorf("%w (recording it also failed: %v)", cause, recordErr)
+	}
+	return cause
 }
 
 // attempt is the sequence itself. It returns errors freely; Purchase records them.
@@ -192,8 +203,17 @@ func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) 
 // RequestApproval records a pending approval without evaluating the Gate for an
 // auto-buy. It exists for the case where the buyer agent itself decided the
 // human should own this call: the person then resolves it with /approve or
-// /reject, and the resumed purchase goes through the Gate as usual.
+// /reject, and the resumed purchase goes through the Gate as usual. Like a
+// purchase, every refusal on the way leaves a row.
 func (s *PurchaseService) RequestApproval(ctx context.Context, request PurchaseRequest, reason string) (PurchaseResult, error) {
+	result, err := s.requestApproval(ctx, request, reason)
+	if err != nil {
+		return PurchaseResult{}, s.recordFailure(ctx, request.TelegramID, request.ProductID, request.Quantity, err)
+	}
+	return result, nil
+}
+
+func (s *PurchaseService) requestApproval(ctx context.Context, request PurchaseRequest, reason string) (PurchaseResult, error) {
 	if s.approvals == nil {
 		return PurchaseResult{}, fmt.Errorf("human approval store is unavailable")
 	}
@@ -240,13 +260,16 @@ func (s *PurchaseService) RequestApproval(ctx context.Context, request PurchaseR
 }
 
 // ResolveApproval applies a Telegram decision and resumes the original purchase.
+// The decision itself is recorded by resolve_human_approval, including an expiry
+// and a rejection; what is recorded here is the case where the decision could not
+// be applied at all. The resumed purchase records its own refusals.
 func (s *PurchaseService) ResolveApproval(ctx context.Context, telegramID int64, token string, decision string) (PurchaseResult, error) {
 	if s.resolver == nil {
-		return PurchaseResult{}, fmt.Errorf("human approval resolver is unavailable")
+		return PurchaseResult{}, s.recordFailure(ctx, telegramID, "", 0, fmt.Errorf("human approval resolver is unavailable"))
 	}
 	resolution, err := s.resolver.Resolve(ctx, telegramID, token, decision)
 	if err != nil {
-		return PurchaseResult{}, err
+		return PurchaseResult{}, s.recordFailure(ctx, telegramID, "", 0, err)
 	}
 	if !resolution.Resolved {
 		return PurchaseResult{Reason: resolution.Reason}, nil
