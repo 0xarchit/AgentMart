@@ -116,11 +116,12 @@ func (r FulfillRequest) validate() error {
 	if strings.TrimSpace(r.AccountID) == "" || strings.TrimSpace(r.ProductID) == "" {
 		return fmt.Errorf("account id and product id are required")
 	}
+	// Both amounts have to be real. The ordering between them is deliberately not
+	// checked: a final below base is a funded loyalty discount, and the bound on
+	// how far below is applied inside fulfill_wallet_order, which is the only
+	// place that knows both the buyer's entitlement and the product's cost.
 	if r.Quantity <= 0 || r.BaseAmountPaise <= 0 || r.FinalAmountPaise <= 0 {
 		return fmt.Errorf("quantity and amounts must be positive")
-	}
-	if r.FinalAmountPaise < r.BaseAmountPaise {
-		return fmt.Errorf("final amount cannot be below base amount")
 	}
 	if strings.TrimSpace(r.RazorpayOrderID) == "" || strings.TrimSpace(r.IdempotencyKey) == "" || r.RefundWindowMinutes <= 0 {
 		return fmt.Errorf("razorpay order, idempotency key, and refund window are required")

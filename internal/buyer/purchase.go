@@ -150,7 +150,11 @@ func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) 
 	if finalAmount == 0 {
 		finalAmount = amount
 	}
-	if baseAmount != amount || finalAmount < baseAmount {
+	// Base has to be the list total the catalog just quoted. A final below it is a
+	// funded loyalty discount rather than an error: how far below is bounded by the
+	// merchant when it prices and by the fulfillment function when it settles,
+	// since only those two know the buyer's entitlement and the product's cost.
+	if baseAmount != amount || finalAmount <= 0 {
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	now := s.now()
@@ -220,8 +224,8 @@ func (s *PurchaseService) RequestApproval(ctx context.Context, request PurchaseR
 		finalAmount = amount
 	}
 	// Same amount integrity rules as a purchase: the approval locks exactly what
-	// the human is being asked to authorise.
-	if baseAmount != amount || finalAmount < baseAmount {
+	// the human is being asked to authorise, a funded discount included.
+	if baseAmount != amount || finalAmount <= 0 {
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.IdempotencyKey, reason)

@@ -99,6 +99,26 @@ func TestPurchaseFulfillsAcceptedNegotiatedAmount(t *testing.T) {
 	}
 }
 
+// The mirror of the uplift case above. A funded loyalty discount settles below the
+// list total, and both amounts have to reach the settlement intact: base is what
+// the catalog quoted, final is what the buyer pays, and the gap between them is
+// the discount the merchant agreed to fund.
+func TestPurchaseFulfillsAFundedDiscountBelowListPrice(t *testing.T) {
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService)
+	result, err := service.Purchase(t.Context(), PurchaseRequest{TelegramID: 1, ProductID: "product", Quantity: 1, BaseAmountPaise: 100, FinalAmountPaise: 85, IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Fulfilled || result.AmountPaise != 85 || artifacts.amountPaise != 85 {
+		t.Fatalf("result = %+v, artifact amount = %d", result, artifacts.amountPaise)
+	}
+	if walletService.request.BaseAmountPaise != 100 || walletService.request.FinalAmountPaise != 85 {
+		t.Fatalf("fulfillment = %+v, want the list total and the discounted total both preserved", walletService.request)
+	}
+}
+
 func TestPurchaseStopsAfterGateRejection(t *testing.T) {
 	artifacts := &fakeArtifacts{}
 	walletService := &fakeWallet{}
