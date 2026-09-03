@@ -50,10 +50,9 @@ func TestLiveSalesFactsExcludeUnpaidArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("captured %d worth %d paise, ignored %d, refunded %d worth %d, settled %d, average %d, refund rate %d%%",
+	t.Logf("captured %d worth %d paise, ignored %d, refunded %d worth %d, average %d, refund rate %d%%",
 		facts.CapturedCount, facts.CapturedPaise, facts.IgnoredCount,
-		facts.RefundedCount, facts.RefundedPaise, facts.SettledPaise,
-		facts.AverageCapture, facts.RefundRatePct)
+		facts.RefundedCount, facts.RefundedPaise, facts.AverageCapture, facts.RefundRatePct)
 
 	if facts.CapturedPaise < 0 || facts.RefundedPaise < 0 {
 		t.Fatalf("facts = %+v", facts)

@@ -16,12 +16,10 @@ import (
 // SalesFacts is what the gateway confirms, as opposed to what our own database
 // believes. Amounts are paise.
 type SalesFacts struct {
-	Since          time.Time
 	CapturedCount  int
 	CapturedPaise  int64
 	RefundedCount  int
 	RefundedPaise  int64
-	SettledPaise   int64
 	IgnoredCount   int
 	RefundRatePct  int
 	AverageCapture int64
@@ -39,21 +37,15 @@ type gatewayRefund struct {
 	Status string `json:"status"`
 }
 
-type gatewaySettlement struct {
-	ID     string `json:"id"`
-	Amount int64  `json:"amount"`
-	Status string `json:"status"`
-}
-
 // listLimit is the page size the gateway accepts for these collections.
 const listLimit = 100
 
-// SalesFacts reads captured payments, processed refunds and processed
-// settlements since a point in time. A payment that was created but never paid
-// is counted as ignored rather than as revenue, so unpaid probe artifacts fall
-// out on their state and no identifier is ever named.
+// SalesFacts reads captured payments and processed refunds since a point in
+// time. A payment that was created but never paid is counted as ignored rather
+// than as revenue, so unpaid probe artifacts fall out on their state and no
+// identifier is ever named.
 func (c *Client) SalesFacts(ctx context.Context, since time.Time) (SalesFacts, error) {
-	facts := SalesFacts{Since: since}
+	var facts SalesFacts
 	query := url.Values{"count": {strconv.Itoa(listLimit)}}
 	if !since.IsZero() {
 		query.Set("from", strconv.FormatInt(since.Unix(), 10))
@@ -86,19 +78,6 @@ func (c *Client) SalesFacts(ctx context.Context, since time.Time) (SalesFacts, e
 		}
 		facts.RefundedCount++
 		facts.RefundedPaise += refund.Amount
-	}
-
-	var settlements struct {
-		Items []gatewaySettlement `json:"items"`
-	}
-	if err := c.list(ctx, "/settlements", query, &settlements); err != nil {
-		return SalesFacts{}, err
-	}
-	for _, settlement := range settlements.Items {
-		if settlement.Status != "processed" {
-			continue
-		}
-		facts.SettledPaise += settlement.Amount
 	}
 
 	if facts.CapturedCount > 0 {

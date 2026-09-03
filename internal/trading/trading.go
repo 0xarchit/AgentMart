@@ -72,7 +72,7 @@ func (p *Provider) Conditions(ctx context.Context, productID string) (negotiatio
 		return negotiation.TradingConditions{}, fmt.Errorf("trading conditions need a product")
 	}
 
-	conditions := negotiation.TradingConditions{Since: time.Now().UTC().Add(-salesWindow)}
+	var conditions negotiation.TradingConditions
 
 	var rows []tradingRow
 	query := url.Values{
@@ -92,7 +92,6 @@ func (p *Provider) Conditions(ctx context.Context, productID string) (negotiatio
 	facts, err := p.salesFacts(ctx)
 	if err == nil {
 		conditions.RefundRatePct = facts.RefundRatePct
-		conditions.AverageCapturePaise = facts.AverageCapture
 		conditions.RefundRateKnown = true
 	}
 	return conditions, nil

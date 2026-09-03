@@ -25,10 +25,6 @@ func salesServer(t *testing.T, seen *[]string) *httptest.Server {
 			_, _ = w.Write([]byte(`{"items":[
 				{"id":"five","amount":45000,"status":"processed"},
 				{"id":"six","amount":99000,"status":"pending"}]}`))
-		case "/settlements":
-			_, _ = w.Write([]byte(`{"items":[
-				{"id":"seven","amount":800000,"status":"processed"},
-				{"id":"eight","amount":700000,"status":"created"}]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -58,9 +54,6 @@ func TestSalesFactsCountOnlyWhatTheGatewayConfirms(t *testing.T) {
 	if facts.RefundedCount != 1 || facts.RefundedPaise != 45_000 {
 		t.Fatalf("refunded %d worth %d", facts.RefundedCount, facts.RefundedPaise)
 	}
-	if facts.SettledPaise != 800_000 {
-		t.Fatalf("settled = %d, only a processed settlement has paid out", facts.SettledPaise)
-	}
 	// Three percent, not fifty. One refund against two captured payments is not a
 	// shop where half of everything comes back: 45,000 paise went back out of
 	// 1,200,000 taken.
@@ -82,7 +75,7 @@ func TestTheSalesReadOnlyEverIssuesReads(t *testing.T) {
 	if _, err := client.SalesFacts(t.Context(), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if len(seen) != 3 {
+	if len(seen) != 2 {
 		t.Fatalf("requests = %v", seen)
 	}
 	for _, request := range seen {

@@ -4,10 +4,7 @@
 // something that happened rather than by a constant someone typed.
 package negotiation
 
-import (
-	"strings"
-	"time"
-)
+import "strings"
 
 // Uplift bounds, in basis points of the list total. These are the only fixed
 // numbers in the opening quote: every amount inside them is argued from an
@@ -39,7 +36,6 @@ const (
 // observations are stated rather than guessed: Observed false means the velocity
 // terms are unavailable, not that they are zero.
 type TradingConditions struct {
-	Since time.Time
 	// RefundRatePct is how much of what the shop sells comes back. It is a
 	// confidence signal: a shop paying out refunds cannot charge as much for
 	// standing behind its goods.
@@ -48,8 +44,6 @@ type TradingConditions struct {
 	// fact never justifies charging more, so cover is not billed for at all when
 	// the shop cannot see what it pays out.
 	RefundRateKnown bool
-	// AverageCapturePaise is what buyers here actually pay, gateway confirmed.
-	AverageCapturePaise int64
 	// UnitsSold is how many of this product moved inside the window.
 	UnitsSold int
 	// StockCoverDays is how long current stock lasts at the observed rate.
