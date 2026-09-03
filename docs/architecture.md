@@ -401,6 +401,15 @@ with a reason, alternates the two shops per scenario so neither meets a differen
 provider, and splits revenue into settled and pending a person's approval so a
 gate that did its job is not scored as a lost sale.
 
+What it still cannot do is put a reliable number on the difference. Six scenarios
+pair down to five as soon as the provider drops one, and two runs against nearly
+the same tree disagreed by twenty two points on settled revenue purely because
+they dropped different scenarios: one lost a sale, the other lost a decline. Both
+runs agree on the shape, which is that the negotiating shop asks for more and the
+extra ask crosses the buyer's rails often enough to turn a sale into an approval
+request. The shape is what the comparison is published for. The percentage is not
+a measurement, and the numbers page says so above its own table.
+
 The remaining sequence, in order: move policy out of code into account rows, then
 learn from outcomes. Conversation state was the first item on it and is the last
 closed row in section 6.
