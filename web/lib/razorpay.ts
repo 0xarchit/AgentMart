@@ -45,6 +45,44 @@ export function verifyCheckoutSignature(orderID: string, paymentID: string, sign
   return expectedBytes.length === signatureBytes.length && crypto.timingSafeEqual(expectedBytes, signatureBytes);
 }
 
+export type RazorpayPayment = {
+  id: string;
+  order_id: string;
+  amount: number;
+  status: string;
+  notes?: { account_id?: string };
+};
+
+// Reads one payment back from the gateway. A browser can hand over an order id, a
+// payment id and a valid signature for all three, but only the gateway can say what
+// was actually captured and which account the top-up was opened for.
+export async function fetchRazorpayPayment(paymentID: string): Promise<RazorpayPayment> {
+  const { keyID, keySecret } = credentials();
+  const response = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentID)}`, {
+    headers: { Authorization: `Basic ${Buffer.from(`${keyID}:${keySecret}`).toString("base64")}` },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Razorpay payment lookup failed with status ${response.status}`);
+  return response.json();
+}
+
+export type TopUpRefusal = { status: number; error: string };
+
+// Decides whether a verified Checkout callback may credit a wallet, returning the
+// refusal or null to proceed. A valid signature proves the gateway issued that
+// order and payment pair. It carries none of the facts below, and every one of them
+// decides money.
+export function refuseTopUp(payment: RazorpayPayment, orderID: string, accountID: string): TopUpRefusal | null {
+  if (payment.order_id !== orderID) return { status: 409, error: "payment does not belong to that order" };
+  if (payment.status !== "captured") return { status: 409, error: "payment is not captured" };
+  if (!Number.isInteger(payment.amount) || payment.amount <= 0) return { status: 409, error: "payment amount is not a positive whole number of paise" };
+  // The signed values are visible in the browser that paid them, so crediting
+  // whoever presents them rather than whoever the order was opened for would let a
+  // single payment fund two different wallets.
+  if (!payment.notes?.account_id || payment.notes.account_id !== accountID) return { status: 403, error: "payment belongs to another account" };
+  return null;
+}
+
 export function verifyWebhookSignature(body: string, signature: string): boolean {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) throw new Error("Razorpay webhook secret is not configured");
