@@ -811,11 +811,11 @@ func (s *Service) negotiationTools() []tool.Tool {
 			}
 			return counterResult{Status: resolution.Status, FinalAmountPaise: resolution.FinalAmountPaise}, nil
 		})
-	getTerms := mustTool("get_current_terms", "Read the latest terms of an open negotiation session.",
-		func(ctx agent.Context, in sessionInput) (map[string]any, error) {
-			return map[string]any{"session_id": in.SessionID}, nil
-		})
-	negotiationTools := []tool.Tool{counter, accept, decline, getTerms}
+	// The negotiate agent already carries the standing terms in the transcript that
+	// counter_offer, accept_offer and decline_offer return, so it has nothing left to
+	// read them with. A tool that echoed its own session id back was worse than
+	// nothing: it invited the agent to believe it had checked.
+	negotiationTools := []tool.Tool{counter, accept, decline}
 	// Agent-to-agent delegation: when the merchant's own agent is reachable over
 	// as a remote agent, expose it as a tool so the buyer can ask it to justify terms, pitch
 	// bundles, or respond to a counter in its own words.
