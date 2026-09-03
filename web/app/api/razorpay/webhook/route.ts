@@ -1,5 +1,5 @@
 // Verifies Razorpay webhooks before crediting the internal wallet.
-import { verifyWebhookSignature } from "@/lib/razorpay";
+import { refuseWalletCredit, verifyWebhookSignature } from "@/lib/razorpay";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 
@@ -8,7 +8,12 @@ type CapturedPayment = {
   order_id: string;
   amount: number;
   status: string;
-  notes?: { account_id?: string; run_id?: string; order_id?: string };
+  notes?: {
+    account_id?: string;
+    purpose?: string;
+    run_id?: string;
+    order_id?: string;
+  };
   error_description?: string;
   error_reason?: string;
 };
@@ -73,14 +78,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true, ignored: true });
   const payment = event.payload?.payment?.entity;
   const accountID = payment?.notes?.account_id;
-  if (
-    !payment ||
-    payment.status !== "captured" ||
-    !accountID ||
-    !payment.order_id ||
-    !Number.isInteger(payment.amount) ||
-    payment.amount <= 0
-  ) {
+  // The same decision the browser callback makes, so a payment either funds a
+  // wallet on both paths or on neither. The account id is checked again here only
+  // to narrow it for the call below.
+  if (!payment || !accountID || refuseWalletCredit(payment)) {
     return NextResponse.json(
       { error: "incomplete captured payment" },
       { status: 400 },

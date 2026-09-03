@@ -50,7 +50,7 @@ export type RazorpayPayment = {
   order_id: string;
   amount: number;
   status: string;
-  notes?: { account_id?: string };
+  notes?: { account_id?: string; purpose?: string };
 };
 
 // Reads one payment back from the gateway. A browser can hand over an order id, a
@@ -68,18 +68,35 @@ export async function fetchRazorpayPayment(paymentID: string): Promise<RazorpayP
 
 export type TopUpRefusal = { status: number; error: string };
 
+// Decides whether a captured payment may credit a wallet at all, for both paths
+// that can credit one: this callback and the gateway webhook. Every fact here is
+// read off the payment the gateway returned rather than off the request.
+//
+// `purpose` is the one that separates funding from spending. A purchase the buyer
+// agent settles opens its own gateway order carrying the same `account_id`, so
+// without this a captured purchase would credit the wallet it was meant to spend
+// from, and the money would come back doubled.
+export function refuseWalletCredit(payment: RazorpayPayment): TopUpRefusal | null {
+  if (payment.status !== "captured") return { status: 409, error: "payment is not captured" };
+  if (!Number.isInteger(payment.amount) || payment.amount <= 0) return { status: 409, error: "payment amount is not a positive whole number of paise" };
+  if (!payment.order_id) return { status: 409, error: "payment has no order" };
+  if (!payment.notes?.account_id) return { status: 403, error: "payment carries no account" };
+  if (payment.notes.purpose !== "wallet_topup") return { status: 409, error: "payment was not opened to fund a wallet" };
+  return null;
+}
+
 // Decides whether a verified Checkout callback may credit a wallet, returning the
 // refusal or null to proceed. A valid signature proves the gateway issued that
 // order and payment pair. It carries none of the facts below, and every one of them
 // decides money.
 export function refuseTopUp(payment: RazorpayPayment, orderID: string, accountID: string): TopUpRefusal | null {
   if (payment.order_id !== orderID) return { status: 409, error: "payment does not belong to that order" };
-  if (payment.status !== "captured") return { status: 409, error: "payment is not captured" };
-  if (!Number.isInteger(payment.amount) || payment.amount <= 0) return { status: 409, error: "payment amount is not a positive whole number of paise" };
+  const refusal = refuseWalletCredit(payment);
+  if (refusal) return refusal;
   // The signed values are visible in the browser that paid them, so crediting
   // whoever presents them rather than whoever the order was opened for would let a
   // single payment fund two different wallets.
-  if (!payment.notes?.account_id || payment.notes.account_id !== accountID) return { status: 403, error: "payment belongs to another account" };
+  if (payment.notes?.account_id !== accountID) return { status: 403, error: "payment belongs to another account" };
   return null;
 }
 

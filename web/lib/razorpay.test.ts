@@ -1,7 +1,7 @@
 // Signature verification tests for the Checkout boundary.
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { refuseTopUp, verifyCheckoutSignature, verifyWebhookSignature, type RazorpayPayment } from "./razorpay";
+import { refuseTopUp, refuseWalletCredit, verifyCheckoutSignature, verifyWebhookSignature, type RazorpayPayment } from "./razorpay";
 
 describe("verifyCheckoutSignature", () => {
   it("accepts a valid Checkout signature", () => {
@@ -24,15 +24,43 @@ describe("verifyWebhookSignature", () => {
   });
 });
 
-describe("refuseTopUp", () => {
-  const captured: RazorpayPayment = {
-    id: "pay_1",
-    order_id: "order_1",
-    amount: 100_000,
-    status: "captured",
-    notes: { account_id: "account-a" },
-  };
+// A payment as the gateway returns it for a funding order: the notes come from the
+// order, which is the only place either key is ever set.
+const captured: RazorpayPayment = {
+  id: "pay_1",
+  order_id: "order_1",
+  amount: 100_000,
+  status: "captured",
+  notes: { account_id: "account-a", purpose: "wallet_topup" },
+};
 
+describe("refuseWalletCredit", () => {
+  it("allows a captured funding payment", () => {
+    expect(refuseWalletCredit(captured)).toBeNull();
+  });
+
+  // The purchase the buyer agent settles carries the same account id, so the only
+  // thing standing between a captured purchase and a wallet credit is this.
+  it("refuses a captured payment that was not opened to fund a wallet", () => {
+    const purchase: RazorpayPayment = {
+      ...captured,
+      notes: { account_id: "account-a" },
+    };
+    expect(refuseWalletCredit(purchase)).toEqual({
+      status: 409,
+      error: "payment was not opened to fund a wallet",
+    });
+    expect(refuseWalletCredit({ ...captured, notes: { account_id: "account-a", purpose: "purchase" } })?.status).toBe(409);
+  });
+
+  it("refuses a payment with no account, no order, or nothing captured", () => {
+    expect(refuseWalletCredit({ ...captured, notes: { purpose: "wallet_topup" } })?.status).toBe(403);
+    expect(refuseWalletCredit({ ...captured, order_id: "" })?.status).toBe(409);
+    expect(refuseWalletCredit({ ...captured, status: "authorized" })?.status).toBe(409);
+  });
+});
+
+describe("refuseTopUp", () => {
   it("allows a captured payment for the account that opened the order", () => {
     expect(refuseTopUp(captured, "order_1", "account-a")).toBeNull();
   });
