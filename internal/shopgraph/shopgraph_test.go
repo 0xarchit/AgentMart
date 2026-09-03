@@ -446,6 +446,42 @@ func TestRefusingEverythingOnTheShelfIsAJudgementNotALostRun(t *testing.T) {
 	}
 }
 
+// TestAnActionNobodyDefinedGoesToThePersonNotToACharge closes the last gap on the
+// one node a model writes. The buyer binary sends a decline back as a message and
+// an ask to a person, and treats everything else as a purchase, so any word the
+// negotiating agent invented used to spend money it never asked to spend.
+func TestAnActionNobodyDefinedGoesToThePersonNotToACharge(t *testing.T) {
+	service := &Service{}
+	service.begin("run-1", Wallet{}, nil, Conversation{})
+	defer service.end("run-1")
+	service.recordPriced("run-1", pricedGoods{productID: "trim-9", quantity: 1})
+
+	for _, invented := range []string{"hold", "counter", "negotiate", "wait", "BUY"} {
+		result, err := service.resultFrom("run-1", nil,
+			Outcome{Action: invented, FinalPaise: 181339, SessionID: "session-1"})
+		if err != nil {
+			t.Fatalf("%q: %v", invented, err)
+		}
+		if result.Action != ActionAskHuman || !result.NeedsApproval {
+			t.Fatalf("%q became action %q needsApproval=%v, want the person asked", invented, result.Action, result.NeedsApproval)
+		}
+		if !strings.Contains(result.Rationale, invented) {
+			t.Fatalf("%q: the person is not told what the agent actually said: %q", invented, result.Rationale)
+		}
+	}
+	// The three words that are defined still mean what they say.
+	for _, defined := range []Action{ActionBuy, ActionAskHuman, ActionDecline} {
+		result, err := service.resultFrom("run-1", nil,
+			Outcome{Action: string(defined), FinalPaise: 181339, SessionID: "session-1"})
+		if err != nil {
+			t.Fatalf("%q: %v", defined, err)
+		}
+		if result.Action != defined {
+			t.Fatalf("action %q was rewritten to %q", defined, result.Action)
+		}
+	}
+}
+
 func TestAChoiceWithNoCountMeansOne(t *testing.T) {
 	service := &Service{}
 	shortlist := negotiationclient.Shortlist{

@@ -806,13 +806,24 @@ func (s *Service) escalate(offer Offer, why string) Result {
 	})
 }
 
-// normalized fills the defaults a caller can rely on.
+// normalized fills the defaults a caller can rely on, and closes the action set.
+// The negotiating agent writes the action itself, and the buyer binary treats
+// anything that is neither a decline nor an ask as a purchase, so an action nobody
+// defined used to spend money the agent never asked to spend. An unrecognised word
+// is now the person's call: an agent whose answer cannot be read is exactly when a
+// human should decide.
 func normalized(result Result) Result {
 	if result.Quantity <= 0 {
 		result.Quantity = 1
 	}
-	if result.Action == "" {
+	switch result.Action {
+	case ActionBuy, ActionAskHuman, ActionDecline:
+	case "":
 		result.Action = ActionBuy
+	default:
+		result.Rationale = joinReason(result.Rationale,
+			fmt.Sprintf("the agent answered with an action nobody defined (%q), so this is your call", result.Action))
+		result.Action = ActionAskHuman
 	}
 	if result.Action == ActionAskHuman {
 		result.NeedsApproval = true
