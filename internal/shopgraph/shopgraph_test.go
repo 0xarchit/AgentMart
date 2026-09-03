@@ -342,3 +342,92 @@ func TestWhatTheShopShowedOutlivesTheRun(t *testing.T) {
 		t.Fatalf("an unknown run reported %+v", got)
 	}
 }
+
+// The choice comes back from a model as a product id, and everything after this
+// point prices, judges and buys whatever id it named. This is what stands between
+// an invented id and a settled order.
+func TestAChoiceHasToBeSomethingTheShopShowed(t *testing.T) {
+	shortlist := negotiationclient.Shortlist{
+		Transcript: []negotiation.Turn{{Actor: "merchant", Message: "welcome in"}},
+		Options: []negotiationclient.ShortlistOption{
+			{ProductID: "trim-9", Name: "BladeMaster Pro", PricePaise: 349900},
+		},
+	}
+	// What an earlier pass of the same conversation put on screen. A follow up
+	// naming one of those is a real choice even though this pass did not show it.
+	prior := Conversation{
+		Brief:   "buy me a good trimmer",
+		Options: []PriorOption{{ProductID: "trim-3", Name: "BladeMaster Lite", PricePaise: 129900}},
+	}
+
+	cases := []struct {
+		name      string
+		selection Selection
+		wantNote  string
+		wantErr   string
+	}{
+		{"shown this pass", Selection{ProductID: "trim-9", Quantity: 1, Rationale: "best warranty"},
+			"Chose BladeMaster Pro: best warranty", ""},
+		{"shown an earlier pass", Selection{ProductID: "trim-3", Quantity: 1, Rationale: "the cheaper one"},
+			"Chose BladeMaster Lite: the cheaper one", ""},
+		{"padded id", Selection{ProductID: "  trim-9  ", Quantity: 1, Rationale: "same product"},
+			"Chose BladeMaster Pro: same product", ""},
+		{"never shown", Selection{ProductID: "oil-1", Quantity: 1, Rationale: "invented"},
+			"", `chose "oil-1", which the shop did not show`},
+		{"nothing chosen", Selection{ProductID: "   ", Rationale: "nothing suited the ask"},
+			"", "chose nothing: nothing suited the ask"},
+	}
+	for _, one := range cases {
+		t.Run(one.name, func(t *testing.T) {
+			service := &Service{}
+			var notes []string
+			service.begin("run-1", Wallet{}, func(line string) { notes = append(notes, line) }, prior)
+			defer service.end("run-1")
+
+			pick, err := service.pickFrom("run-1", shortlist, prior, one.selection)
+			if one.wantErr != "" {
+				if err == nil {
+					t.Fatalf("the choice was accepted as %+v", pick)
+				}
+				if !strings.Contains(err.Error(), one.wantErr) {
+					t.Fatalf("error = %v, want it to say %q", err, one.wantErr)
+				}
+				if len(notes) != 0 {
+					t.Fatalf("a refused choice was reported as progress: %v", notes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The id that travels on has to be the one the shop can look up.
+			if pick.ProductID != strings.TrimSpace(one.selection.ProductID) {
+				t.Fatalf("product id = %q, want %q", pick.ProductID, strings.TrimSpace(one.selection.ProductID))
+			}
+			// The opening turns travel with the choice, so the person can be shown
+			// what was actually said in the shop.
+			if len(pick.ShopTranscript) != 1 || pick.ShopTranscript[0].Message != "welcome in" {
+				t.Fatalf("the shop's own words were dropped: %+v", pick.ShopTranscript)
+			}
+			// The note names the product rather than the id, because a person reads it.
+			if len(notes) != 1 || notes[0] != one.wantNote {
+				t.Fatalf("progress = %v, want %q", notes, one.wantNote)
+			}
+		})
+	}
+}
+
+// A model that names a product but no count means one of it, not none of it.
+func TestAChoiceWithNoCountMeansOne(t *testing.T) {
+	service := &Service{}
+	shortlist := negotiationclient.Shortlist{
+		Options: []negotiationclient.ShortlistOption{{ProductID: "trim-9", Name: "BladeMaster Pro"}},
+	}
+	pick, err := service.pickFrom("run-1", shortlist, Conversation{}, Selection{ProductID: "trim-9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pick.Quantity != 1 {
+		t.Fatalf("quantity = %d, want one", pick.Quantity)
+	}
+}

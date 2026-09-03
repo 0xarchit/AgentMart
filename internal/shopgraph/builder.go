@@ -276,15 +276,52 @@ var errNothingToShow = errors.New("the shop had nothing within the budget")
 // a run ending this way declines rather than failing.
 var errNothingWorthBuying = errors.New("nothing on the shelf was worth buying")
 
-// nameFor resolves a chosen product id to the name the shop showed, so progress
-// notes read as a product rather than an identifier.
-func nameFor(shortlist negotiationclient.Shortlist, productID string) string {
+// shownOption resolves a chosen product id to what the person was actually shown,
+// so progress notes read as a product rather than an identifier and a choice
+// nobody was offered can be refused rather than priced. An earlier pass of the
+// same conversation counts: a follow up such as "the second one" refers to what
+// was on screen then, and re-browsing for it can come back with a different
+// shortlist.
+func shownOption(shortlist negotiationclient.Shortlist, prior Conversation, productID string) (string, bool) {
+	wanted := strings.TrimSpace(productID)
 	for _, option := range shortlist.Options {
-		if option.ProductID == productID {
-			return option.Name
+		if strings.TrimSpace(option.ProductID) == wanted {
+			return option.Name, true
 		}
 	}
-	return productID
+	for _, option := range prior.Options {
+		if strings.TrimSpace(option.ProductID) == wanted {
+			return option.Name, true
+		}
+	}
+	return productID, false
+}
+
+// pickFrom turns a model's answer into the choice the rest of the run works from,
+// or refuses it. It sits outside the node it came from so the refusals can be
+// exercised without a model: a blank answer, and an id nobody was shown.
+func (s *Service) pickFrom(sessionID string, shortlist negotiationclient.Shortlist, prior Conversation, selection Selection) (Pick, error) {
+	// Normalised here rather than compared loosely below, so the id that travels
+	// on to be priced is the one the shop can look up.
+	selection.ProductID = strings.TrimSpace(selection.ProductID)
+	if selection.ProductID == "" {
+		return Pick{}, fmt.Errorf("buyer agent chose nothing: %s", selection.Rationale)
+	}
+	// The choice has to be something the person was actually shown. A model
+	// answering with a catalog id nobody offered would otherwise be priced,
+	// judged and bought: the gate re-derives the amount from the catalog, so
+	// the money would come out right for a product that was never on screen.
+	// Non-blank was the only check here before, which caught an empty answer
+	// and nothing else.
+	name, shown := shownOption(shortlist, prior, selection.ProductID)
+	if !shown {
+		return Pick{}, fmt.Errorf("buyer agent chose %q, which the shop did not show", selection.ProductID)
+	}
+	if selection.Quantity <= 0 {
+		selection.Quantity = 1
+	}
+	s.noteTo(sessionID, fmt.Sprintf("Chose %s: %s", name, selection.Rationale))
+	return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
 }
 
 // premiumOver reports what an ask adds over the list value of everything it
@@ -398,18 +435,12 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				names = append(names, fmt.Sprintf("%s at INR %.2f", option.Name, float64(option.PricePaise)/100))
 			}
 			s.noteTo(ctx.SessionID(), "The shop showed: "+strings.Join(names, "; "))
-			selection, err := s.choose(ctx, shortlist, s.priorFor(ctx.SessionID()))
+			prior := s.priorFor(ctx.SessionID())
+			selection, err := s.choose(ctx, shortlist, prior)
 			if err != nil {
 				return Pick{}, err
 			}
-			if strings.TrimSpace(selection.ProductID) == "" {
-				return Pick{}, fmt.Errorf("buyer agent chose nothing: %s", selection.Rationale)
-			}
-			if selection.Quantity <= 0 {
-				selection.Quantity = 1
-			}
-			s.noteTo(ctx.SessionID(), fmt.Sprintf("Chose %s: %s", nameFor(shortlist, selection.ProductID), selection.Rationale))
-			return Pick{Selection: selection, ShopTranscript: shortlist.Transcript}, nil
+			return s.pickFrom(ctx.SessionID(), shortlist, prior, selection)
 		}, workflow.NodeConfig{Timeout: assessTimeout})
 
 	offerNode := workflow.NewFunctionNode[Pick, OfferView]("fetch_offer",
