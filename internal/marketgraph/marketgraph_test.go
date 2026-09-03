@@ -3,7 +3,10 @@ package marketgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -187,5 +190,157 @@ func TestNoTradingProviderLeavesEveryFigureUnobserved(t *testing.T) {
 
 	if facts.TradingObserved || facts.RefundRateKnown || facts.UnitsSoldRecently != 0 {
 		t.Fatalf("facts = %+v", facts)
+	}
+}
+
+// strategistProvider answers one strategy request with the choice given, in the
+// wire shape the model layer expects. The graph is otherwise real, so this is the
+// only way to run the price guard node at all: it sits behind the strategist, and
+// the strategist needs a provider.
+func strategistProvider(t *testing.T, choice StrategyChoice) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("strategist request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		function := "final_answer"
+		if len(request.Tools) > 0 {
+			function = request.Tools[0].Function.Name
+		}
+		arguments, err := json.Marshal(choice)
+		if err != nil {
+			t.Errorf("encode choice: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "call-1", "type": "function",
+					"function": map[string]any{"name": function, "arguments": string(arguments)},
+				}},
+			}}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// recordedOffer is what the trail was handed for one priced offer.
+type recordedOffer struct {
+	facts    Facts
+	decision Decision
+}
+
+type offerAuditor struct {
+	seen []recordedOffer
+	err  error
+}
+
+func (a *offerAuditor) RecordOfferDecision(_ context.Context, _ negotiation.CounterInput, facts Facts, decision Decision) error {
+	a.seen = append(a.seen, recordedOffer{facts: facts, decision: decision})
+	return a.err
+}
+
+// counterInput is one buyer counter to price, with rails the guard has to hold.
+func counterInput(t *testing.T) negotiation.CounterInput {
+	t.Helper()
+	deal, err := negotiation.New(negotiation.Proposal{ProductID: "trim-9", Quantity: 1, BaseAmountPaise: 179_900})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deal.CounterOffer(negotiation.Counter{FinalAmountPaise: 181_339, Reason: "handling"}); err != nil {
+		t.Fatal(err)
+	}
+	return negotiation.CounterInput{
+		Session: deal, Product: catalog.Product{ID: "trim-9", Name: "TrimPro Nova", Stock: 20, TrustScore: 88},
+		FloorPaise: 110_000, AskPaise: 181_339, BuyerPaise: 100_000, MinAcceptablePaise: 150_000,
+		BuyerAccountID: "account-3",
+	}
+}
+
+// TestThePriceGuardRunsInsideTheGraph executes the node that bounds the money.
+// clampToRails is covered on its own, but nothing had ever run the graph, so the
+// guard could have been handed the wrong rails, wired out of the edge list, or
+// left reporting the model's number instead of the corrected one, and every test
+// would still have passed.
+func TestThePriceGuardRunsInsideTheGraph(t *testing.T) {
+	// The model asks for less than the merchant's cost. The guard has to lift it,
+	// and it has to say that it did.
+	provider := strategistProvider(t, StrategyChoice{
+		Strategy: StrategyConcede, AmountPaise: 90_000, Reason: "keen to close",
+	})
+	trail := &offerAuditor{}
+	merchant, err := New(Config{Model: "stub", APIKey: "key", BaseURL: provider.URL}, nil, nil, trail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := merchant.Decide(t.Context(), counterInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.AmountPaise != 150_000 {
+		t.Fatalf("priced at %d, want the round's concession floor at 150000 held against a model asking 90000", decision.AmountPaise)
+	}
+	if decision.GuardNote == "" {
+		t.Fatal("the price was corrected without saying so, which is a silent override of the model")
+	}
+	if decision.Strategy != "concede" || decision.Reason != "keen to close" {
+		t.Fatalf("decision = %+v, want the model's own strategy and words kept", decision)
+	}
+	if decision.MarginPaise != 40_000 {
+		t.Fatalf("margin = %d, want the corrected price less the cost floor", decision.MarginPaise)
+	}
+
+	if len(trail.seen) != 1 {
+		t.Fatalf("wrote %d explanations, want exactly one", len(trail.seen))
+	}
+	wrote := trail.seen[0]
+	if wrote.decision.AmountPaise != 150_000 || wrote.decision.GuardNote == "" {
+		t.Fatalf("the trail records %+v, want the price actually offered and the correction", wrote.decision)
+	}
+	if wrote.facts.FloorPaise != 110_000 || wrote.facts.AskPaise != 181_339 || wrote.facts.MinAcceptablePaise != 150_000 {
+		t.Fatalf("the trail records rails %+v, want the ones the guard held", wrote.facts)
+	}
+}
+
+// TestAnOfferThatCannotBeExplainedIsNotSent is the fail closed claim the
+// architecture makes, run rather than read. The guard writes the explanation
+// before it returns, so a trail that refuses the write has to take the offer with
+// it.
+func TestAnOfferThatCannotBeExplainedIsNotSent(t *testing.T) {
+	provider := strategistProvider(t, StrategyChoice{
+		Strategy: StrategyHold, AmountPaise: 181_339, Reason: "the ask is fair",
+	})
+	trail := &offerAuditor{err: errors.New("audit_log is unreachable")}
+	merchant, err := New(Config{Model: "stub", APIKey: "key", BaseURL: provider.URL}, nil, nil, trail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := merchant.Decide(t.Context(), counterInput(t))
+	if err == nil {
+		t.Fatalf("an unexplainable offer was returned anyway: %+v", decision)
+	}
+	if !strings.Contains(err.Error(), "audit_log is unreachable") {
+		t.Fatalf("error = %v, want the trail's own cause carried out", err)
+	}
+	if decision.AmountPaise != 0 {
+		t.Fatalf("a price came back with the failure: %+v", decision)
+	}
+	// And the same failure has to stop the buyer-facing path too, not only Decide.
+	if _, cerr := merchant.Counter(t.Context(), counterInput(t)); cerr == nil {
+		t.Fatal("Counter handed the buyer a price the shop could not explain")
 	}
 }
