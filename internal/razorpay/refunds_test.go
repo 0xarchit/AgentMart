@@ -1,6 +1,6 @@
-// Proves the reversal path: where it posts, what it sends, that a retry carries a
-// key the gateway will accept, and that only a captured payment has anything left
-// to give back.
+// Proves the reversal path: where it posts, what it sends, that every leg of one
+// reversal carries its own retry key, and that only a captured payment has anything
+// left to give back.
 package razorpay
 
 import (
@@ -43,24 +43,43 @@ func TestAReversalPostsAgainstThePaymentAndCarriesARetryKey(t *testing.T) {
 	if strings.Contains(key, ":") || len(key) < 10 {
 		t.Fatalf("retry key %q is not in the shape the gateway accepts", key)
 	}
+	if key != reversalKey("telegram:42:refund:7", "pay_1", 45000) {
+		t.Fatalf("the header carried %q, which is not the key derived for this leg", key)
+	}
 }
 
-func TestARetryKeyIsShapedRatherThanRejectedOnArrival(t *testing.T) {
-	shaped := reversalKey("telegram:42:refund:7")
-	if strings.Contains(shaped, ":") {
-		t.Fatalf("key %q still carries a character the gateway rejects", shaped)
+// A reversal can span several funding payments, and this is the difference between
+// the second leg going through and the gateway refusing it as a different request
+// under a key it has already seen, once the first leg's money has gone back.
+func TestEveryLegOfAReversalCarriesItsOwnRetryKey(t *testing.T) {
+	const internal = "telegram:42:refund:7"
+	first := reversalKey(internal, "pay_1", 45000)
+	second := reversalKey(internal, "pay_2", 15000)
+	if first == second {
+		t.Fatalf("both legs of one reversal derived the same key %q", first)
 	}
-	for _, r := range shaped {
-		allowed := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
-		if !allowed {
-			t.Fatalf("key %q contains %q", shaped, r)
+	if reversalKey(internal, "pay_1", 45000) != first {
+		t.Fatal("a retry of the same leg must reproduce its key to land on the same refund")
+	}
+	if reversalKey(internal, "pay_1", 44000) == first {
+		t.Fatal("a different amount from the same payment is a different refund")
+	}
+	if reversalKey("telegram:42:refund:8", "pay_1", 45000) == first {
+		t.Fatal("two separate reversals of the same amount must not merge into one refund")
+	}
+	for _, key := range []string{first, second} {
+		if len(key) < 10 {
+			t.Fatalf("key %q is below the ten character minimum", key)
+		}
+		for _, r := range key {
+			allowed := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+			if !allowed {
+				t.Fatalf("key %q contains %q, which the gateway rejects", key, r)
+			}
 		}
 	}
-	if short := reversalKey("ab:c"); len(short) < 10 {
-		t.Fatalf("short key %q is below the ten character minimum", short)
-	}
-	if reversalKey("   ") != "" {
-		t.Fatal("an empty key should stay empty rather than become padding")
+	if reversalKey("   ", "pay_1", 45000) != "" {
+		t.Fatal("no internal key means no deduplication was asked for, so none is invented")
 	}
 }
 

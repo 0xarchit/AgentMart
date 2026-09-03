@@ -5,6 +5,8 @@ package razorpay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,15 +57,17 @@ func (c *Client) Payment(ctx context.Context, paymentID string) (CapturedPayment
 }
 
 // CreateRefund reverses part or all of a captured payment. The caller decides the
-// amount, which is always an amount already reversed internally, and the key makes
-// a repeated attempt land on the same refund rather than a second one.
+// amount, which is always an amount already reversed internally. The retry key is
+// derived here rather than taken as given, because one reversal can span several
+// funding payments and the gateway will not accept the same key twice for
+// different ones.
 func (c *Client) CreateRefund(ctx context.Context, paymentID string, amountPaise int64, key string, notes map[string]string) (Refund, error) {
 	if strings.TrimSpace(paymentID) == "" || amountPaise <= 0 {
 		return Refund{}, fmt.Errorf("payment id and a positive amount are required")
 	}
 	body := map[string]any{"amount": amountPaise, "speed": "normal", "notes": notes}
 	var refund Refund
-	if err := c.send(ctx, http.MethodPost, "/payments/"+paymentID+"/refund", body, &refund, reversalKey(key)); err != nil {
+	if err := c.send(ctx, http.MethodPost, "/payments/"+paymentID+"/refund", body, &refund, reversalKey(key, paymentID, amountPaise)); err != nil {
 		return Refund{}, err
 	}
 	if refund.ID == "" {
@@ -72,28 +76,25 @@ func (c *Client) CreateRefund(ctx context.Context, paymentID string, amountPaise
 	return refund, nil
 }
 
-// reversalKey shapes an internal idempotency key into what the gateway accepts:
-// at least ten characters of letters, digits, hyphens or underscores. Our keys
-// carry colons, so they are rewritten rather than silently rejected on arrival.
-func reversalKey(raw string) string {
-	trimmed := strings.TrimSpace(raw)
+// reversalKey derives the key for one leg of a reversal. The gateway scopes an
+// idempotency key to the payment and the body it arrived with, so one internal key
+// sent against a second funding payment is refused as a different request under a
+// used key, after the first leg has already sent money back. Hashing the payment
+// and the amount into the key gives each leg its own, while a genuine retry of the
+// same leg reproduces it exactly and lands on the refund already made instead of a
+// second one. The digest also satisfies the shape the gateway insists on, at least
+// ten characters of letters, digits, hyphens or underscores, which our colon
+// separated internal keys do not.
+func reversalKey(internal, paymentID string, amountPaise int64) string {
+	trimmed := strings.TrimSpace(internal)
 	if trimmed == "" {
+		// No internal key is a caller asking for no deduplication, so none is
+		// invented: a derived one would merge two honest reversals of the same
+		// amount from the same payment into a single refund.
 		return ""
 	}
-	var shaped strings.Builder
-	for _, r := range trimmed {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			shaped.WriteRune(r)
-		default:
-			shaped.WriteRune('-')
-		}
-	}
-	key := shaped.String()
-	for len(key) < 10 {
-		key += "-reversal"
-	}
-	return key
+	sum := sha256.Sum256([]byte(trimmed + "\n" + paymentID + "\n" + fmt.Sprint(amountPaise)))
+	return hex.EncodeToString(sum[:16])
 }
 
 // send performs one authorised call and decodes the result. An optional
