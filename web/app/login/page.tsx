@@ -36,7 +36,7 @@ export default async function LoginPage({
         </p>
         <p className="mt-2 text-xs">
           <Link href="/" className="text-moss hover:underline">
-            ← Back to the store
+            Back to the store
           </Link>
         </p>
       </section>
