@@ -531,6 +531,19 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		// answer under a bubble per step.
 		notes.add(ctx, line)
 	})
+	// The shortlist outlives the reply, so the next message can refer to it. The
+	// original brief is kept rather than overwritten, because a refinement narrows
+	// what was asked for instead of replacing it.
+	//
+	// Recorded here, before the paths that end early, because the graph attaches
+	// what the shop showed even to a run that failed. A run that broke after the
+	// shortlist is exactly when a person says "try again" or "the second one", and
+	// recording this after the failure check threw that away.
+	remember(ctx, services, message.From.ID, shopgraph.Conversation{
+		Brief:   firstNonBlank(prior.Brief, message.Text),
+		Options: result.Shown,
+		Chosen:  result.ProductID,
+	})
 	if runErr != nil {
 		// Strict mode: the human sees the real failure instead of a silent
 		// scripted purchase.
@@ -549,14 +562,6 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 			return fmt.Errorf("audit agent run: %w", auditErr)
 		}
 	}
-	// The shortlist outlives the reply, so the next message can refer to it. The
-	// original brief is kept rather than overwritten, because a refinement narrows
-	// what was asked for instead of replacing it.
-	remember(ctx, services, message.From.ID, shopgraph.Conversation{
-		Brief:   firstNonBlank(prior.Brief, message.Text),
-		Options: result.Shown,
-		Chosen:  result.ProductID,
-	})
 	// The conversation is the evidence, so it is sent once, whatever the outcome.
 	if len(result.Transcript) > 0 {
 		document := renderTranscript(transcriptHeader{
@@ -623,9 +628,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		return sendReply(ctx, client, message.Chat.ID, summary.String(), nil)
 	}
 	summary.WriteString(fmt.Sprintf("\nPurchase fulfilled via wallet for INR %.2f. Order: %s", float64(purchase.AmountPaise)/100, purchase.OrderID))
-	// The shortlist has been bought, so it is not something to refine any more.
-	// Forgetting it stops the next request inheriting a decided conversation.
-	remember(ctx, services, message.From.ID, shopgraph.Conversation{})
+	forget(ctx, services, message.From.ID)
 	return sendReply(ctx, client, message.Chat.ID, summary.String(), cancelMarkup(purchase.OrderID))
 }
 
@@ -638,6 +641,15 @@ func remember(ctx context.Context, services commandServices, telegramID int64, p
 	if err := services.conversations.Save(ctx, telegramID, prior); err != nil {
 		log.Printf("conversation memory write failed: %v", err)
 	}
+}
+
+// forget drops what this chat discussed, which is what a settled purchase means:
+// the shortlist has been bought, so it is not something to refine any more and
+// the next request should start from the person's own words rather than inherit a
+// decided conversation. Every path that moves money ends here, including the ones
+// that resume a purchase a person had to approve first.
+func forget(ctx context.Context, services commandServices, telegramID int64) {
+	remember(ctx, services, telegramID, shopgraph.Conversation{})
 }
 
 // firstNonBlank returns the first value that is not blank, or "".
@@ -892,6 +904,16 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		}
 		return "Telegram is now linked to your AgentMart wallet.", nil
 	case "/buy":
+		// No open decision check here, deliberately, and the same for /accept. Free
+		// text is blocked while a question is standing because starting a fresh run
+		// would abandon that question and quote something else, and because words
+		// must never be read as consent. Neither applies to a command that names its
+		// own product and quantity: it is an unambiguous instruction, not something
+		// to interpret, and it abandons nothing. Each escalation carries its own
+		// token and its own buttons, so a second one does not hide the first, and a
+		// resumed approval goes back through the gate, where the balance is checked
+		// after the human step and before anything is spent. Asking for two things
+		// at once cannot overspend the wallet.
 		if len(command) != 3 {
 			return "Use /buy PRODUCT_ID QUANTITY.", nil
 		}
@@ -909,6 +931,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 			}
 			return "Purchase rejected: " + result.Reason, nil
 		}
+		forget(ctx, services, telegramID)
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/negotiate":
 		if negotiations == nil {
@@ -956,6 +979,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Negotiated purchase rejected: " + result.Reason, nil
 		}
+		forget(ctx, services, telegramID)
 		return fmt.Sprintf("Negotiated purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/approve", "/reject":
 		if len(command) != 2 {
@@ -973,6 +997,10 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if !result.Fulfilled {
 			return "Approval result: " + result.Reason, nil
 		}
+		// The answer settled the purchase the shortlist was for. A rejection returns
+		// above this line and keeps the conversation, because a person who declined
+		// one ask may still want to refine it.
+		forget(ctx, services, telegramID)
 		return fmt.Sprintf("Purchase fulfilled via wallet for INR %.2f. Order: %s", float64(result.AmountPaise)/100, result.OrderID), nil
 	case "/refund":
 		if len(command) < 3 {
