@@ -82,7 +82,14 @@ func (c *Client) CreateRefund(ctx context.Context, paymentID string, amountPaise
 // used key, after the first leg has already sent money back. Hashing the payment
 // and the amount into the key gives each leg its own, while a genuine retry of the
 // same leg reproduces it exactly and lands on the refund already made instead of a
-// second one. The digest also satisfies the shape the gateway insists on, at least
+// second one. The run id stays out of the key deliberately, so that replay holds:
+// a key that changed per run would be unknown to the gateway on a retry, and an
+// unknown key makes a second refund rather than replaying the first. It is in the
+// notes, which the gateway hashes as part of the body, so the replay is exact
+// within a run and a retry from a later one would be refused as a different
+// request instead. Resuming a reversal across runs therefore needs the first
+// attempt's run id, not the current one. Nothing resumes one today.
+// The digest also satisfies the shape the gateway insists on, at least
 // ten characters of letters, digits, hyphens or underscores, which our colon
 // separated internal keys do not.
 func reversalKey(internal, paymentID string, amountPaise int64) string {

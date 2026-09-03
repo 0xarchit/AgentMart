@@ -296,6 +296,7 @@ not a redesign.
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
 | cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
 | the gateway sales view reads one page | `internal/razorpay/sales.go:57`, `count=100` with no paging | the refund rate and the average capture behind an opening quote are computed from the first hundred payments, refunds and settlements in the window rather than from all of them |
+| an interrupted reversal is never resumed | `internal/buyer/refund.go:98`, the duplicate short circuit | if the gateway leg fails or the process stops after the allowance is credited, a re-sent refund is already a duplicate on the wallet ledger and returns before the reversal is retried, so the internal credit stands with no gateway evidence behind it |
 
 Every row above was verified against the code, with a file and a line, rather
 than carried over from notes. The list is deliberately complete: a defect that is
@@ -330,7 +331,15 @@ personalisation path only, it cannot move money past the gate, and it is written
 down here rather than left for someone to find. The bundled goods carry and the one
 shot run stay as already sequenced in later phases. The mandate is not deferred by
 us at all: the route that charges one is withheld at the account level, which
-section 5 now evidences, so that deferral belongs to the gateway.
+section 5 now evidences, so that deferral belongs to the gateway. Resuming an
+interrupted reversal is deferred on its merits too. It needs the first attempt's
+run id persisted, so that a later run presents the gateway the same body under the
+same key and is replayed rather than refused; the shortcut of putting the current
+run id into the retry key instead would remove the last guard against a second
+refund, because a key the gateway has not seen makes a new refund rather than
+replaying the one already made. Two guards sit in front of that one, the wallet
+ledger's own key and the payment's remaining refundable amount, which is why this
+gap is missing evidence and not missing money.
 
 One change is not in that table because it was never on the defect list, and it
 matters more than most of what was: a price could not settle below the list total,
