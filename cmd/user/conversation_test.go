@@ -153,6 +153,21 @@ func (failingAuditor) RecordAgentRun(context.Context, int64, string, buyer.Agent
 	return errors.New("the reasoning trail is unwritable")
 }
 
+// recordingAuditor keeps every reasoning trail it is handed, so a test can assert
+// what a purchase was justified with rather than only that a write happened.
+type recordingAuditor struct {
+	ids      []int64
+	requests []string
+	runs     []buyer.AgentRun
+}
+
+func (a *recordingAuditor) RecordAgentRun(_ context.Context, telegramID int64, request string, run buyer.AgentRun) error {
+	a.ids = append(a.ids, telegramID)
+	a.requests = append(a.requests, request)
+	a.runs = append(a.runs, run)
+	return nil
+}
+
 // The store is wired, but nothing proved the request path used it. This drives a
 // real graph against a remembered shortlist and then buys, which is both halves
 // of the contract: a follow up is answered in context, and a settled purchase
@@ -288,5 +303,42 @@ func TestAnApprovalClearsTheConversationAndARejectionKeepsIt(t *testing.T) {
 	}
 	if len(declined.saved) != 0 {
 		t.Fatalf("a rejection cleared the conversation: %+v", declined.saved)
+	}
+}
+
+// TestAnAgentRunIsRecordedBeforeTheMoneyMoves covers what the audit failure test
+// cannot: that the trail actually explains the purchase. A hollowed-out payload
+// still writes a row and still passes every other test, and a row that does not
+// say what was bought, for whom, or why is not an audit trail.
+func TestAnAgentRunIsRecordedBeforeTheMoneyMoves(t *testing.T) {
+	buyerService, _ := shoppingSystem(t)
+	client, _ := recordingBot(t)
+	recorded := &recordingAuditor{}
+
+	err := conversationalBuy(t.Context(), client,
+		fakePurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 388013, OrderID: "order-1"}},
+		commandServices{
+			loop: buyerService, accounts: fundedAccounts{}, catalog: stockCatalog{},
+			negotiations: fakeNegotiator{}, audit: recorded,
+		},
+		&telegram.Message{MessageID: 9, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 77}, Text: "buy me a good trimmer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded.runs) != 1 {
+		t.Fatalf("recorded %d agent runs, want exactly one", len(recorded.runs))
+	}
+	if recorded.ids[0] != 77 {
+		t.Fatalf("the trail was credited to %d, want the person who asked", recorded.ids[0])
+	}
+	if recorded.requests[0] != "buy me a good trimmer" {
+		t.Fatalf("the trail records the request as %q, want the person's own words", recorded.requests[0])
+	}
+	run := recorded.runs[0]
+	if run.Action == "" || run.ProductID == "" || run.FinalPaise <= 0 {
+		t.Fatalf("the trail does not say what was bought: %+v", run)
+	}
+	if run.Rationale == "" {
+		t.Fatalf("the trail does not say why: %+v", run)
 	}
 }
