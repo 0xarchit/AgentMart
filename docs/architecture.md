@@ -284,6 +284,7 @@ asserting it.
 | the checkout signature verifier had no caller | `web/app/api/topups/confirm/route.ts` credits the wallet from the browser callback, under the idempotency key the webhook already uses | `razorpay.test.ts` covers the four facts that decide the credit, including a captured payment replayed by an account it was not opened for |
 | a tool returned its own argument | `get_current_terms` is removed rather than implemented, since a tool that hands back its own argument is worse than a missing one | no toolset registers the name and no code refers to it |
 | a ten minute window on account and product refused purchases that were not duplicates: a second unit, a gift, a fresh attempt after an unrelated failure | the idempotency key is left to be the duplicate check it already is, migration `20260903000400` | every purchase key is derived from the message or the negotiation session that asked for it, so a retry carries the same key and a genuinely new purchase carries a new one; runaway repetition is bounded by the balance, the spend limit and the approval rail instead of by a clock |
+| a loyalty tier was farmable by buying and refunding in a loop, and the tier is not decoration: it is the entitlement that sets the floor a price may settle to | the tier counts only the orders whose money stayed, migration `20260903000500` | structure rather than a test, since nothing here runs SQL: `refund_wallet_order` moves a reversed order to `refunded_via_wallet` (`20260823000500_refund_contract.sql:66`) and the tier now counts `fulfilled_via_wallet` alone, so a reversal leaves the counted set, which is the rule `product_trading` already applied to the selling rate |
 
 Deferred with the reason stated, and on the merits rather than for time. The self
 asserted account id stays, because the fix is either signing the id or issuing per
@@ -303,11 +304,11 @@ judgement. The cost of that change is a row above: the buyer's gate no longer
 double covers the cost floor, because the alternative was publishing cost to the
 counterparty.
 
-Also deferred, smaller: pagination past the first hundred gateway objects, loyalty
-tiers being farmable by buying and refunding in a loop, the last write wins session
-store, the three environment variables that promise configurability and are read by
-nothing, and the duplicate grant in the initial schema. None is reachable in a
-short read, and all are recorded here rather than left to be discovered.
+Also deferred, smaller: pagination past the first hundred gateway objects, the
+last write wins session store, the three environment variables that promise
+configurability and are read by nothing, and the duplicate grant in the initial
+schema. None is reachable in a short read, and all are recorded here rather than
+left to be discovered.
 
 Two defects were closed by the benchmark rather than by reading the code, which is
 the argument for having built it. The buyer was escalating offers that sat inside
