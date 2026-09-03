@@ -77,6 +77,7 @@ type runState struct {
 	mu       sync.Mutex
 	shown    []PriorOption
 	priced   pricedGoods
+	settled  int64
 }
 
 // pricedGoods is the basket the shop quoted on one pass: the goods, how many, and
@@ -213,6 +214,34 @@ func (s *Service) pricedFor(sessionID string) pricedGoods {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	return run.priced
+}
+
+// recordSettled keeps the amount the merchant itself confirmed a deal at. Only a
+// merchant answer of "accepted" writes here, so this is the shop's own statement
+// of the price rather than the negotiating agent's account of it.
+func (s *Service) recordSettled(sessionID string, amountPaise int64) {
+	if amountPaise <= 0 {
+		return
+	}
+	run := s.runFor(sessionID)
+	if run == nil {
+		return
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.settled = amountPaise
+}
+
+// settledFor reports the amount the merchant confirmed, or zero when no answer on
+// this pass said a deal was accepted.
+func (s *Service) settledFor(sessionID string) int64 {
+	run := s.runFor(sessionID)
+	if run == nil {
+		return 0
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.settled
 }
 
 // end releases one run's facts.
@@ -639,8 +668,9 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			if qty <= 0 {
 				qty = 1
 			}
+			finalPaise := s.settledAmount(ctx.SessionID(), outcome)
 			listPaise := product.PricePaise*int64(qty) + goods.bundledPaise
-			premium, _ := premiumOver(outcome.FinalPaise, listPaise)
+			premium, _ := premiumOver(finalPaise, listPaise)
 			action := Action(outcome.Action)
 			if action == "" {
 				action = ActionBuy
@@ -649,7 +679,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			needsApproval := action == ActionAskHuman || bandCrossed
 			return Result{
 				Action: action, ProductID: product.ID, ProductName: product.Name,
-				Quantity: qty, FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
+				Quantity: qty, FinalPaise: finalPaise, Rationale: outcome.Rationale,
 				Steps: outcome.Steps, SessionID: outcome.SessionID, Transcript: outcome.Transcript,
 				Accepted: outcome.Accepted, NeedsApproval: needsApproval,
 				QuotedAt: outcome.QuotedAt,
@@ -752,6 +782,18 @@ func (s *Service) ContinueWithProgress(parent context.Context, request string, p
 	return s.resultFrom(sessionID, lastResult, lastOutput)
 }
 
+// settledAmount is the price a settled outcome is allowed to name. A merchant
+// answer of "accepted" on this pass is the shop's own statement of the deal and
+// wins over the negotiating agent's retyping of it. With no such answer the
+// outcome's own amount stands, because the routes that do not go through the
+// agent's tools already take it from the merchant's resolution.
+func (s *Service) settledAmount(sessionID string, outcome Outcome) int64 {
+	if confirmed := s.settledFor(sessionID); confirmed > 0 {
+		return confirmed
+	}
+	return outcome.FinalPaise
+}
+
 // settledGoods is the basket a settled outcome is allowed to describe: whatever
 // the shop actually quoted on this pass. The goods, the count and the attached
 // amount are all out of the negotiating agent's output schema, so an outcome
@@ -777,7 +819,7 @@ func (s *Service) resultFrom(sessionID string, lastResult *Result, lastOutput an
 		return normalized(Result{
 			Action: Action(outcome.Action), ProductID: goods.productID,
 			ProductName: outcome.ProductName, Quantity: goods.quantity,
-			FinalPaise: outcome.FinalPaise, Rationale: outcome.Rationale,
+			FinalPaise: s.settledAmount(sessionID, outcome), Rationale: outcome.Rationale,
 			Steps: outcome.Steps, SessionID: outcome.SessionID,
 			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
 			NeedsApproval: Action(outcome.Action) == ActionAskHuman,
@@ -895,6 +937,7 @@ func (s *Service) negotiationTools() []tool.Tool {
 			if err != nil {
 				return counterResult{}, err
 			}
+			s.recordMerchantAnswer(ctx.SessionID(), resolution.Status, resolution.FinalAmountPaise)
 			return counterResult{Status: resolution.Status, FinalAmountPaise: resolution.FinalAmountPaise}, nil
 		})
 	accept := mustTool("accept_offer", "Formally accept the merchant's current terms for this session.",
@@ -903,6 +946,7 @@ func (s *Service) negotiationTools() []tool.Tool {
 			if err != nil {
 				return counterResult{}, err
 			}
+			s.recordMerchantAnswer(ctx.SessionID(), resolution.Status, resolution.FinalAmountPaise)
 			return counterResult{Status: resolution.Status, FinalAmountPaise: resolution.FinalAmountPaise}, nil
 		})
 	decline := mustTool("decline_offer", "Formally decline the merchant's current terms.",
@@ -931,6 +975,18 @@ func (s *Service) negotiationTools() []tool.Tool {
 type counterInput struct {
 	SessionID   string `json:"session_id"`
 	AmountPaise int64  `json:"amount_paise"`
+}
+
+// recordMerchantAnswer keeps the price the shop itself agreed to, and only when the
+// shop says the deal is accepted. The negotiating agent reads the merchant's number
+// out of a tool result and then writes final_amount_paise into its own answer, so
+// without this the settled amount is the agent's account of the price rather than
+// the shop's. A countered or declined answer settles nothing and is not recorded.
+func (s *Service) recordMerchantAnswer(sessionID, status string, amountPaise int64) {
+	if strings.TrimSpace(status) != string(negotiation.StatusAccepted) {
+		return
+	}
+	s.recordSettled(sessionID, amountPaise)
 }
 
 type sessionInput struct {

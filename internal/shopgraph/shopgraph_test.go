@@ -482,6 +482,50 @@ func TestAnActionNobodyDefinedGoesToThePersonNotToACharge(t *testing.T) {
 	}
 }
 
+// TestASettledPriceIsTheOneTheShopAgreedTo finishes the trust boundary on the
+// negotiate route. The agent reads the merchant's number out of a tool result and
+// then retypes it into its own answer, so without holding the settlement to what
+// the shop confirmed, the amount charged is the agent's account of the price.
+func TestASettledPriceIsTheOneTheShopAgreedTo(t *testing.T) {
+	service := &Service{}
+	service.begin("run-1", Wallet{}, nil, Conversation{})
+	defer service.end("run-1")
+	service.recordPriced("run-1", pricedGoods{productID: "trim-9", quantity: 1})
+
+	// Only an accepted answer settles anything. A counter and a decline leave the
+	// deal open, so neither may become the price.
+	service.recordMerchantAnswer("run-1", string(negotiation.StatusCountered), 150000)
+	service.recordMerchantAnswer("run-1", string(negotiation.StatusDeclined), 120000)
+	if got := service.settledFor("run-1"); got != 0 {
+		t.Fatalf("an unsettled answer became the price: %d", got)
+	}
+
+	service.recordMerchantAnswer("run-1", string(negotiation.StatusAccepted), 181339)
+	result, err := service.resultFrom("run-1", nil,
+		Outcome{Action: string(ActionBuy), FinalPaise: 99999, SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalPaise != 181339 {
+		t.Fatalf("charged %d, want the amount the shop agreed to", result.FinalPaise)
+	}
+
+	// With no merchant answer on this pass the outcome's own amount stands: the
+	// accept, decline and ask routes never call the agent's tools, and each already
+	// takes its amount from the merchant's resolution.
+	quiet := &Service{}
+	quiet.begin("run-2", Wallet{}, nil, Conversation{})
+	defer quiet.end("run-2")
+	untouched, err := quiet.resultFrom("run-2", nil,
+		Outcome{Action: string(ActionBuy), FinalPaise: 181339, SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untouched.FinalPaise != 181339 {
+		t.Fatalf("amount = %d, want the merchant-sourced outcome to survive", untouched.FinalPaise)
+	}
+}
+
 func TestAChoiceWithNoCountMeansOne(t *testing.T) {
 	service := &Service{}
 	shortlist := negotiationclient.Shortlist{
