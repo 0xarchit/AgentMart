@@ -155,8 +155,8 @@ Row level security is on every table with own-row policies. The money functions
 are revoked from anonymous and signed-in roles and granted to the service role
 only, so the browser cannot reach them even with a valid session.
 
-Migrations live in `supabase/migrations/`, fourteen of them, applied in filename
-order.
+Migrations live in `supabase/migrations/`, twenty five of them, applied in
+filename order.
 
 ## Configuration
 
@@ -241,7 +241,7 @@ gofmt -l internal/ cmd/
 go build ./...
 go vet ./...
 go test -short -count=1 ./internal/... ./cmd/...     # 28 packages
-cd web && npx tsc --noEmit && npx vitest run          # 32 tests, 5 files
+cd web && npx tsc --noEmit && npx vitest run          # 44 tests, 6 files
 ```
 
 The Go test paths are scoped on purpose rather than written as `./...`. The
