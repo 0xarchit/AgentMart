@@ -153,8 +153,9 @@ func TestFulfillUsesAtomicWalletRPC(t *testing.T) {
 	}
 }
 
-// fulfilmentSpy answers one fulfilment call and keeps the body it was sent.
-func fulfilmentSpy(t *testing.T, sent *map[string]any) *Service {
+// moneySpy answers one wallet call and keeps the body it was sent. The reply suits
+// a settlement and a refund alike, which is all either run assertion looks at.
+func moneySpy(t *testing.T, sent *map[string]any) *Service {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(sent); err != nil {
@@ -181,7 +182,7 @@ func settlement() FulfillRequest {
 
 func TestAMoneyRowCarriesTheRunItCameFrom(t *testing.T) {
 	var sent map[string]any
-	service := fulfilmentSpy(t, &sent)
+	service := moneySpy(t, &sent)
 
 	ctx := runid.With(t.Context(), "run-under-test")
 	if _, err := service.Fulfill(ctx, settlement()); err != nil {
@@ -194,7 +195,7 @@ func TestAMoneyRowCarriesTheRunItCameFrom(t *testing.T) {
 
 func TestACallerCannotOverrideTheRunOnAMoneyRow(t *testing.T) {
 	var sent map[string]any
-	service := fulfilmentSpy(t, &sent)
+	service := moneySpy(t, &sent)
 
 	request := settlement()
 	request.RunID = "a-run-the-caller-invented"
@@ -208,12 +209,34 @@ func TestACallerCannotOverrideTheRunOnAMoneyRow(t *testing.T) {
 
 func TestASettlementOutsideAnyRunLeavesTheRunUnset(t *testing.T) {
 	var sent map[string]any
-	service := fulfilmentSpy(t, &sent)
+	service := moneySpy(t, &sent)
 
 	if _, err := service.Fulfill(t.Context(), settlement()); err != nil {
 		t.Fatal(err)
 	}
 	if _, present := sent["p_run_id"]; present {
 		t.Fatalf("p_run_id was sent as %v, want it omitted so the stored default applies", sent["p_run_id"])
+	}
+}
+
+// The run on a refund is not only there to trace it. It is stored with the credit
+// as one of the inputs a resumed gateway reversal must reproduce exactly, so a
+// caller able to name it could make an interrupted reversal unreplayable.
+func TestACallerCannotOverrideTheRunOnARefund(t *testing.T) {
+	var sent map[string]any
+	service := moneySpy(t, &sent)
+
+	request := RefundRequest{
+		AccountID:      "22222222-2222-2222-2222-222222222222",
+		OrderID:        "44444444-4444-4444-4444-444444444444",
+		Reason:         "Cancelled by user",
+		IdempotencyKey: "telegram:7:refund:9",
+		RunID:          "a-run-the-caller-invented",
+	}
+	if _, err := service.Refund(runid.With(t.Context(), "the-real-run"), request); err != nil {
+		t.Fatal(err)
+	}
+	if sent["p_run_id"] != "the-real-run" {
+		t.Fatalf("p_run_id = %v, want the surrounding run", sent["p_run_id"])
 	}
 }

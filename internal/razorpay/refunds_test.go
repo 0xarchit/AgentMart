@@ -4,11 +4,56 @@
 package razorpay
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// Callers total these to work out what a reversal already sent, so a first page
+// taken for the whole list undercounts the money already back, and an undercount
+// there sends it a second time. A full page has to be followed.
+func TestListingReversalsFollowsThePagesToTheEnd(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RequestURI())
+		if r.URL.Query().Get("skip") == "0" {
+			items := make([]string, 0, 100)
+			for i := 0; i < 100; i++ {
+				items = append(items, fmt.Sprintf(`{"id":"rfnd_%d","amount":100,"status":"processed"}`, i))
+			}
+			_, _ = w.Write([]byte(`{"count":100,"items":[` + strings.Join(items, ",") + `]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"count":1,"items":[{"id":"rfnd_last","amount":45000,"status":"failed","notes":{"order_id":"order-1"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("key", "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = server.URL
+
+	refunds, err := client.PaymentRefunds(t.Context(), "pay_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("made %d requests, want a full page followed by the next: %v", len(requests), requests)
+	}
+	if !strings.Contains(requests[0], "count=100") || !strings.Contains(requests[1], "skip=100") {
+		t.Fatalf("requests = %v, want the page size stated and the next page asked for", requests)
+	}
+	if len(refunds) != 101 {
+		t.Fatalf("read %d reversals, want every page kept", len(refunds))
+	}
+	last := refunds[100]
+	if !last.Failed() || last.Notes["order_id"] != "order-1" {
+		t.Fatalf("last reversal = %+v, want the status and notes progress is judged by", last)
+	}
+}
 
 func TestAReversalPostsAgainstThePaymentAndCarriesARetryKey(t *testing.T) {
 	var path, method, key, body string
@@ -162,5 +207,8 @@ func TestAReversalNeedsAPaymentAndAnAmount(t *testing.T) {
 	}
 	if _, err := client.Payment(t.Context(), " "); err == nil {
 		t.Fatal("reading no payment should refuse")
+	}
+	if _, err := client.PaymentRefunds(t.Context(), " "); err == nil {
+		t.Fatal("listing reversals for no payment should refuse")
 	}
 }

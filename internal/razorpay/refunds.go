@@ -16,11 +16,16 @@ import (
 
 // Refund is a reversal the gateway accepted.
 type Refund struct {
-	ID        string `json:"id"`
-	PaymentID string `json:"payment_id"`
-	Amount    int64  `json:"amount"`
-	Status    string `json:"status"`
+	ID        string            `json:"id"`
+	PaymentID string            `json:"payment_id"`
+	Amount    int64             `json:"amount"`
+	Status    string            `json:"status"`
+	Notes     map[string]string `json:"notes"`
 }
+
+// Failed reports a reversal the gateway took and then could not complete, which
+// sent no money and so counts as no progress.
+func (r Refund) Failed() bool { return strings.EqualFold(strings.TrimSpace(r.Status), "failed") }
 
 // CapturedPayment is the part of a payment this package needs to decide how much
 // of it can still be reversed.
@@ -56,6 +61,36 @@ func (c *Client) Payment(ctx context.Context, paymentID string) (CapturedPayment
 	return payment, nil
 }
 
+// refundPage is one page of the reversals recorded against a payment.
+type refundPage struct {
+	Items []Refund `json:"items"`
+}
+
+// PaymentRefunds lists every reversal the gateway holds against one payment,
+// following the pages to the end. Callers use this to work out how much of a
+// reversal already landed, so a first page taken for the whole list would
+// undercount what went back, and an undercount there is a second refund here.
+func (c *Client) PaymentRefunds(ctx context.Context, paymentID string) ([]Refund, error) {
+	if strings.TrimSpace(paymentID) == "" {
+		return nil, fmt.Errorf("payment id is required")
+	}
+	// The gateway caps a page at a hundred and defaults to the last ten, so the
+	// size is stated rather than taken.
+	const pageSize = 100
+	var refunds []Refund
+	for skip := 0; ; skip += pageSize {
+		var page refundPage
+		path := fmt.Sprintf("/payments/%s/refunds?count=%d&skip=%d", paymentID, pageSize, skip)
+		if err := c.send(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		refunds = append(refunds, page.Items...)
+		if len(page.Items) < pageSize {
+			return refunds, nil
+		}
+	}
+}
+
 // CreateRefund reverses part or all of a captured payment. The caller decides the
 // amount, which is always an amount already reversed internally. The retry key is
 // derived here rather than taken as given, because one reversal can span several
@@ -88,7 +123,8 @@ func (c *Client) CreateRefund(ctx context.Context, paymentID string, amountPaise
 // notes, which the gateway hashes as part of the body, so the replay is exact
 // within a run and a retry from a later one would be refused as a different
 // request instead. Resuming a reversal across runs therefore needs the first
-// attempt's run id, not the current one. Nothing resumes one today.
+// attempt's run id, not the current one, which is why the run one is owed under is
+// written down with it and read back rather than minted again.
 // The digest also satisfies the shape the gateway insists on, at least
 // ten characters of letters, digits, hyphens or underscores, which our colon
 // separated internal keys do not.

@@ -128,6 +128,50 @@ func (s *Store) RecordReversalFailure(ctx context.Context, accountID, orderID st
 	})
 }
 
+// ReversalAttempt is what an interrupted refund left behind so the gateway side
+// can still be finished: the amount credited, and the exact inputs the first
+// attempt put into the gateway request. Presenting any of them differently makes
+// the second attempt a new request under a used key, which the gateway refuses
+// after the first one has already sent money back.
+type ReversalAttempt struct {
+	OrderID        string `json:"order_id"`
+	AmountPaise    int64  `json:"amount_paise"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+	RunID          string `json:"run_id"`
+}
+
+// OutstandingReversal reports the reversal still owed on one order, if there is
+// one. The account is part of the lookup so a person cannot resume somebody
+// else's refund by naming their order.
+func (s *Store) OutstandingReversal(ctx context.Context, accountID, orderID string) (ReversalAttempt, bool, error) {
+	query := url.Values{
+		"select":     {"order_id,amount_paise,reason,idempotency_key,run_id"},
+		"order_id":   {"eq." + orderID},
+		"account_id": {"eq." + accountID},
+		"settled_at": {"is.null"},
+		"limit":      {"1"},
+	}
+	var rows []ReversalAttempt
+	if err := s.db.Get(ctx, "reversal_attempts", query, &rows); err != nil {
+		return ReversalAttempt{}, false, err
+	}
+	if len(rows) == 0 {
+		return ReversalAttempt{}, false, nil
+	}
+	return rows[0], true, nil
+}
+
+// SettleReversal records that the gateway has answered for this order and the
+// reversal is no longer owed. Rows already settled are left alone, so the stamp
+// stays the moment the reversal actually finished.
+func (s *Store) SettleReversal(ctx context.Context, orderID string) error {
+	filter := url.Values{"order_id": {"eq." + orderID}, "settled_at": {"is.null"}}
+	// "now" is a timestamptz literal the database resolves against its own clock,
+	// which is the clock every other timestamp in these tables is stamped by.
+	return s.db.Update(ctx, "reversal_attempts", filter, map[string]any{"settled_at": "now"}, nil)
+}
+
 // RecordPurchaseFailure writes a purchase refusal that never reached the gate, or
 // reached it and could not move the money. The account is left unresolved because
 // the failure may be the account lookup itself.

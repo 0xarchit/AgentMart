@@ -296,7 +296,6 @@ not a redesign.
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
 | cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
 | the gateway sales view reads one page | `internal/razorpay/sales.go:57`, `count=100` with no paging | the refund rate and the average capture behind an opening quote are computed from the first hundred payments, refunds and settlements in the window rather than from all of them |
-| an interrupted reversal is never resumed | `internal/buyer/refund.go:98`, the duplicate short circuit | if the gateway leg fails or the process stops after the allowance is credited, a re-sent refund is already a duplicate on the wallet ledger and returns before the reversal is retried, so the internal credit stands with no gateway evidence behind it |
 
 Every row above was verified against the code, with a file and a line, rather
 than carried over from notes. The list is deliberately complete: a defect that is
@@ -312,7 +311,7 @@ asserting it.
 | --- | --- | --- |
 | one shared negotiation slot for all callers | the in flight input is keyed by the graph pass that stored it, `marketgraph/nodes.go:275`, and deleted on the way out | structure rather than a test: `nodes.go:38-42` is a `sync.Map` keyed per pass, so there is no shared cell left to cross |
 | the price freshness rail could not fire | the instant a quote was observed travels with the request instead of being read as now, `buyer/purchase.go:174` | `stale_price_test.go:39` refuses a quote older than the window, `:49` still buys inside it, and `:56` treats no observation as priced now |
-| thirteen money path refusals returning with no trail row, where this list said three, including the amount integrity refusal that fires before the gate is consulted | one recorder per boundary that every refusal leaves through, `buyer/purchase.go:129` and `buyer/refund.go:67` | `purchase_trail_test.go` and `refund_test.go`, which fail both on a missing row and on a doubled one |
+| thirteen money path refusals returning with no trail row, where this list said three, including the amount integrity refusal that fires before the gate is consulted | one recorder per boundary that every refusal leaves through, `buyer/purchase.go:129` and `buyer/refund.go:80` | `purchase_trail_test.go` and `refund_test.go`, which fail both on a missing row and on a doubled one |
 | the concession schedule was prose, not code | this round's concession floor is one of the bounds `clampToRails` chooses between, `marketgraph/graph.go:133` | `marketgraph_test.go:39`, which fails if the round's floor is only advisory |
 | the checkout signature verifier had no caller | `web/app/api/topups/confirm/route.ts` credits the wallet from the browser callback, under the idempotency key the webhook already uses | `razorpay.test.ts` covers the four facts that decide the credit, including a captured payment replayed by an account it was not opened for |
 | a tool returned its own argument | `get_current_terms` is removed rather than implemented, since a tool that hands back its own argument is worse than a missing one | no toolset registers the name and no code refers to it |
@@ -320,9 +319,10 @@ asserting it.
 | a loyalty tier was farmable by buying and refunding in a loop, and the tier is not decoration: it is the entitlement that sets the floor a price may settle to | the tier counts only the orders whose money stayed, migration `20260903000500` | structure rather than a test, since nothing here runs SQL: `refund_wallet_order` moves a reversed order to `refunded_via_wallet` (`20260823000500_refund_contract.sql:66`) and the tier now counts `fulfilled_via_wallet` alone, so a reversal leaves the counted set, which is the rule `product_trading` already applied to the selling rate |
 | four rupee formatters that disagreed on the same amount, one rounding the paise away and one printing a single digit after the point, on the pages where a settled price is read back | one `money` in `web/lib/money.ts`, and the other three deleted rather than left beside it as alternatives | `money.test.ts`, which fails on a rounded amount, on one digit where there should be two, and on a lakh grouped the western way |
 | a failed read answered the browser in the database's own words, naming the table and the constraint to anyone who could provoke one | every route hands the fault to `serverFault` in `web/lib/errors.ts`, which logs it whole and answers with one sentence that carries none of it | `errors.test.ts`, which fails if any of the fault text survives into the response, and if the log receives one field instead of the whole error |
-| one retry key for every leg of a reversal that spans several funding payments, so the second leg is refused as a different request under a used key after the first has already sent money back | the key is derived per payment and amount where every caller passes through, `razorpay/refunds.go:88` | `refunds_test.go`, which fails if two legs of one reversal share a key, if retrying one leg does not reproduce its own, or if two separate reversals of equal amounts collide |
+| one retry key for every leg of a reversal that spans several funding payments, so the second leg is refused as a different request under a used key after the first has already sent money back | the key is derived per payment and amount where every caller passes through, `razorpay/refunds.go:131` | `refunds_test.go`, which fails if two legs of one reversal share a key, if retrying one leg does not reproduce its own, or if two separate reversals of equal amounts collide |
 | the gateway refund rate counted refund objects against captured payments, so four one rupee test refunds read as a shop where nearly everything comes back, and that figure is what prices cover into a quote | refunded paise against captured paise, under its own divisor guard, `razorpay/sales.go:114` | `sales_test.go:67`, where one refund of 45,000 paise against 1,200,000 taken is three percent and not fifty |
 | the gateway sales view had no caller | `cmd/market/main.go:68` hands the gateway to the trading provider, which reads it per five minute window at `trading/trading.go:112` and feeds the refund rate into the conditions the shop prices from | the row above it in the open table, which is the narrower defect that remains once the view is reached: it reads only the first page |
+| an interrupted reversal was never resumed, so a gateway leg that failed or a process that stopped after the allowance was credited left the credit standing with no gateway evidence behind it, and the next refund returned before retrying it | the three things a resumed leg cannot reconstruct, the amount, the wording of the reason and the run, are written down beside the credit in the same transaction, migration `20260903000600`, and read back at `buyer/refund.go:185` instead of being rebuilt from the request in front of us | `refund_test.go`, where a second refund the wallet refuses still finishes the first attempt's reversal under that attempt's key, amount, reason and run rather than this one's, and `reversal_test.go`, where a leg the gateway already holds is counted and not sent again |
 
 Deferred with the reason stated, and on the merits rather than for time. The self
 asserted account id stays, because the fix is either signing the id or issuing per
@@ -332,14 +332,13 @@ down here rather than left for someone to find. The bundled goods carry and the 
 shot run stay as already sequenced in later phases. The mandate is not deferred by
 us at all: the route that charges one is withheld at the account level, which
 section 5 now evidences, so that deferral belongs to the gateway. Resuming an
-interrupted reversal is deferred on its merits too. It needs the first attempt's
-run id persisted, so that a later run presents the gateway the same body under the
-same key and is replayed rather than refused; the shortcut of putting the current
-run id into the retry key instead would remove the last guard against a second
-refund, because a key the gateway has not seen makes a new refund rather than
-replaying the one already made. Two guards sit in front of that one, the wallet
-ledger's own key and the payment's remaining refundable amount, which is why this
-gap is missing evidence and not missing money.
+interrupted reversal is no longer deferred and is the last closed row above. The
+shortcut of putting the current run id into the retry key was rejected on the way
+there: a key the gateway has not seen makes a new refund rather than replaying the
+one already made, so it would have given up a guard against a second refund to buy
+replay. Writing the first attempt's inputs down buys the same replay and keeps the
+guard, and the two guards that stood in front of it, the wallet ledger's own key
+and the payment's remaining refundable amount, are untouched.
 
 One change is not in that table because it was never on the defect list, and it
 matters more than most of what was: a price could not settle below the list total,
@@ -352,11 +351,11 @@ judgement. The cost of that change is a row above: the buyer's gate no longer
 double covers the cost floor, because the alternative was publishing cost to the
 counterparty.
 
-Also deferred, smaller: pagination past the first hundred gateway objects, the
-last write wins session store, the three environment variables that promise
-configurability and are read by nothing, and the duplicate grant in the initial
-schema. None is reachable in a short read, and all are recorded here rather than
-left to be discovered.
+Also deferred, smaller: pagination past the first hundred gateway objects on the
+sales view, the last write wins session store, the three environment variables that
+promise configurability and are read by nothing, and the duplicate grant in the
+initial schema. None is reachable in a short read, and all are recorded here rather
+than left to be discovered.
 
 Two defects were closed by the benchmark rather than by reading the code, which is
 the argument for having built it. The buyer was escalating offers that sat inside

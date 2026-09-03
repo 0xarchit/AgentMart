@@ -54,11 +54,15 @@ type FulfillResult struct {
 	Reason    string `json:"reason"`
 }
 
-// Refund credits the wallet for an eligible fulfilled order atomically.
+// Refund credits the wallet for an eligible fulfilled order atomically. The run
+// is stamped here for the same reason it is on a purchase, and for one more: the
+// credit writes down what a later attempt would need to reverse it at the
+// gateway, and the run id is part of that because the gateway notes carry it.
 func (s *Service) Refund(ctx context.Context, request RefundRequest) (RefundResult, error) {
 	if err := request.validate(); err != nil {
 		return RefundResult{}, err
 	}
+	request.RunID = runid.From(ctx)
 	var result RefundResult
 	if err := s.db.RPC(ctx, "refund_wallet_order", request, &result); err != nil {
 		return RefundResult{}, err
@@ -135,6 +139,8 @@ type RefundRequest struct {
 	OrderID        string `json:"p_order_id"`
 	Reason         string `json:"p_reason"`
 	IdempotencyKey string `json:"p_idempotency_key"`
+	// RunID is filled in by Refund from the surrounding run, not by callers.
+	RunID string `json:"p_run_id,omitempty"`
 }
 
 func (r RefundRequest) validate() error {
