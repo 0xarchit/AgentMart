@@ -9,10 +9,33 @@ declare global {
   }
 }
 
+// What Checkout hands back when a payment succeeds. The signature is the point of
+// it: the server can prove the gateway issued this pair before any money is
+// credited against it.
+type CheckoutResponse = {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+};
+
 export function TopUpButton() {
   const [amount, setAmount] = useState("1000");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Checkout succeeding in the browser is not a credit. The callback goes to the
+  // server to be verified against the gateway, and the wallet moves there or not at
+  // all.
+  async function confirmTopUp(response: CheckoutResponse) {
+    setMessage("Verifying payment...");
+    const confirmation = await fetch("/api/topups/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(response) });
+    const payload = await confirmation.json();
+    if (!confirmation.ok) {
+      setMessage(payload.error ?? "Payment could not be verified. The wallet updates from the gateway webhook if the payment went through.");
+      return;
+    }
+    setMessage(payload.duplicate ? "Payment was already credited." : "Wallet credited.");
+  }
 
   async function beginTopUp() {
     setBusy(true);
@@ -37,7 +60,9 @@ export function TopUpButton() {
       name: "AgentMart",
       description: "Wallet top-up",
       order_id: payload.order_id,
-      handler: () => setMessage("Payment submitted. Wallet credit appears after webhook verification."),
+      handler: (response: CheckoutResponse) => {
+        void confirmTopUp(response);
+      },
       modal: { ondismiss: () => setMessage("Checkout closed") },
     });
     checkout.open();
