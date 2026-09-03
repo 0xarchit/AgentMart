@@ -164,7 +164,7 @@ Row level security is on every table with own-row policies. The money functions
 are revoked from anonymous and signed-in roles and granted to the service role
 only, so the browser cannot reach them even with a valid session.
 
-Migrations live in `supabase/migrations/`, twenty seven of them, applied in
+Migrations live in `supabase/migrations/`, twenty nine of them, applied in
 filename order.
 
 ## Configuration
