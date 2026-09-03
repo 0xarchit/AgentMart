@@ -977,10 +977,8 @@ func routeFor(assessment Assessment, offer Offer, wallet Wallet) (string, string
 
 // firstLine keeps an explanation short enough to sit inside a reason.
 func firstLine(text string) string {
-	if index := strings.IndexByte(text, byte('\n')); index >= 0 {
-		return strings.TrimSpace(text[:index])
-	}
-	return strings.TrimSpace(text)
+	head, _, _ := strings.Cut(text, "\n")
+	return strings.TrimSpace(head)
 }
 
 // joinReason strings together the non-empty parts of an explanation.
