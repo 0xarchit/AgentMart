@@ -36,7 +36,12 @@ export type LedgerRow = {
   amount_paise: number;
 };
 
-/** OfferRow is one priced offer from the trail, used for the attach rate. */
+/**
+ * OfferRow is one `offer_priced` row from the trail. Those are written when the
+ * strategist answers a counter, so an opening quote the buyer simply takes has
+ * no row here, and `bundle_name` is set whenever the shelf pairs the product
+ * rather than when the shop chose to lead with the pair.
+ */
 export type OfferRow = {
   run_id: string | null;
   payload: { bundle_name?: string | null } | null;

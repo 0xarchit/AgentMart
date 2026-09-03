@@ -137,10 +137,14 @@ export default async function AdminPage() {
             basis={`${auditEvents} recorded trail event(s)`}
             tone={figures.refundedCount > 0 ? "coral" : undefined}
           />
+          {/* Counters, not quotes: offer_priced is written when the strategist
+              answers a counter, so an opening quote the buyer simply takes is not
+              in this denominator. Labelling it an attach rate over all offers
+              read as a claim about every sale, and most sales never counter. */}
           <Stat
-            label="Bundle attach rate"
+            label="Partner priced on a counter"
             value={`${figures.attachRate}%`}
-            basis={`${figures.attachedCount} of ${figures.offersPriced} priced offer(s) carried a partner`}
+            basis={`${figures.attachedCount} of ${figures.offersPriced} strategist counter(s) priced a partner alongside`}
             tone="moss"
           />
           <Stat

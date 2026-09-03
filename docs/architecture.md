@@ -37,7 +37,7 @@ BUYER AGENT
   v  "firm price on the Titan XL, one unit"
 MERCHANT AGENT
   4. quote          opening offer: uplift, bundle, or loyalty deal
-  |                 strategist decides, price guard bounds it at cost floor
+  |                 fixed arithmetic on catalog rows, never below the list total
   v  amount + reason + session id
 BUYER AGENT
   5. judge          accept / negotiate / ask_human / decline
@@ -64,6 +64,13 @@ Both sides are agents. The loop ends when the merchant accepts, the buyer
 accepts, the buyer walks, or the server's round cap is hit. Every round
 appends two turns to the session transcript.
 
+The strategist and its price guard act here and nowhere else. Step 4's opening
+offer is fixed arithmetic over catalog rows: it can charge an uplift, attach the
+partner the shelf pairs, and apply a funded loyalty discount, and it can never
+open below the list total. A model is asked for a price only once a buyer has
+countered, and what it answers is clamped to the rails and written to the trail
+before it is sent.
+
 ### 7 to 9. Settlement
 
 - **accept**: the buyer agent accepted, so the purchase goes through the gate.
@@ -88,7 +95,7 @@ appends two turns to the session transcript.
 | --- | --- | --- |
 | session transcript | negotiation server | every turn from both agents, browse through settlement |
 | `agent_run` | buyer | the decision, the reasoning, the amounts, and the conversation, before money moves |
-| `offer_priced` | merchant | every quote and counter with its strategy and margin |
+| `offer_priced` | merchant | every strategist counter with its strategy, rails, guard note and margin |
 | gate decision | gate layer | approved or refused, with the reason |
 | wallet ledger + receipt | wallet layer | the atomic money movement, returning the order id |
 | merchant revenue | fulfilment function | base, final, and the generated uplift per order |
@@ -96,6 +103,14 @@ appends two turns to the session transcript.
 
 Audit is fail closed on both sides. An offer that cannot be explained is not
 sent. A purchase that cannot be recorded does not happen.
+
+The opening quote has no `offer_priced` row of its own, because there is no
+choice to record: the same shelf and the same quantity always produce the same
+number. What explains it is the session transcript, which holds the amount and
+the shop's own words for it, and the buyer's `agent_run`, which holds the amount
+it acted on. That matters more than it sounds, because a buyer that takes the
+opening quote never reaches the strategist at all, and on the published
+comparison every sale did exactly that.
 
 Every row above carries a run id, generated when the person sends the message
 and carried to the shop on each negotiation message, so both sides write into
