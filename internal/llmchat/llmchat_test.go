@@ -322,3 +322,61 @@ func TestAnAnswerCutOffIsAskedAgainInsteadOfActedOn(t *testing.T) {
 		t.Fatalf("kept the cut answer: finish reason %q", decoded.Choices[0].FinishReason)
 	}
 }
+
+// TestATurnThatStillWantsAToolIsNotAFinalAnswer covers the shape a provider is
+// free to send and this adapter used to lose: one turn carrying both a real tool
+// call and the structured answer. The answer used to be returned from inside the
+// loop, which threw away every call beside it. On the negotiating path that meant
+// the shop never heard the counter, while the agent's own number came back as a
+// settled outcome.
+func TestATurnThatStillWantsAToolIsNotAFinalAnswer(t *testing.T) {
+	m := New("probe-model", "key", "https://example.invalid/v1")
+	newTurn := func(calls ...toolCall) *response {
+		decoded := &response{}
+		decoded.Choices = append(decoded.Choices, struct {
+			Message struct {
+				Content   *string    `json:"content"`
+				ToolCalls []toolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{})
+		decoded.Choices[0].Message.ToolCalls = calls
+		return decoded
+	}
+	shaped := toolCall{ID: "call_2", Type: "function",
+		Function: function{Name: structuredOutputTool, Arguments: `{"decision":"buy","reason":"agreed"}`}}
+	real := toolCall{ID: "call_1", Type: "function",
+		Function: function{Name: "counter_offer", Arguments: `{"amount_paise":150000}`}}
+
+	// Either order: the call has to survive and the answer has to wait.
+	for _, turn := range [][]toolCall{{real, shaped}, {shaped, real}} {
+		out := m.adapt(newTurn(turn...), true)
+		if out.ErrorMessage != "" {
+			t.Fatalf("adapt error: %s", out.ErrorMessage)
+		}
+		if len(out.Content.Parts) != 1 {
+			t.Fatalf("parts = %+v, want the tool call alone", out.Content.Parts)
+		}
+		call := out.Content.Parts[0].FunctionCall
+		if call == nil || call.Name != "counter_offer" {
+			t.Fatalf("part = %+v, want the counter the agent asked to send", out.Content.Parts[0])
+		}
+		if call.Args["amount_paise"] != float64(150_000) {
+			t.Fatalf("args = %v, want the amount the agent named", call.Args)
+		}
+	}
+
+	// And a turn that only answers still answers, so the tool path has not been
+	// bought at the cost of the final one.
+	out := m.adapt(newTurn(shaped), true)
+	if len(out.Content.Parts) != 1 || out.Content.Parts[0].Text == "" {
+		t.Fatalf("parts = %+v, want the answer as text", out.Content.Parts)
+	}
+	var answer probeAnswer
+	if err := json.Unmarshal([]byte(out.Content.Parts[0].Text), &answer); err != nil {
+		t.Fatalf("answer is not JSON: %v", err)
+	}
+	if answer.Decision != "buy" {
+		t.Fatalf("decision = %q, want buy", answer.Decision)
+	}
+}

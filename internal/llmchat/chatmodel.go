@@ -387,6 +387,8 @@ func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 	if choice.Message.Content != nil && strings.TrimSpace(*choice.Message.Content) != "" {
 		out.Content.Parts = append(out.Content.Parts, &genai.Part{Text: *choice.Message.Content})
 	}
+	var answer map[string]any
+	answered, calls := false, 0
 	for i, call := range choice.Message.ToolCalls {
 		args := map[string]any{}
 		if strings.TrimSpace(call.Function.Arguments) != "" {
@@ -395,24 +397,34 @@ func (m *Model) adapt(decoded *response, structured bool) *model.LLMResponse {
 				return out
 			}
 		}
-		// The structured-answer call is the reply itself, not a tool to run: hand
-		// its arguments back as the model's text so the caller can parse them
-		// against the schema it asked for.
+		// The structured-answer call is the reply itself, not a tool to run. It is
+		// held rather than returned from inside the loop, because a provider can put
+		// it in the same turn as a real tool call: returning here dropped that call
+		// silently, and on the negotiating path a dropped call meant the shop never
+		// heard the counter while the agent's own number was read as the settled
+		// price. An agent still reaching for a tool has not finished, so the calls
+		// win and the answer waits for the turn after they run.
 		if structured && call.Function.Name == structuredOutputTool {
-			encoded, err := json.Marshal(args)
-			if err != nil {
-				out.ErrorMessage = fmt.Sprintf("encode structured answer: %v", err)
-				return out
+			if !answered {
+				answer, answered = args, true
 			}
-			out.Content.Parts = []*genai.Part{{Text: string(encoded)}}
-			return out
+			continue
 		}
 		id := call.ID
 		if id == "" {
 			id = fmt.Sprintf("call_%d", i)
 		}
+		calls++
 		out.Content.Parts = append(out.Content.Parts,
 			&genai.Part{FunctionCall: &genai.FunctionCall{ID: id, Name: call.Function.Name, Args: args}})
+	}
+	if answered && calls == 0 {
+		encoded, err := json.Marshal(answer)
+		if err != nil {
+			out.ErrorMessage = fmt.Sprintf("encode structured answer: %v", err)
+			return out
+		}
+		out.Content.Parts = []*genai.Part{{Text: string(encoded)}}
 	}
 	return out
 }
