@@ -74,12 +74,16 @@ export default async function DashboardPage() {
       .select("wallet_balance_paise,spend_limit_paise")
       .eq("id", user.id)
       .maybeSingle(),
+    // Read wide enough to classify the credited rows below, then show only the
+    // newest few. A refunded order's revenue row is never reversed, so the uplift
+    // figures have to know which orders came back, and five rows could not tell
+    // them about a hundred credited rows.
     supabase
       .from("orders")
       .select("id,amount_paise,status,created_at")
       .eq("account_id", user.id)
       .order("created_at", { ascending: false })
-      .limit(5),
+      .limit(100),
     // Counted separately from the list above. Reading the length of a five row
     // page reports "5" forever once an account has bought six things.
     supabase
@@ -124,13 +128,23 @@ export default async function DashboardPage() {
   const revenue = (revenueResult.data ?? []) as Revenue[];
   const auditEvents = (auditResult.data ?? []) as AuditEvent[];
   const runs = (runsResult.data ?? []) as Run[];
+  // A cancelled order keeps its credited row: the wallet is credited back and the
+  // order moves to refunded_via_wallet, and nothing reverses the revenue. Counting
+  // those rows showed uplift on money that had already gone back.
+  const refunded = new Set(
+    orders
+      .filter((row) => row.status.startsWith("refunded"))
+      .map((row) => row.id),
+  );
+  const credited = revenue.filter((row) => !refunded.has(row.order_id));
+  const recentOrders = orders.slice(0, 5);
   // Reported separately rather than netted, so a funded discount cannot cancel an
   // upsell and leave one figure that says nothing.
-  const upliftEarned = revenue.reduce(
+  const upliftEarned = credited.reduce(
     (sum, row) => sum + Math.max(row.uplift_paise, 0),
     0,
   );
-  const discountGiven = revenue.reduce(
+  const discountGiven = credited.reduce(
     (sum, row) => sum + Math.max(-row.uplift_paise, 0),
     0,
   );
@@ -177,7 +191,7 @@ export default async function DashboardPage() {
           <Stat
             label="Uplift earned"
             value={money(upliftEarned)}
-            basis={`${revenue.length} credited row(s)`}
+            basis={`${credited.length} credited row(s) read, refunded excluded`}
             tone="moss"
           />
           <Stat
@@ -253,10 +267,10 @@ export default async function DashboardPage() {
           <section className="border border-ink/10 bg-white p-5">
             <h2 className="text-lg font-semibold">Recent orders</h2>
             <div className="mt-4 divide-y divide-ink/10">
-              {orders.length === 0 ? (
+              {recentOrders.length === 0 ? (
                 <p className="py-4 text-sm text-ink/70">No orders yet.</p>
               ) : (
-                orders.map((order) => (
+                recentOrders.map((order) => (
                   <div
                     key={order.id}
                     className="flex items-center justify-between gap-4 py-3 text-sm"

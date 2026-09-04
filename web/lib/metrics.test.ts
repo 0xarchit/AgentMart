@@ -7,6 +7,7 @@ import {
   type OfferRow,
   type OrderRow,
   type ProductRow,
+  type RevenueRow,
 } from "./metrics";
 
 const products: ProductRow[] = [
@@ -235,5 +236,56 @@ describe("the revenue scoreboard", () => {
     expect(figures.offersPriced).toBe(0);
     expect(figures.attachRate).toBe(0);
     expect(figures.reconciled).toBe(true);
+  });
+});
+
+describe("refunded revenue", () => {
+  it("stops counting uplift the merchant already gave back", () => {
+    // Nothing reverses a merchant_revenue row. The wallet is credited and the
+    // order moves to refunded_via_wallet, so summing every row read let a
+    // buy-then-cancel loop grow the top line without any money being earned.
+    const revenue: RevenueRow[] = [
+      {
+        order_id: "kept",
+        base_amount_paise: 100_000,
+        final_amount_paise: 120_000,
+        uplift_paise: 20_000,
+        credited_at: "2026-09-01T10:00:00Z",
+      },
+      {
+        order_id: "cancelled",
+        base_amount_paise: 100_000,
+        final_amount_paise: 120_000,
+        uplift_paise: 20_000,
+        credited_at: "2026-09-01T11:00:00Z",
+      },
+    ];
+    const figures = summarize(
+      [
+        order({ id: "kept" }),
+        order({ id: "cancelled", status: "refunded_via_wallet" }),
+      ],
+      products,
+      revenue,
+    );
+    expect(figures.upliftEarned).toBe(20_000);
+    expect(figures.uplift).toBe(20_000);
+    expect(figures.creditedCount).toBe(1);
+    expect(figures.refundedCount).toBe(1);
+  });
+
+  it("still counts a discount that was not refunded", () => {
+    const revenue: RevenueRow[] = [
+      {
+        order_id: "kept",
+        base_amount_paise: 100_000,
+        final_amount_paise: 90_000,
+        uplift_paise: -10_000,
+        credited_at: "2026-09-01T10:00:00Z",
+      },
+    ];
+    const figures = summarize([order({ id: "kept" })], products, revenue);
+    expect(figures.discountGiven).toBe(10_000);
+    expect(figures.creditedCount).toBe(1);
   });
 });

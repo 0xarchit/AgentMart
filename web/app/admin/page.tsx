@@ -96,6 +96,23 @@ export default async function AdminPage() {
     (event) => event.action === "offer_priced",
   ) as OfferRow[];
   const auditEvents = trail.length;
+  // A read that failed is not an empty table. supabase-js resolves {data: null,
+  // error} rather than throwing, so every figure below was computed from an empty
+  // array and the reconciliation tile printed "Agrees" because zero equals zero.
+  // Losing the orders read is the dangerous one: the ledger comparison filters
+  // debits to orders inside the window, so one failed read zeroes both sides and
+  // the disagreement it should have shown cancels itself out.
+  const unreadable = [
+    ["merchant revenue", revenueResult.error],
+    ["orders", ordersResult.error],
+    ["products", productsResult.error],
+    ["runs", runsResult.error],
+    ["trail", auditResult.error],
+    ["wallet movements", ledgerResult.error],
+  ]
+    .filter(([, error]) => error !== null && error !== undefined)
+    .map(([name]) => name as string);
+  const readsFailed = unreadable.length > 0;
   const figures = summarize(orders, products, revenue, ledger, offers, trail);
 
   return (
@@ -116,20 +133,21 @@ export default async function AdminPage() {
         <div className="mt-8 grid gap-4 md:grid-cols-4">
           <Stat
             label="Uplift earned"
-            value={money(figures.upliftEarned)}
-            basis={`${revenue.length} credited row(s)`}
-            tone="moss"
+            value={readsFailed ? "Unavailable" : money(figures.upliftEarned)}
+            basis={`${figures.creditedCount} credited row(s) read, refunded orders excluded`}
+            tone={readsFailed ? "coral" : "moss"}
           />
           <Stat
             label="Discount given"
-            value={money(figures.discountGiven)}
-            basis="funded from loyalty entitlement"
-            tone={figures.discountGiven > 0 ? "coral" : "moss"}
+            value={readsFailed ? "Unavailable" : money(figures.discountGiven)}
+            basis="funded from loyalty entitlement, over the same rows"
+            tone={readsFailed || figures.discountGiven > 0 ? "coral" : "moss"}
           />
           <Stat
             label="Settled value"
-            value={money(figures.settledValue)}
-            basis={`${figures.settledCount} settled order(s)`}
+            value={readsFailed ? "Unavailable" : money(figures.settledValue)}
+            basis={`${figures.settledCount} settled order(s) in the newest ${orders.length} read`}
+            tone={readsFailed ? "coral" : undefined}
           />
           <Stat
             label="Margin held above cost"
@@ -139,7 +157,7 @@ export default async function AdminPage() {
           <Stat
             label="Refunded"
             value={String(figures.refundedCount)}
-            basis={`${auditEvents} recorded trail event(s)`}
+            basis={`${auditEvents} trail event(s) read`}
             tone={figures.refundedCount > 0 ? "coral" : undefined}
           />
           {/* Counters, not quotes: offer_priced is written when the strategist
@@ -160,14 +178,20 @@ export default async function AdminPage() {
           <Stat
             label="Reconciliation"
             value={
-              figures.reconciled ? "Agrees" : money(figures.ledgerDifference)
+              readsFailed
+                ? "Cannot check"
+                : figures.reconciled
+                  ? "Agrees"
+                  : money(figures.ledgerDifference)
             }
             basis={
-              figures.reconciled
-                ? "settled value matches the wallet debits"
-                : "settled value and wallet debits disagree"
+              readsFailed
+                ? `could not read: ${unreadable.join(", ")}. Reload before acting on this page.`
+                : figures.reconciled
+                  ? "settled value matches the wallet debits"
+                  : "settled value and wallet debits disagree"
             }
-            tone={figures.reconciled ? "moss" : "coral"}
+            tone={readsFailed || !figures.reconciled ? "coral" : "moss"}
           />
         </div>
 

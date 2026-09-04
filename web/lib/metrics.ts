@@ -60,6 +60,8 @@ export type Figures = {
   margin: number;
   marginPct: number;
   pricedCount: number;
+  /** creditedCount is the revenue rows counted, refunded orders excluded. */
+  creditedCount: number;
   attachRate: number;
   attachedCount: number;
   offersPriced: number;
@@ -158,6 +160,17 @@ export function summarize(
     (offer) => (offer.payload?.bundle_name ?? "").trim() !== "",
   ).length;
 
+  // A refunded order's revenue row is never reversed. refund_wallet_order credits
+  // the wallet back and moves the order to refunded_via_wallet, and the credited
+  // row stands as it was, so summing every row read counted uplift the merchant had
+  // already given back and a buy-then-cancel loop inflated the top line. Only
+  // orders inside the window above can be recognised as refunded, so a row whose
+  // order is older than the page is still counted; the labels below say the figures
+  // cover the rows read rather than all time.
+  const earned = revenue.filter(
+    (row) => !refundedIds.has(row.order_id),
+  );
+
   const runByOrder: Record<string, string> = {};
   for (const row of trail) {
     if (row.order_id && row.run_id) {
@@ -166,17 +179,18 @@ export function summarize(
   }
 
   return {
-    uplift: revenue.reduce((sum, row) => sum + (row.uplift_paise ?? 0), 0),
+    uplift: earned.reduce((sum, row) => sum + (row.uplift_paise ?? 0), 0),
     // Uplift and discount are reported separately on purpose. A single net figure
     // cancels a funded discount against an upsell and hides both.
-    upliftEarned: revenue.reduce(
+    upliftEarned: earned.reduce(
       (sum, row) => sum + Math.max(row.uplift_paise ?? 0, 0),
       0,
     ),
-    discountGiven: revenue.reduce(
+    discountGiven: earned.reduce(
       (sum, row) => sum + Math.max(-(row.uplift_paise ?? 0), 0),
       0,
     ),
+    creditedCount: earned.length,
     settledCount: fulfilled.length,
     settledValue,
     refundedCount: refunded.length,
