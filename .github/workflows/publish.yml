@@ -86,7 +86,8 @@ jobs:
 
           Container images for this same commit are in this repository's packages,
           including an all-in-one image that runs all three services with only the
-          dashboard exposed.
+          dashboard exposed, and one with both agents and only the buyer exposed,
+          which is the shape a host that gives a service a single public port wants.
 
           Check a download against `SHA256SUMS` before running it.
           NOTES
