@@ -40,6 +40,12 @@ type Negotiator struct {
 	// runs under. One shared slot would let two buyers negotiating at the same
 	// time price against each other's floor, ask and bid.
 	inflight sync.Map
+	// assembled holds the facts the campaign node put together for one pass, keyed
+	// the same way, so the guard can record the facts the price was actually chosen
+	// on. Only the strategist saw them otherwise: the guard re-derived a bare set
+	// from the input, which carries no campaign and no trading figures, and wrote
+	// those zeroes to the trail as though they had been observed.
+	assembled sync.Map
 }
 
 // inputFor returns the negotiation input belonging to the graph pass this node is
@@ -54,6 +60,20 @@ func (n *Negotiator) inputFor(sessionID string) (negotiation.CounterInput, error
 		return negotiation.CounterInput{}, fmt.Errorf("no negotiation input in flight")
 	}
 	return *input, nil
+}
+
+// factsFor returns the facts the campaign node assembled for this pass. The guard
+// cannot rebuild them: a second campaign read can answer differently, and the copy
+// the model echoes back inside its own StrategyChoice is model-authored and has no
+// business in an audit row. The fallback is unreachable while the campaign node
+// runs first, and it keeps the offer alive rather than failing it over bookkeeping.
+func (n *Negotiator) factsFor(sessionID string, input negotiation.CounterInput) Facts {
+	if stored, ok := n.assembled.Load(sessionID); ok {
+		if facts, ok := stored.(*Facts); ok && facts != nil {
+			return *facts
+		}
+	}
+	return factsFrom(input)
 }
 
 // New builds the merchant graph. Returns (nil, nil) when no model is
@@ -143,6 +163,7 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 			facts.LoyaltyTier, facts.LoyaltyDiscountPct = tier, pct
 			facts.CampaignNotes = notes
 			n.addTradingConditions(ctx, &facts, input.Product.ID)
+			n.assembled.Store(ctx.SessionID(), &facts)
 			return facts, nil
 		}, workflow.NodeConfig{})
 
@@ -160,7 +181,7 @@ func (n *Negotiator) buildGraph(cfg Config) (agent.Agent, error) {
 			if err != nil {
 				return Decision{}, err
 			}
-			facts := factsFrom(input)
+			facts := n.factsFor(ctx.SessionID(), input)
 			amount, note := clampToRails(choice.AmountPaise, facts.FloorPaise, facts.BuyerPaise, facts.MinAcceptablePaise, facts.AskPaise)
 			strategy := choice.Strategy
 			if strategy == "" {
@@ -275,6 +296,7 @@ func (n *Negotiator) Decide(parent context.Context, input negotiation.CounterInp
 	sessionID := fmt.Sprintf("merchant-%d", n.sessions.Add(1))
 	n.inflight.Store(sessionID, &input)
 	defer n.inflight.Delete(sessionID)
+	defer n.assembled.Delete(sessionID)
 
 	run, err := runner.NewInMemory("agentmart-merchant", n.graph)
 	if err != nil {

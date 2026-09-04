@@ -344,3 +344,58 @@ func TestAnOfferThatCannotBeExplainedIsNotSent(t *testing.T) {
 		t.Fatal("Counter handed the buyer a price the shop could not explain")
 	}
 }
+
+// stubCampaigns funds one fixed discount, standing in for the campaign rows the
+// market binary reads.
+type stubCampaigns struct{}
+
+func (stubCampaigns) Eligibility(context.Context, negotiation.CounterInput) (string, int, []string, error) {
+	return "gold", 15, []string{"second purchase this month"}, nil
+}
+
+// TestTheTrailRecordsTheFactsThePriceWasChosenOn covers the half of the audit row
+// that was always empty. The campaign node assembles the loyalty tier, the funded
+// percentage, its notes and the shop's own trading figures, and the strategist is
+// shown all of it. The guard then rebuilt a bare set from the negotiation input,
+// which carries none of those, so every offer_priced row in the trail claimed a
+// standard tier, no funded discount, no notes and nothing observed, whatever the
+// price had actually been reasoned from.
+func TestTheTrailRecordsTheFactsThePriceWasChosenOn(t *testing.T) {
+	provider := strategistProvider(t, StrategyChoice{
+		Strategy: StrategyHold, AmountPaise: 181_339, Reason: "the ask is fair",
+	})
+	trail := &offerAuditor{}
+	merchant, err := New(Config{Model: "stub", APIKey: "key", BaseURL: provider.URL},
+		stubCampaigns{},
+		stubTrading{conditions: negotiation.TradingConditions{
+			Observed: true, UnitsSold: 14, StockCoverDays: 3, RefundRatePct: 8, RefundRateKnown: true,
+		}},
+		trail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := merchant.Decide(t.Context(), counterInput(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(trail.seen) != 1 {
+		t.Fatalf("wrote %d explanations, want exactly one", len(trail.seen))
+	}
+	facts := trail.seen[0].facts
+	if facts.LoyaltyTier != "gold" || facts.LoyaltyDiscountPct != 15 {
+		t.Fatalf("trail records tier %q at %d%%, want the campaign the strategist was shown", facts.LoyaltyTier, facts.LoyaltyDiscountPct)
+	}
+	if len(facts.CampaignNotes) == 0 {
+		t.Fatal("the trail carries no reason for the funded discount, which is what makes a price explainable")
+	}
+	if !facts.TradingObserved || facts.UnitsSoldRecently != 14 || facts.StockCoverDays != 3 {
+		t.Fatalf("trail records trading facts %+v, want the figures the shop observed", facts)
+	}
+	if !facts.RefundRateKnown || facts.RefundRatePct != 8 {
+		t.Fatalf("trail records refund confidence %+v, want what was measured", facts)
+	}
+	// The rails still have to be the ones the guard held, not a second reading.
+	if facts.FloorPaise != 110_000 || facts.AskPaise != 181_339 {
+		t.Fatalf("trail records rails %+v, want the ones the guard held", facts)
+	}
+}
