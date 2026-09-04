@@ -12,9 +12,12 @@
 
 name: containers
 
+# Tags only. Building four images on every push to main spent ten minutes of compute
+# on commits that were often a documentation line, and an image nobody asked for is
+# not worth the wait. A version is the event that wants images; anything else can ask
+# for them by hand.
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -72,7 +75,10 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tags="$tags --tag ${repo}:${GITHUB_REF_NAME} --tag ${repo}:latest"
           else
-            tags="$tags --tag ${repo}:main"
+            # Only a manual run reaches here, since a push no longer builds images.
+            # It is named for the branch it was asked for rather than left as a bare
+            # commit, so an unreleased build is recognisable.
+            tags="$tags --tag ${repo}:${GITHUB_REF_NAME}"
           fi
           echo "args=$tags" >> "$GITHUB_OUTPUT"
 

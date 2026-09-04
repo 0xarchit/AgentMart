@@ -7,10 +7,23 @@
 
 name: gate
 
-# A push to main reaches this through the containers workflow, which calls it and
-# then publishes from the commit that passed. Running it here as well would run it
-# twice for one push.
+# Runs on its own for a pull request and for a push to main, and the release and
+# container workflows call it as the job they depend on, so nothing is published from
+# a commit that did not pass it.
+#
+# The path filter is the same argument as the one that made publishing tag only: a
+# push that changes only prose has nothing for a compiler or a test to disagree with.
+# A push that touches both prose and code still runs, because the filter only skips
+# when every changed file matches it.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "supabase/migrations/**"
+      - ".gitignore"
+      - ".dockerignore"
   pull_request:
   workflow_call:
 
