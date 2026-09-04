@@ -8,8 +8,11 @@ import (
 	"agentmart/internal/catalog"
 )
 
+// priced is a product on the shelf. The stock matters for a partner: a bundle is
+// only attached when the shop has the partner to give, so a helper without it
+// would quietly stop every combo test from having a combo.
 func priced(id string, price, cost int64) Priced {
-	return Priced{Product: catalog.Product{ID: id, Name: id, PricePaise: price}, CostPaise: cost}
+	return Priced{Product: catalog.Product{ID: id, Name: id, PricePaise: price, Stock: 5}, CostPaise: cost}
 }
 
 func TestAnOpeningOfferNeverStartsBelowList(t *testing.T) {
@@ -130,5 +133,38 @@ func TestACounterAboveTheAskSettlesAtTheAsk(t *testing.T) {
 	// Landing exactly on the ask is unchanged, which is the case the old test covered.
 	if exact := Decide(session, 100000, 70000); !exact.Accepted || exact.FinalPaise != 100000 {
 		t.Fatalf("meeting the ask exactly = %+v", exact)
+	}
+}
+
+// A partner nobody can ship must not be charged for. The gate and the fulfilment
+// function both check the stock of the named product alone, and the attached goods
+// are inside the settled amount, so an out of stock partner was quoted, paid for
+// and never allocated. The ask falls back to the main product on its own.
+func TestAnEmptyShelfPartnerIsNotAttached(t *testing.T) {
+	main := priced("trimmer", 200000, 140000)
+	main.Product.ComboDiscountPct = 15
+	main.Product.ComboWith = strPtr("cream")
+	partner := priced("cream", 45000, 30000)
+	partner.Product.Stock = 0
+
+	offer, err := OpeningOffer(main, &partner, 1, TradingConditions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offer.Kind == KindCombo || offer.Bundle != nil || offer.BundledPaise != 0 {
+		t.Fatalf("offer = %+v, want no partner attached: the buyer would pay for goods the shop has none of", offer)
+	}
+	if offer.FinalPaise != 200000 {
+		t.Fatalf("ask = %d, want the main product alone at 200000", offer.FinalPaise)
+	}
+
+	// One unit short is still short, and the count is what decides it.
+	partner.Product.Stock = 1
+	two, err := OpeningOffer(main, &partner, 2, TradingConditions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if two.Bundle != nil {
+		t.Fatalf("offer = %+v, want no partner when one unit cannot cover two", two)
 	}
 }

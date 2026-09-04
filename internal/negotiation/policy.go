@@ -78,8 +78,13 @@ func OpeningOffer(main Priced, partner *Priced, quantity int, conditions Trading
 	reason := reasonFrom(reasons)
 	offer := Offer{Kind: KindUplift, BasePaise: base, FinalPaise: final, Reason: reason}
 
+	// The partner has to be on the shelf. Nothing downstream checks it: the gate and
+	// the fulfilment function both check the stock of the named product only, and the
+	// attached goods are charged for inside the settled amount, so a partner with
+	// none left was quoted, paid for and never allocated. Not attaching it is the
+	// whole fix, and it can only make the ask smaller.
 	pct := main.Product.ComboDiscountPct
-	if partner != nil && pct > 0 && pct < 100 && main.Product.ComboWith != nil {
+	if partner != nil && pct > 0 && pct < 100 && main.Product.ComboWith != nil && partner.Product.Stock >= quantity {
 		if partner.Product.PricePaise <= 0 || partner.Product.PricePaise > math.MaxInt64/int64(quantity) {
 			return Offer{}, ErrInvalidProposal
 		}

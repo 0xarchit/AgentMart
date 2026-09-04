@@ -316,7 +316,7 @@ not a redesign.
 
 | Defect | Where | Effect |
 | --- | --- | --- |
-| bundled goods not carried through the settling agent | `shopgraph/builder.go` negotiate branch | a negotiated bundle is still measured against the main product alone |
+| an attached partner is charged for but never allocated | `fulfill_wallet_order` decrements the named product only, and an order row holds one product | a bundled sale does not reserve the partner it sold, so two concurrent bundles can oversell the last unit, and a cancellation restocks the named product alone. The shop can no longer promise a partner it has none of, which is the narrow part; carrying the partner as its own order line is a schema change and a second stock check in the gate |
 | the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
 | no drawable mandate on this account | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object, and the route that would charge a mandate is withheld per account rather than by test mode |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
@@ -335,6 +335,7 @@ asserting it.
 
 | Was | Closed by | Proved by |
 | --- | --- | --- |
+| a bundle was measured against the main product alone, and an out of stock partner was attached and charged for anyway | the run records the basket it priced and settlement reads the partner back from it, `shopgraph/builder.go` and migration `20260904000200`, and the opening offer attaches a partner only when the shelf can cover the count, `negotiation/policy.go` | `shopgraph_test.go`, where a negotiated result carries the attached amount the run recorded rather than the zero a model can write, and `orchestrator_test.go`, where an empty shelf partner is not attached at all |
 | one shared negotiation slot for all callers | the in flight input is keyed by the graph pass that stored it, `marketgraph/nodes.go:275`, and deleted on the way out | structure rather than a test: `nodes.go:38-42` is a `sync.Map` keyed per pass, so there is no shared cell left to cross |
 | the price freshness rail could not fire | the instant a quote was observed travels with the request instead of being read as now, `buyer/purchase.go:174` | `stale_price_test.go:39` refuses a quote older than the window, `:49` still buys inside it, and `:56` treats no observation as priced now |
 | thirteen money path refusals returning with no trail row, where this list said three, including the amount integrity refusal that fires before the gate is consulted | one recorder per boundary that every refusal leaves through, `buyer/purchase.go:129` and `buyer/refund.go:80` | `purchase_trail_test.go` and `refund_test.go`, which fail both on a missing row and on a doubled one |
@@ -355,8 +356,12 @@ Deferred with the reason stated, and on the merits rather than for time. The sel
 asserted account id stays, because the fix is either signing the id or issuing per
 buyer tokens and neither is an hour's work; it is an authorization hole in the
 personalisation path only, it cannot move money past the gate, and it is written
-down here rather than left for someone to find. The bundled goods carry stays as
-already sequenced in a later phase. The mandate is not deferred by
+down here rather than left for someone to find. Carrying an attached partner as
+its own order line stays deferred, now with the narrow half of it closed: the
+shop no longer promises a partner it has none of, and what remains is that a
+bundled sale does not reserve the one it sold. The rest needs an order line, a
+second stock check in the gate and a restock path, which is a change to the money
+path rather than a fix to it. The mandate is not deferred by
 us at all: the route that charges one is withheld at the account level, which
 section 5 now evidences, so that deferral belongs to the gateway. Resuming an
 interrupted reversal is no longer deferred and is the second closed row above.
