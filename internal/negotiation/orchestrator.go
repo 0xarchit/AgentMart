@@ -28,7 +28,14 @@ func Decide(s Session, buyerPaise int64, floor int64) Decision {
 		floor = 0
 	}
 	if buyerPaise >= ask {
-		return Decision{Accepted: true, FinalPaise: buyerPaise, Reason: "buyer met the asking price"}
+		// Settled at the ask, not at whatever the buyer offered. Meeting the price is
+		// an acceptance whether the number lands on it or above it, and charging more
+		// than the shop asked for is the one thing clampToRails refuses to let even
+		// the merchant's own model do: "the ask wins over every floor". This branch
+		// returns before that guard is reached, so it holds the same line here. The
+		// amount arriving is written by the buyer's agent, and past this point only
+		// the spend limit and the wallet balance stand between it and the ledger.
+		return Decision{Accepted: true, FinalPaise: ask, Reason: "buyer met the asking price"}
 	}
 	round := s.Round
 	if round < 1 {

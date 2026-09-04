@@ -108,3 +108,27 @@ func counteredSession(askPaise int64, rounds int) Session {
 }
 
 func strPtr(v string) *string { return &v }
+
+// TestACounterAboveTheAskSettlesAtTheAsk closes the one path where a model wrote
+// the settled amount and nothing bounded it. The counter arrives from the buyer's
+// negotiating agent, which passes its own amount_paise straight through, and this
+// branch returned it verbatim as an accepted price. Everything downstream then
+// treated it as the shop's own figure: the session stored it, the buyer recorded
+// it as the price the shop agreed to, and the gate approved it because the base
+// still matched the unit price and the total was inside the wallet's rails. The
+// merchant's own model is clamped to the ask twelve lines further down; the
+// buyer's was not.
+func TestACounterAboveTheAskSettlesAtTheAsk(t *testing.T) {
+	session := counteredSession(100000, 1)
+	decision := Decide(session, 250000, 70000)
+	if !decision.Accepted {
+		t.Fatalf("a buyer offering more than the ask is still an acceptance: %+v", decision)
+	}
+	if decision.FinalPaise != 100000 {
+		t.Fatalf("settled at %d, want the standing ask of 100000. Charging above the ask is what the price guard refuses even the merchant.", decision.FinalPaise)
+	}
+	// Landing exactly on the ask is unchanged, which is the case the old test covered.
+	if exact := Decide(session, 100000, 70000); !exact.Accepted || exact.FinalPaise != 100000 {
+		t.Fatalf("meeting the ask exactly = %+v", exact)
+	}
+}
