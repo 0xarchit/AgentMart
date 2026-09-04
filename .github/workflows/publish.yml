@@ -1,0 +1,191 @@
+# Everything a version produces, in one run: the binaries on the release and the four
+# images in the registry, both from the same commit and both behind the same gate.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# This was two workflows. They both called the gate, and a reusable workflow's
+# concurrency group is shared by its callers, so the two gates cancelled each other
+# and whichever lost took its publish with it. One run also means the gate is paid for
+# once per version instead of twice.
+
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No cancel-in-progress. A half cancelled publish is worse than a duplicate one.
+concurrency:
+  group: publish-${{ github.ref }}
+
+jobs:
+  gate:
+    uses: ./.github/workflows/gate.yml
+
+  # Windows and Linux are the two that matter here. Linux carries arm64 as well,
+  # because that is what a cheap server is now, and macOS is here because a reviewer's
+  # laptop is one. Adding a target is one entry in the list.
+  #
+  # The binaries are published as they are, not inside archives: they are single static
+  # files with nothing to unpack, and naming each one for its platform means a download
+  # needs no reading to identify.
+  binaries:
+    needs: gate
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            suffix=""
+            [ "$os" = "windows" ] && suffix=".exe"
+            for binary in market user; do
+              GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" \
+                -o "dist/${binary}_${version}_${os}_${arch}${suffix}" "./cmd/$binary"
+            done
+          done
+          # Only the binaries, or the sums file ends up listing itself.
+          (cd dist && sha256sum market_* user_* > SHA256SUMS)
+          ls -l dist
+
+      # The notes go through a heredoc rather than an inline argument: YAML strips the
+      # block's own indentation, so what reaches Markdown is flush left and not a code
+      # fence.
+      - name: notes
+        run: |
+          cat > dist/NOTES.md <<'NOTES'
+          Merchant and buyer agents, built from this tag by the workflow that published it.
+
+          Two binaries per platform, `market` and `user`, each a single static file
+          that needs nothing installed alongside it. They read their configuration from
+          the environment, and `.env.example` lists every variable.
+          The merchant will not start without Upstash Redis, which is deliberate: the
+          session store is where a negotiation's state lives. The buyer needs the
+          merchant's two endpoints, `USER_MARKET_MCP_ENDPOINT` and
+          `USER_MARKET_A2A_ENDPOINT`.
+
+          Container images for this same commit are in this repository's packages,
+          including an all-in-one image that runs all three services with only the
+          dashboard exposed.
+
+          Check a download against `SHA256SUMS` before running it.
+          NOTES
+          cat dist/NOTES.md
+
+      # gh is on the runner already, so this needs no third party action and no token
+      # beyond the one the workflow is given.
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME}"
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" dist/market_* dist/user_* dist/SHA256SUMS --clobber
+          else
+            gh release create "$version" dist/market_* dist/user_* dist/SHA256SUMS \
+              --title "$version" --notes-file dist/NOTES.md
+          fi
+
+  # Four images: one per service, and one that runs all three with only the dashboard
+  # exposed. amd64 only. A Node build under emulation is slow enough to be worth adding
+  # on purpose rather than by default, and nothing is deployed to arm yet.
+  images:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: agentmart-market
+            file: deploy/Containerfile.market
+            origin: "false"
+          - image: agentmart-user
+            file: deploy/Containerfile.user
+            origin: "false"
+          - image: agentmart-web
+            file: deploy/Containerfile.web
+            origin: "true"
+          - image: aio_agentmart
+            file: deploy/Containerfile.aio
+            origin: "true"
+    steps:
+      - uses: actions/checkout@v5
+
+      # The owner may be capitalised; a registry path may not be.
+      - name: names
+        id: names
+        run: |
+          set -eu
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "repo=ghcr.io/${owner}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: tags
+        id: tags
+        run: |
+          set -eu
+          repo="${{ steps.names.outputs.repo }}"
+          # Always the commit, so an image can be traced to source without a tag.
+          tags="--tag ${repo}:sha-${GITHUB_SHA:0:12}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tags="$tags --tag ${repo}:${GITHUB_REF_NAME} --tag ${repo}:latest"
+          else
+            # Only a manual run reaches here. It is named for the branch it was asked
+            # for rather than left as a bare commit, so an unreleased build is
+            # recognisable.
+            tags="$tags --tag ${repo}:${GITHUB_REF_NAME}"
+          fi
+          echo "args=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Plain docker build: buildx and its cache backends would add moving parts for a
+      # four image build that finishes in minutes without them.
+      - name: build
+        run: |
+          set -eu
+          # Only the two images that compile the dashboard declare this argument, and
+          # passing it to the others would warn on every build.
+          origin=""
+          if [ "${{ matrix.origin }}" = "true" ]; then
+            origin="--build-arg NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}"
+          fi
+          docker build \
+            $origin \
+            --file "${{ matrix.file }}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            ${{ steps.tags.outputs.args }} \
+            .
+        env:
+          # The dashboard's own origin is compiled into its bundle, so it is set here
+          # rather than at run time. Override it in the repository variables once the
+          # deployed origin is known.
+          NEXT_PUBLIC_APP_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
+
+      - name: push
+        run: docker push --all-tags "${{ steps.names.outputs.repo }}"
