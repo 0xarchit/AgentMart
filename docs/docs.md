@@ -182,15 +182,23 @@ filename order.
 | `MARKET_SHARED_TOKEN` | the token the buyer presents to the merchant |
 | `USER_MARKET_MCP_ENDPOINT`, `USER_MARKET_A2A_ENDPOINT` | where the buyer finds the merchant |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | the Upstash Redis REST endpoint and token; the merchant exits at startup without them, the buyer starts and silently loses per chat conversation memory, so a follow up referring back to what was already shown stops resolving |
-| `DEFAULT_SPEND_LIMIT_PAISE` | the standing limit a new account starts with |
+| `DEFAULT_SPEND_LIMIT_PAISE` | nothing: see below |
 
 `ADK_MODEL_NAME` is a comma separated chain. Each model is retried five times,
 three seconds apart, before the next is tried, because a free pool flaps per call
 and reliability is worth the latency. A spent allowance is not retried.
 
-Three variables are currently read by no code and are documented as such rather
-than removed silently: `REFUND_WINDOW_MINUTES`, `WALLET_TOPUP_MAX_PAISE` and
-`RAZORPAY_ACCOUNT_NUMBER`.
+Four variables are currently read by no code and are documented as such rather
+than removed silently: `REFUND_WINDOW_MINUTES`, `WALLET_TOPUP_MAX_PAISE`,
+`RAZORPAY_ACCOUNT_NUMBER` and `DEFAULT_SPEND_LIMIT_PAISE`.
+
+The last of those is worth naming separately, because it reads like a setting and
+is not one. The standing limit a new account starts with is INR 2500.00, written
+in two places in the schema: the `spend_limit_paise` column default and the value
+the signup trigger inserts. Both are Postgres, which no environment variable
+reaches, so changing that limit for new accounts means a migration rather than a
+deployment setting. An operator who set this expecting new accounts to start
+somewhere else would have been given no error and no effect.
 
 ## Languages, and why each one is here
 
