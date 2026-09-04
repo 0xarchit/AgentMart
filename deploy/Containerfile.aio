@@ -1,0 +1,74 @@
+# All three services in one container, for a demo that needs one thing started and
+# one port open. Only the dashboard is published; the buyer talks to the merchant
+# over localhost inside the container, so nothing between them crosses a network.
+#
+#   podman build -f deploy/Containerfile.aio -t aio_agentmart .
+#   podman run --rm --env-file .env -p 3000:3000 -v agentmart-data:/data aio_agentmart
+#
+# The separate images are the better shape for anything real: three processes with
+# three lifetimes in one container means one restart takes all three down. This one
+# exists so a demo is one command.
+
+FROM docker.io/library/golang:1.26-alpine AS go-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/market ./cmd/market \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/user ./cmd/user
+
+FROM docker.io/library/node:24-alpine AS web-deps
+WORKDIR /app
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+FROM docker.io/library/node:24-alpine AS web-build
+WORKDIR /app
+COPY --from=web-deps /app/node_modules ./node_modules
+COPY web ./
+ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM docker.io/library/node:24-alpine AS run
+WORKDIR /app
+
+# Node for the dashboard, a shell and wget for the start order, and the two static
+# Go binaries. wget is busybox's, already in the base image.
+COPY --from=go-build /out/market /usr/local/bin/market
+COPY --from=go-build /out/user /usr/local/bin/user
+COPY --from=web-build --chown=node:node /app/.next/standalone ./web/
+COPY --from=web-build --chown=node:node /app/.next/static ./web/.next/static
+COPY --from=web-build --chown=node:node /app/public ./web/public
+COPY deploy/aio-entrypoint.sh /usr/local/bin/aio-entrypoint.sh
+
+# Root certificates are already here for npm, and the two Go binaries need them for
+# the same HTTPS. Stated rather than assumed. /data is where the buyer keeps its
+# Telegram offset, so the account that runs it has to own it.
+RUN apk add --no-cache ca-certificates \
+ && chmod +x /usr/local/bin/aio-entrypoint.sh \
+ && mkdir -p /data \
+ && chown node:node /data
+
+# The internal wiring, which is what makes this one container rather than three.
+# Every address is loopback: the merchant and the buyer are not reachable from
+# outside, and only the dashboard's port is exposed.
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    MARKET_PORT=8081 \
+    MARKET_ADDR=:8081 \
+    MARKET_AGENT_CARD_URL=http://127.0.0.1:8081/a2a/ \
+    USER_AGENT_ADDR=:8082 \
+    USER_AGENT_CARD_URL=http://127.0.0.1:8082/a2a/ \
+    USER_MARKET_MCP_ENDPOINT=http://127.0.0.1:8081/mcp \
+    USER_MARKET_A2A_ENDPOINT=http://127.0.0.1:8081/a2a/.well-known/agent-card.json \
+    TELEGRAM_OFFSET_FILE=/data/telegram-offset.json
+
+VOLUME /data
+EXPOSE 3000
+USER node
+ENTRYPOINT ["/usr/local/bin/aio-entrypoint.sh"]

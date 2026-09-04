@@ -1,0 +1,7 @@
+# Everything else is left to core.autocrlf, which is how this repository has always
+# handled line endings. These two are exceptions because they are read inside Linux
+# images, where a carriage return is part of the command rather than invisible: a
+# script checked out with CRLF fails at its own shebang, and a container definition
+# with CRLF can break a line continuation.
+*.sh text eol=lf
+Containerfile* text eol=lf

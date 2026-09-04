@@ -1,0 +1,50 @@
+# The buyer service: the Telegram bot, the shopping graph, the gate, and the buyer
+# published as an agent other agents can quote against. Build from the repository
+# root, because the Go module lives there:
+#
+#   podman build -f deploy/Containerfile.user -t agentmart-user .
+#   podman run --rm --env-file .env -p 8082:8082 -v agentmart-data:/data agentmart-user
+#
+# The volume holds the Telegram update offset. Without it a restart re-reads whatever
+# Telegram still has queued, which means answering the same messages twice.
+
+FROM docker.io/library/golang:1.26-alpine AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/user ./cmd/user
+
+FROM docker.io/library/alpine:3 AS run
+
+# Root certificates for the HTTPS this depends on, an unprivileged account, and a
+# directory that account can write the update offset into. The binary creates the
+# file, but it cannot create a directory at the root of the filesystem.
+RUN apk add --no-cache ca-certificates \
+ && adduser -D -u 10001 agentmart \
+ && mkdir -p /data \
+ && chown agentmart:agentmart /data
+
+COPY --from=build /out/user /usr/local/bin/user
+
+# Where the merchant is. These defaults describe one host talking to itself, which is
+# the all-in-one arrangement; point them at the market service when the two run as
+# separate containers.
+ENV USER_AGENT_ADDR=:8082 \
+    USER_AGENT_CARD_URL=http://127.0.0.1:8082/a2a/ \
+    USER_MARKET_MCP_ENDPOINT=http://127.0.0.1:8081/mcp \
+    USER_MARKET_A2A_ENDPOINT=http://127.0.0.1:8081/a2a/.well-known/agent-card.json \
+    TELEGRAM_OFFSET_FILE=/data/telegram-offset.json
+
+VOLUME /data
+EXPOSE 8082
+USER agentmart
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -q -O- http://127.0.0.1:8082/health >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["user"]

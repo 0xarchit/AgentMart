@@ -1,0 +1,36 @@
+# Everything an image build has no business reading. The two Go binaries need
+# go.mod, go.sum, cmd and internal; the web image needs web without its installed
+# modules or its previous build output. Nothing else belongs in a build context.
+
+.git
+.github
+.gitignore
+.codegraph
+.claude
+.lean-ctx
+
+# Never send credentials to a build. The images read their configuration at run
+# time, from --env-file or from the platform.
+.env
+.env.*
+!.env.example
+
+# Workspace and scratch material, none of it shipped.
+Agents
+bin
+dist
+*.log
+
+# Reinstalled and rebuilt inside the image, and both are large enough to make the
+# context transfer the slowest part of a build if they are sent.
+web/node_modules
+web/.next
+web/tsconfig.tsbuildinfo
+node_modules
+
+# Documentation, database migrations and the local runner are not inputs to any
+# image. Migrations are applied to the project, not carried in a container.
+docs
+supabase
+*.md
+run-local.ps1

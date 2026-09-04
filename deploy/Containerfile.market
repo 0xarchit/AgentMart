@@ -1,0 +1,46 @@
+# The merchant service: catalog, pricing, negotiation, and the two endpoints the
+# buyer talks to. Build from the repository root, because the Go module lives there:
+#
+#   podman build -f deploy/Containerfile.market -t agentmart-market .
+#   podman run --rm --env-file .env -p 8081:8081 agentmart-market
+#
+# It will not start without Upstash Redis, which is deliberate: the session store is
+# where a negotiation's state lives, and a lost session is a lost price.
+
+FROM docker.io/library/golang:1.26-alpine AS build
+WORKDIR /src
+
+# Dependencies first, so editing the code does not re-download the module graph.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+# Static and stripped: CGO off so the binary carries no libc dependency, trimpath so
+# the build machine's paths are not baked into it.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/market ./cmd/market
+
+FROM docker.io/library/alpine:3 AS run
+
+# Root certificates, because everything this talks to is HTTPS and a bare Alpine has
+# nothing to verify a certificate against. The account is unprivileged and owns
+# nothing: this service writes no files.
+RUN apk add --no-cache ca-certificates \
+ && adduser -D -u 10001 agentmart
+
+COPY --from=build /out/market /usr/local/bin/market
+
+# The merchant's own address, and the card the buyer reads to find it. Both are
+# overridable: inside the all-in-one image they point at localhost, and behind a
+# proxy the card has to name an address the buyer can actually reach.
+ENV MARKET_ADDR=:8081 \
+    MARKET_AGENT_CARD_URL=http://127.0.0.1:8081/a2a/
+
+EXPOSE 8081
+USER agentmart
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -q -O- http://127.0.0.1:8081/health >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["market"]

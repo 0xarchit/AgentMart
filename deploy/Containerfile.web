@@ -1,0 +1,43 @@
+# The dashboard and the API routes the payment gateway calls back into. Build from
+# the repository root so the context matches the other images:
+#
+#   podman build -f deploy/Containerfile.web -t agentmart-web .
+#   podman run --rm --env-file .env -p 3000:3000 agentmart-web
+#
+# NEXT_PUBLIC_APP_URL is a build argument rather than a runtime variable because
+# Next inlines every NEXT_PUBLIC_ value into the bundle when it compiles. It is the
+# origin the sign-in link returns to, so an image built with the default sends people
+# back to localhost. Nothing secret is inlined: the gateway key reaches the browser
+# from an API route at run time, and the secrets stay server side.
+
+FROM docker.io/library/node:24-alpine AS deps
+WORKDIR /app
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+FROM docker.io/library/node:24-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY web ./
+ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM docker.io/library/node:24-alpine AS run
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# The standalone output carries its own trimmed node_modules, so the installed tree
+# from the build stage is left behind. Static assets and public files sit outside it
+# and have to be copied separately.
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+
+EXPOSE 3000
+USER node
+CMD ["node", "server.js"]

@@ -1,0 +1,86 @@
+# The verification gate. Every artifact this repository publishes is built from a
+# commit that passed this, because a release or an image that skipped it is a claim
+# nobody checked.
+#
+# It runs on its own for a push or a pull request, and the release and container
+# workflows call it as the job they depend on.
+
+name: gate
+
+# A push to main reaches this through the containers workflow, which calls it and
+# then publishes from the commit that passed. Running it here as well would run it
+# twice for one push.
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Formatting is checked rather than applied. A diff here is a diff a reviewer
+      # would otherwise have to read past.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt clean:"
+            echo "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./internal/... ./cmd/...
+
+      # -short is not a shortcut here. Without it the suite spends live paid
+      # provider quota and takes about thirty five minutes.
+      - name: test
+        run: go test -short -count=1 ./internal/... ./cmd/...
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install
+        run: npm ci
+
+      # The build comes before the type check on purpose. next-env.d.ts references
+      # generated route types that only exist once something has generated them, so a
+      # fresh checkout has nothing for tsc to resolve. It is also the step that proves
+      # the web image can be built from this commit at all.
+      - name: build
+        run: npm run build
+
+      - name: types
+        run: npx tsc --noEmit
+
+      - name: test
+        run: npx vitest run
