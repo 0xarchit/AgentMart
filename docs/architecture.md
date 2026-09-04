@@ -19,6 +19,11 @@ trading, and a money trail that cannot be talked into anything.
 
 One purchase, end to end. Every arrow is a real call.
 
+The person's words reach the buyer over Telegram, posted to the buyer's webhook
+when a public URL is configured and fetched by long polling when it is not.
+Everything below is the same either way: both paths hand the update to one
+handler, one at a time and in order.
+
 ```text
 person  "buy me a good trimmer"
   |
@@ -150,6 +155,7 @@ because any extraction step is code deciding what the person meant.
 | money guard | an accept the wallet or budget cannot fund | routed to the person, never to a silent refusal |
 | gate | balance, spend limit, stock, price freshness | refused with a reason |
 | audit | every offer and every purchase is recorded first | the action is refused |
+| chat transport | a delivery to the buyer's webhook carries the secret the buyer registered with Telegram | refused before the body is read, and the endpoint refuses to serve at all without a secret configured |
 
 ---
 
@@ -423,6 +429,15 @@ rather than published. The harness now pairs scenarios, reports the unpaired one
 with a reason, alternates the two shops per scenario so neither meets a different
 provider, and splits revenue into settled and pending a person's approval so a
 gate that did its job is not scored as a lost sale.
+
+Also since then: the buyer takes Telegram updates by webhook when a public URL is
+configured, which is what lets it live on a host that sleeps between requests,
+since the delivery is the traffic that wakes it. Polling remains for a machine
+with no public URL. Both paths reach one handler, one update at a time and in
+order, and the offset that catches a delivery Telegram sends twice is the same one
+polling advanced. The two agents also ship as a single container with only the
+buyer's port published, because the merchant is reached over loopback by the buyer
+alone and needs no public address at all.
 
 What it still cannot do is put a reliable number on the difference. Six scenarios
 pair down to five as soon as the provider drops one, and two runs against nearly

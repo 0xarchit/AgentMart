@@ -10,12 +10,20 @@ Three processes, run independently.
 | Process | Command | Default port | Serves |
 | --- | --- | --- | --- |
 | merchant | `go run ./cmd/market` | 8081 | catalog reads, offer pricing, the negotiation endpoint, the agent surface, `/health` |
-| buyer | `go run ./cmd/user` | 8082 | the chat bot, the shopping graph, purchases, refunds, `/diag` |
+| buyer | `go run ./cmd/user` | 8082 | the chat bot and its `/diag` command, the shopping graph, purchases, refunds, and over HTTP the Telegram webhook, the agent surface and `/health` |
 | web | `npm run dev` in `web/` | 3000 | storefront, account dashboard, run view, operations view, gateway webhook |
 
 The merchant's endpoints sit behind a shared bearer token, except `/health`. The
 buyer reaches it as a client; nothing about the split requires them to be on one
 machine.
+
+Telegram updates reach the buyer one of two ways, decided by whether
+`TELEGRAM_WEBHOOK_URL` is set. With it, the buyer registers that URL with Telegram
+at startup and each update arrives as a `POST /telegram/webhook`; without it, the
+buyer long polls `getUpdates`. Both feed the same handler, one update at a time and
+in order, and both advance the same stored offset, which is what catches a delivery
+sent twice. A token is either polled or posted to, never both: Telegram refuses
+`getUpdates` while a webhook is registered, and allows one poller per token.
 
 ## Merchant surface
 
@@ -25,6 +33,26 @@ machine.
 | `/mcp` | catalog tools for a reasoning layer: search, get one product, check stock, get offers |
 | `/a2a`, `/a2a/` | the agent surface, including the card at `/a2a/.well-known/agent-card.json` |
 | `/health` | unauthenticated liveness |
+
+## Buyer surface
+
+| Route | Purpose |
+| --- | --- |
+| `POST /telegram/webhook` | Telegram deliveries. It sits outside the bearer wall because Telegram cannot send our token, and is authenticated instead by the secret Telegram echoes in `X-Telegram-Bot-Api-Secret-Token`, compared in constant time |
+| `/a2a`, `/a2a/` | the buyer as a discoverable agent, quote only: it negotiates and returns terms, never debits |
+| `/health` | unauthenticated liveness |
+
+The agent surface is published only when `USER_AGENT_TOKEN` is set, because a
+reachable shopper is a spending surface. The webhook does not need that token and
+is served without it. It does need its own secret: without
+`TELEGRAM_WEBHOOK_SECRET_TOKEN` the buyer refuses to serve the endpoint at all,
+because an open one would let anyone who found the URL forge a message from a
+linked person and spend that person's allowance.
+
+The handler answers Telegram as soon as it has taken the update, not when the
+shopping run finishes, because a run can take minutes and Telegram will not wait
+that long. When the queue is full it answers 503 rather than 200, so Telegram
+retries and the message is delayed instead of dropped.
 
 ## Web surface
 
@@ -52,7 +80,7 @@ Buyer side:
 | `internal/gate` | the only thing that authorises a spend |
 | `internal/negotiationclient` | talks to the merchant's negotiation endpoint |
 | `internal/marketclient`, `internal/remotemerchant` | catalog tool client, remote merchant adapter |
-| `internal/telegram`, `internal/linking` | chat transport and account linking |
+| `internal/telegram`, `internal/linking` | chat transport, both ways in, and account linking |
 
 Merchant side:
 
@@ -183,6 +211,9 @@ spending ceiling and read every product's cost basis through the REST gateway.
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY` | database access, server and browser |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | gateway orders and webhook verification |
 | `TELEGRAM_BOT_TOKEN` | the chat transport |
+| `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET_TOKEN` | set both and updates arrive by webhook instead of polling. The buyer registers the URL itself, completes a bare host to `/telegram/webhook`, refuses anything that is not HTTPS, and stops rather than starting deaf if the registration fails. The secret is checked on every delivery and the endpoint is not served without it |
+| `TELEGRAM_USE_POLLING` | forces polling even when a URL is set, so a local run against a copy of the deployed environment does not register a URL it can never be reached on |
+| `TELEGRAM_OFFSET_FILE` | where the update offset is kept when Redis is not configured. A host without a disk needs Redis instead |
 | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ADK_MODEL_NAME` | reasoning access and the model chain |
 | `MARKET_SHARED_TOKEN` | the token the buyer presents to the merchant |
 | `USER_MARKET_MCP_ENDPOINT`, `USER_MARKET_A2A_ENDPOINT` | where the buyer finds the merchant |
@@ -193,13 +224,28 @@ spending ceiling and read every product's cost basis through the REST gateway.
 three seconds apart, before the next is tried, because a free pool flaps per call
 and reliability is worth the latency. A spent allowance is not retried.
 
-Four variables are currently read by no code and are documented as such rather
-than removed silently: `REFUND_WINDOW_MINUTES`, `WALLET_TOPUP_MAX_PAISE`,
-`RAZORPAY_ACCOUNT_NUMBER` and `DEFAULT_SPEND_LIMIT_PAISE`.
+Nineteen variables in `.env.example` are read by no code in `cmd/`, `internal/` or
+`web/`, and two more are read by the runtime rather than by us. They are documented
+rather than removed silently, because a variable that looks like a setting and is
+not one costs more than a dead one that is listed:
 
-The last of those is worth naming separately, because it reads like a setting and
-is not one. The standing limit a new account starts with is INR 2500.00, written
-in two places in the schema: the `spend_limit_paise` column default and the value
+| Variable | What is true instead |
+| --- | --- |
+| `DEFAULT_SPEND_LIMIT_PAISE` | reads like a setting and is not one: see below |
+| `REFUND_WINDOW_MINUTES`, `WALLET_TOPUP_MIN_PAISE`, `WALLET_TOPUP_MAX_PAISE` | nothing reads them |
+| `RAZORPAY_ACCOUNT_NUMBER` | only the payout APIs need it, and this system calls none of them |
+| `NEXT_PUBLIC_RAZORPAY_KEY_ID` | the browser is handed the key id by `/api/topups/orders`, which reads the server side `RAZORPAY_KEY_ID` |
+| `NEXTAUTH_SECRET`, `SUPABASE_JWKS_URL` | sessions are verified with the Supabase keys above |
+| `MARKET_HTTP_PORT`, `MARKET_MCP_PORT`, `MARKET_A2A_PORT`, `USER_HTTP_PORT` | one listener per process, addressed by `MARKET_ADDR` and `USER_AGENT_ADDR` |
+| `MARKET_ENV`, `MARKET_LOG_LEVEL`, `USER_ENV`, `USER_LOG_LEVEL`, `GO_ENV` | both processes log at one level in one format |
+| `ADK_MODEL_TEMPERATURE` | the request type carries a temperature field, but nothing reads this variable into it |
+| `TELEGRAM_BOT_USERNAME` | nothing builds a chat deep link; a link token is redeemed in the chat itself |
+| `NODE_ENV`, `TZ` | read by Node and by the OS, not by our code. The container images set `NODE_ENV` |
+
+`DEFAULT_SPEND_LIMIT_PAISE` is worth naming separately, because it reads like a
+setting and is not one. The standing limit a new account starts with is INR
+2500.00, written in two places in the schema: the `spend_limit_paise` column
+default and the value
 the signup trigger inserts. Both are Postgres, which no environment variable
 reaches, so changing that limit for new accounts means a migration rather than a
 deployment setting. An operator who set this expecting new accounts to start
@@ -266,9 +312,13 @@ The absences are choices, and each one was argued rather than defaulted.
 gofmt -l internal/ cmd/
 go build ./...
 go vet ./...
-go test -short -count=1 ./internal/... ./cmd/...     # 28 packages
-cd web && npx tsc --noEmit && npx vitest run          # 54 tests, 8 files
+go test -short -count=1 ./internal/... ./cmd/...                # 28 packages
+cd web && npm run build && npx tsc --noEmit && npx vitest run   # 62 tests, 8 files
 ```
+
+The web build runs before `tsc`, because the route types it checks against are
+generated by the build. On a fresh checkout, `tsc` alone has nothing to resolve
+them to.
 
 The Go test paths are scoped on purpose rather than written as `./...`. The
 repository also carries live harnesses that drive the real agents against a real
@@ -285,6 +335,7 @@ Notable tests, because they encode contracts rather than behaviour:
 | `TestAFairBundleIsNotJudgedAsMarkupOnTheMainProduct` | attached goods count as list value |
 | `TestAFlappingModelIsAskedAgainRatherThanAbandoned` | a chain does not shrink the retry budget |
 | `clampToRails` tests | no strategy can price below the cost floor |
+| `TestWebhookRefusesADeliveryWithTheWrongSecret`, `TestWebhookIsServedOutsideTheBearerWall` | only Telegram's own secret opens the webhook, and opening it does not open the agent |
 
 ## Failure behaviour
 
@@ -292,3 +343,9 @@ There is no scripted decision path inside either graph. When a provider fails,
 the failure surfaces with the layer named and a check to make, rather than
 degrading into branches that resemble judgement. `/diag` on the buyer probes each
 layer independently, so an outage is attributed rather than guessed at.
+
+The webhook fails in two directions on purpose. A delivery it cannot queue is
+answered 503 so Telegram retries it, because a 200 would lose somebody's message
+in silence. A registration that fails at startup stops the process, because a
+buyer that is running and unreachable looks exactly like a healthy one that
+ignores every message.
