@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -135,5 +136,82 @@ func TestTheGateRowSaysWhichWayTheGateWent(t *testing.T) {
 	}
 	if refused["reason"] != "insufficient_wallet_balance" {
 		t.Fatalf("the refusal does not say why: %v", refused["reason"])
+	}
+}
+
+// queryWatcher returns a store whose reads are answered with the given JSON and
+// whose request query is put on the channel, so a test can assert what the store
+// actually asked the database for. trailWatcher above reads insert bodies and
+// never looks at the query string, which is why the account filters below went
+// unpinned.
+func queryWatcher(t *testing.T, body string) (*Store, <-chan url.Values) {
+	t.Helper()
+	asked := make(chan url.Values, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked <- r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	db, err := supabase.NewClient(server.URL, "test-key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewStore(db), asked
+}
+
+// TestTheFundingPaymentReadIsScopedToOneAccount pins the filter that decides whose
+// card a cancellation refunds. FundingPayments produces the exact list of captured
+// payments the reversal spends against, and nothing downstream re-checks ownership:
+// the drawdown takes each payment id straight to the gateway, and the landed-leg
+// check matches on the order in the notes, not on whose payment it is. Every
+// reversal test hands the drawdown a canned slice, so none of them would notice
+// this read losing its account.
+func TestTheFundingPaymentReadIsScopedToOneAccount(t *testing.T) {
+	store, asked := queryWatcher(t, `[{"razorpay_payment_id":"pay_1","amount_paise":50000}]`)
+
+	payments, err := store.FundingPayments(t.Context(), "account-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payments) != 1 || payments[0].PaymentID != "pay_1" || payments[0].AmountPaise != 50000 {
+		t.Fatalf("payments = %+v", payments)
+	}
+	query := <-asked
+	if query.Get("account_id") != "eq.account-3" {
+		t.Fatalf("account filter = %q, want eq.account-3. Without it a cancellation refunds whichever account's top-up comes back first.", query.Get("account_id"))
+	}
+	if query.Get("entry_type") != "eq.topup" || query.Get("razorpay_payment_id") != "not.is.null" {
+		t.Fatalf("query = %v, want only captured top-ups, which are the only rows that can be reversed", query)
+	}
+	// Oldest first, so a reversal drains the money in the order it arrived rather
+	// than stranding capacity on whichever payment the database returns first.
+	if query.Get("order") != "created_at.asc" {
+		t.Fatalf("order = %q, want created_at.asc", query.Get("order"))
+	}
+}
+
+// TestTheResumedReversalLookupIsScopedToOneAccount pins the filter its own comment
+// names: "so a person cannot resume somebody else's refund by naming their order".
+// The table is service-role only, so row level security never applies here, and
+// the fake used by the refund tests discards the account argument outright, which
+// is why no test at that layer could see this filter disappear.
+func TestTheResumedReversalLookupIsScopedToOneAccount(t *testing.T) {
+	store, asked := queryWatcher(t, `[{"order_id":"order-7","amount_paise":80000,"reason":"cancelled","idempotency_key":"key-1","run_id":"run-9"}]`)
+
+	attempt, found, err := store.OutstandingReversal(t.Context(), "account-3", "order-7")
+	if err != nil || !found {
+		t.Fatalf("found = %v, err = %v", found, err)
+	}
+	if attempt.OrderID != "order-7" || attempt.AmountPaise != 80000 || attempt.IdempotencyKey != "key-1" {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	query := <-asked
+	if query.Get("account_id") != "eq.account-3" {
+		t.Fatalf("account filter = %q, want eq.account-3. Without it one person's unsettled reversal can be resumed under another's account, which sends their money to the wrong card.", query.Get("account_id"))
+	}
+	if query.Get("order_id") != "eq.order-7" || query.Get("settled_at") != "is.null" {
+		t.Fatalf("query = %v, want the named order and only an unsettled attempt", query)
 	}
 }
