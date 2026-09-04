@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"agentmart/internal/buyer"
+	"agentmart/internal/buyeragent"
 	"agentmart/internal/catalog"
 	"agentmart/internal/failure"
 	"agentmart/internal/gate"
@@ -247,9 +248,38 @@ func main() {
 			return
 		}
 	}
+	// A public URL means Telegram posts updates to us instead of waiting to be
+	// asked, which is the only arrangement that survives a host that sleeps between
+	// requests: the delivery itself wakes the service. Without one we keep polling,
+	// which is what a laptop behind a router has to do.
+	configuredWebhook := strings.TrimSpace(os.Getenv("TELEGRAM_WEBHOOK_URL"))
+	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN")
+	webhookURL := webhookTarget(configuredWebhook, os.Getenv("TELEGRAM_USE_POLLING"))
+	if configuredWebhook != "" && webhookURL == "" {
+		logger.Warn("TELEGRAM_USE_POLLING is set, so the webhook url is ignored; telegram refuses getUpdates while a webhook is registered, so delete that registration first")
+	}
+	var deliveries chan telegram.Update
+	var webhookHandler http.Handler
+	if webhookURL != "" {
+		webhookURL, err = webhookEndpointURL(webhookURL)
+		if err != nil {
+			logger.Error("telegram webhook configuration failed", "error", err)
+			return
+		}
+		deliveries = make(chan telegram.Update, webhookQueueDepth)
+		webhookHandler, err = newWebhookHandler(webhookSecret, deliveries, logger)
+		if err != nil {
+			logger.Error("telegram webhook configuration failed", "error", err)
+			return
+		}
+	}
 	// Publish the buyer as a discoverable agent when a token is configured.
 	// Quote-only by design: the skill negotiates and returns terms, never debits.
-	if token := strings.TrimSpace(os.Getenv("USER_AGENT_TOKEN")); token != "" && loopService != nil {
+	// The same service carries the Telegram webhook, so it also starts for that
+	// alone: without it a deployed bot has no way in at all.
+	agentToken := strings.TrimSpace(os.Getenv("USER_AGENT_TOKEN"))
+	publishAgent := agentToken != "" && loopService != nil
+	if publishAgent || webhookHandler != nil {
 		addr := strings.TrimSpace(os.Getenv("USER_AGENT_ADDR"))
 		if addr == "" {
 			addr = ":8082"
@@ -258,7 +288,11 @@ func main() {
 		if cardURL == "" {
 			cardURL = "http://localhost" + addr + "/a2a/"
 		}
-		buyerHandler, handlerErr := newBuyerAgentHandler(shopperFunc(loopService.Run), cardURL, token)
+		var shopper buyeragent.Shopper
+		if publishAgent {
+			shopper = shopperFunc(loopService.Run)
+		}
+		buyerHandler, handlerErr := newBuyerAgentHandler(shopper, cardURL, agentToken, webhookHandler)
 		if handlerErr != nil {
 			logger.Error("buyer agent service configuration failed", "error", handlerErr)
 			return
@@ -276,7 +310,22 @@ func main() {
 				logger.Error("buyer agent service shutdown failed", "error", shutErr)
 			}
 		}()
-		logger.Info("buyer agent published", "addr", addr, "card", cardURL+".well-known/agent-card.json")
+		if publishAgent {
+			logger.Info("buyer agent published", "addr", addr, "card", cardURL+".well-known/agent-card.json")
+		} else {
+			logger.Info("buyer service listening for telegram deliveries only", "addr", addr)
+		}
+		if webhookHandler != nil {
+			// Registered once the listener exists, so the first delivery has somewhere
+			// to land. A failure here stops the process on purpose: a webhook that was
+			// never registered looks exactly like a healthy service that ignores every
+			// message, and deaf is worse than down.
+			if setErr := client.SetWebhook(ctx, webhookURL, webhookSecret); setErr != nil {
+				logger.Error("telegram webhook registration failed", "error", setErr, "url", webhookURL)
+				return
+			}
+			logger.Info("telegram webhook registered", "url", webhookURL)
+		}
 	}
 	// One command that says which layer is down, so a failed run never needs a
 	// log dive to explain itself.
@@ -327,13 +376,49 @@ func main() {
 		logger.Error("telegram offset load failed", "error", err)
 		return
 	}
-	for {
-		updates, err := client.Poll(pollContext, offset)
+	// One handler for both ways in: a message means the same thing whether Telegram
+	// posted it to us or we asked for it.
+	handle := func(ctx context.Context, message *telegram.Message) error {
+		err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
 		if err != nil {
+			// The row is written before the person is told it exists. Telling them
+			// a failure was recorded and then discarding the write is the one
+			// thing this trail is not allowed to do: it claims evidence that is
+			// not there.
+			note := "\nRecorded for review."
+			if recordErr := store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err); recordErr != nil {
+				logger.Error("dead letter write failed", "error", recordErr, "cause", err)
+				note = "\nThis could not be recorded, so please mention it if it happens again."
+			}
+			if sendErr := client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+note); sendErr != nil {
+				logger.Error("failure reply failed", "error", sendErr, "cause", err)
+			}
+		}
+		return nil
+	}
+	if deliveries != nil {
+		for {
+			select {
+			case <-pollContext.Done():
+				return
+			case update := <-deliveries:
+				// One at a time, exactly as polling ran them. The stored offset is also
+				// the guard against a delivery Telegram sends twice, and it is only sound
+				// to advance it from a single goroutine.
+				offset, err = processUpdates(pollContext, []telegram.Update{update}, offset, checkpoints, handle)
+				if err != nil {
+					logger.Error("telegram update processing failed", "error", err)
+				}
+			}
+		}
+	}
+	for {
+		updates, pollErr := client.Poll(pollContext, offset)
+		if pollErr != nil {
 			if pollContext.Err() != nil {
 				return
 			}
-			logger.Error("telegram polling failed", "error", err)
+			logger.Error("telegram polling failed", "error", pollErr)
 			select {
 			case <-pollContext.Done():
 				return
@@ -341,24 +426,7 @@ func main() {
 			}
 			continue
 		}
-		offset, err = processUpdates(pollContext, updates, offset, checkpoints, func(ctx context.Context, message *telegram.Message) error {
-			err := handleMessage(ctx, client, linker, purchaseService, refundService, commandServices{negotiations: negotiationService, audit: store, accounts: store, catalog: catalogReader, approvals: approvalStore, conversations: conversations, loop: loopService, health: layerReport}, message)
-			if err != nil {
-				// The row is written before the person is told it exists. Telling them
-				// a failure was recorded and then discarding the write is the one
-				// thing this trail is not allowed to do: it claims evidence that is
-				// not there.
-				note := "\nRecorded for review."
-				if recordErr := store.RecordUpdateDeadLetter(ctx, message.From.ID, message.Text, err); recordErr != nil {
-					logger.Error("dead letter write failed", "error", recordErr, "cause", err)
-					note = "\nThis could not be recorded, so please mention it if it happens again."
-				}
-				if sendErr := client.SendMessage(ctx, message.Chat.ID, failure.Explain(err)+note); sendErr != nil {
-					logger.Error("failure reply failed", "error", sendErr, "cause", err)
-				}
-			}
-			return nil
-		})
+		offset, err = processUpdates(pollContext, updates, offset, checkpoints, handle)
 		if err != nil {
 			logger.Error("telegram update processing failed", "error", err)
 		}

@@ -95,6 +95,37 @@ func (c *Client) Poll(ctx context.Context, offset int) ([]Update, error) {
 	return response.Result, nil
 }
 
+// SetWebhook asks Telegram to post updates to endpoint instead of waiting for us
+// to ask for them. The secret is echoed back in a header on every delivery, which
+// is the only way Telegram can prove a request came from it.
+//
+// One connection at a time is deliberate. Telegram will otherwise deliver
+// concurrently, and out of order arrivals would let a later update advance the
+// stored offset past an earlier one that has not been handled yet. The buyer
+// handles one message at a time anyway, so nothing is lost by the limit.
+func (c *Client) SetWebhook(ctx context.Context, endpoint, secret string) error {
+	if strings.TrimSpace(endpoint) == "" {
+		return fmt.Errorf("telegram webhook endpoint is required")
+	}
+	if strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("telegram webhook secret is required")
+	}
+	query := url.Values{
+		"url":             {endpoint},
+		"secret_token":    {secret},
+		"allowed_updates": {`["message","callback_query"]`},
+		"max_connections": {"1"},
+	}
+	var response apiResponse[bool]
+	if err := c.call(ctx, "setWebhook", query, nil, &response); err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram setWebhook: %s", response.Description)
+	}
+	return nil
+}
+
 // SendMessage sends plain text to a conversation.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
 	return c.SendMessageWithMarkup(ctx, chatID, text, nil)

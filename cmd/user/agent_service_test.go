@@ -29,13 +29,13 @@ func (s *stubShopper) Run(_ context.Context, _ string, wallet shopgraph.Wallet) 
 }
 
 func TestBuyerAgentRequiresToken(t *testing.T) {
-	if _, err := newBuyerAgentHandler(&stubShopper{}, "http://localhost:8082/a2a/", ""); err == nil {
+	if _, err := newBuyerAgentHandler(&stubShopper{}, "http://localhost:8082/a2a/", "", nil); err == nil {
 		t.Fatal("expected the service to refuse to start without a token")
 	}
 }
 
 func TestBuyerAgentServesCardBehindBearerWall(t *testing.T) {
-	handler, err := newBuyerAgentHandler(&stubShopper{}, "http://localhost:8082/a2a/", "secret")
+	handler, err := newBuyerAgentHandler(&stubShopper{}, "http://localhost:8082/a2a/", "secret", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestBuyerAgentQuoteUsesStatedBudget(t *testing.T) {
 	defer httpServer.Close()
 
 	var err error
-	handler, err = newBuyerAgentHandler(shopper, httpServer.URL+"/a2a/", "secret")
+	handler, err = newBuyerAgentHandler(shopper, httpServer.URL+"/a2a/", "secret", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
