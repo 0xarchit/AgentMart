@@ -689,7 +689,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				Quantity: qty, FinalPaise: finalPaise, Rationale: outcome.Rationale,
 				Steps: outcome.Steps, SessionID: outcome.SessionID, Transcript: outcome.Transcript,
 				Accepted: outcome.Accepted, NeedsApproval: needsApproval,
-				QuotedAt: quotedAt(outcome, goods),
+				BundledPaise: goods.bundledPaise, QuotedAt: quotedAt(outcome, goods),
 			}, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
@@ -833,6 +833,7 @@ func (s *Service) resultFrom(sessionID string, lastResult *Result, lastOutput an
 			Steps: outcome.Steps, SessionID: outcome.SessionID,
 			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
 			NeedsApproval: Action(outcome.Action) == ActionAskHuman,
+			BundledPaise:  goods.bundledPaise,
 			QuotedAt:      quotedAt(outcome, goods),
 		}), nil
 	}
@@ -852,9 +853,10 @@ func (s *Service) escalate(offer Offer, why string) Result {
 	return normalized(Result{
 		Action: ActionAskHuman, ProductID: offer.ProductID, ProductName: offer.ProductName,
 		Quantity: offer.Quantity, FinalPaise: offer.FinalPaise, SessionID: offer.SessionID,
-		Rationale:  joinReason(offer.Reason, why),
-		Transcript: offer.ShopTurns,
-		QuotedAt:   offer.QuotedAt,
+		Rationale:    joinReason(offer.Reason, why),
+		Transcript:   offer.ShopTurns,
+		BundledPaise: offer.BundledPaise,
+		QuotedAt:     offer.QuotedAt,
 	})
 }
 

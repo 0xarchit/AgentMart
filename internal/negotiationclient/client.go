@@ -97,14 +97,17 @@ type Proposal struct {
 
 // Resolution is the final merchant negotiation state.
 type Resolution struct {
-	SessionID        string             `json:"session_id"`
-	Status           string             `json:"status"`
-	ProductID        string             `json:"product_id"`
-	Quantity         int                `json:"qty"`
-	BaseAmountPaise  int64              `json:"base_amount_paise"`
-	FinalAmountPaise int64              `json:"final_amount_paise"`
-	UpliftPaise      int64              `json:"uplift_paise"`
-	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
+	SessionID        string `json:"session_id"`
+	Status           string `json:"status"`
+	ProductID        string `json:"product_id"`
+	Quantity         int    `json:"qty"`
+	BaseAmountPaise  int64  `json:"base_amount_paise"`
+	FinalAmountPaise int64  `json:"final_amount_paise"`
+	UpliftPaise      int64  `json:"uplift_paise"`
+	// BundledPaise is the attached goods already inside FinalAmountPaise. The buyer
+	// records it with the sale so the premium is measured over the whole basket.
+	BundledPaise int64              `json:"bundled_amount_paise"`
+	Transcript   []negotiation.Turn `json:"transcript,omitempty"`
 	// QuotedAt is when the shop says this amount became its standing ask. It is
 	// carried so a purchase built from a stored session can be dated: the gate
 	// refuses a negotiated amount it cannot age.

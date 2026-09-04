@@ -629,6 +629,7 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		Quantity:         result.Quantity,
 		BaseAmountPaise:  baseAmount,
 		FinalAmountPaise: result.FinalPaise,
+		BundledPaise:     result.BundledPaise,
 		IdempotencyKey:   fmt.Sprintf("telegram:nl:%d:%d", message.From.ID, message.MessageID),
 		PriceObservedAt:  result.QuotedAt,
 	}
@@ -1006,7 +1007,7 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		// at purchase time, so the five minute freshness window could never fire on a
 		// negotiated premium, and the shop's own session lifetime was the only bound
 		// on how old an accepted price could be.
-		result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:negotiation:%d:%s", telegramID, resolution.SessionID), PriceObservedAt: resolution.QuotedAt})
+		result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, BundledPaise: resolution.BundledPaise, IdempotencyKey: fmt.Sprintf("telegram:negotiation:%d:%s", telegramID, resolution.SessionID), PriceObservedAt: resolution.QuotedAt})
 		if err != nil {
 			return "Negotiated purchase could not be completed.", nil
 		}

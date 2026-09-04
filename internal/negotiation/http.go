@@ -490,14 +490,15 @@ func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[s
 		return nil, err
 	}
 	response := map[string]any{
-		"session_id":         request.SessionID,
-		"status":             session.Status,
-		"product_id":         session.Proposal.ProductID,
-		"qty":                session.Proposal.Quantity,
-		"uplift_paise":       session.UpliftPaise(),
-		"base_amount_paise":  session.Proposal.BaseAmountPaise,
-		"final_amount_paise": session.Counter.FinalAmountPaise,
-		"transcript":         session.Transcript,
+		"session_id":           request.SessionID,
+		"status":               session.Status,
+		"product_id":           session.Proposal.ProductID,
+		"qty":                  session.Proposal.Quantity,
+		"uplift_paise":         session.UpliftPaise(),
+		"bundled_amount_paise": session.BundledPaise,
+		"base_amount_paise":    session.Proposal.BaseAmountPaise,
+		"final_amount_paise":   session.Counter.FinalAmountPaise,
+		"transcript":           session.Transcript,
 	}
 	// The buyer's gate refuses a quote it cannot date, so the shop says when this
 	// price became its ask. Omitted rather than sent as a zero time when there is

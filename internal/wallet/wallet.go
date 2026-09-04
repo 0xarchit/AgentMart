@@ -104,11 +104,16 @@ func (r TopUpRequest) validate() error {
 
 // FulfillRequest contains the buyer proposal and accepted wallet amount.
 type FulfillRequest struct {
-	AccountID           string `json:"p_account_id"`
-	ProductID           string `json:"p_product_id"`
-	Quantity            int    `json:"p_qty"`
-	BaseAmountPaise     int64  `json:"p_base_amount_paise"`
-	FinalAmountPaise    int64  `json:"p_final_amount_paise"`
+	AccountID        string `json:"p_account_id"`
+	ProductID        string `json:"p_product_id"`
+	Quantity         int    `json:"p_qty"`
+	BaseAmountPaise  int64  `json:"p_base_amount_paise"`
+	FinalAmountPaise int64  `json:"p_final_amount_paise"`
+	// BundledPaise is the list value of goods attached to the named product, and it
+	// is already inside FinalAmountPaise rather than added to it. Recording it with
+	// the sale is what lets the uplift figure measure the premium over everything the
+	// buyer receives, instead of counting an attached partner as margin earned.
+	BundledPaise        int64  `json:"p_bundled_paise"`
 	RazorpayOrderID     string `json:"p_razorpay_order_id"`
 	IdempotencyKey      string `json:"p_idempotency_key"`
 	RefundWindowMinutes int    `json:"p_refund_window_minutes"`
@@ -126,6 +131,12 @@ func (r FulfillRequest) validate() error {
 	// place that knows both the buyer's entitlement and the product's cost.
 	if r.Quantity <= 0 || r.BaseAmountPaise <= 0 || r.FinalAmountPaise <= 0 {
 		return fmt.Errorf("quantity and amounts must be positive")
+	}
+	// The bundled amount is a statement about the basket, not a second charge: it is
+	// already inside the final amount. Zero is the ordinary case, so only a negative
+	// is refused.
+	if r.BundledPaise < 0 {
+		return fmt.Errorf("bundled amount cannot be negative")
 	}
 	if strings.TrimSpace(r.RazorpayOrderID) == "" || strings.TrimSpace(r.IdempotencyKey) == "" || r.RefundWindowMinutes <= 0 {
 		return fmt.Errorf("razorpay order, idempotency key, and refund window are required")

@@ -45,6 +45,10 @@ type Result struct {
 	Transcript    []negotiation.Turn
 	Accepted      bool
 	NeedsApproval bool // informational: premium band crossed on an in-budget offer
+	// BundledPaise is the part of FinalPaise that is goods attached to the named
+	// product. The premium this run judged was measured against the list total
+	// including it, and it travels on so the recorded sale is measured the same way.
+	BundledPaise int64
 	// QuotedAt is when the quote behind FinalPaise was received, passed to the gate
 	// so a price this run observed too long ago is refused rather than spent.
 	QuotedAt time.Time

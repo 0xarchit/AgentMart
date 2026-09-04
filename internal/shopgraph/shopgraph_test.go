@@ -621,7 +621,7 @@ func TestANegotiatedOutcomeStillCarriesWhenTheShopQuoted(t *testing.T) {
 	const session = "run-quote"
 	quoted := time.Now().UTC().Add(-90 * time.Second)
 	service.begin(session, Wallet{BalancePaise: 500000, SpendLimitPaise: 500000}, nil, Conversation{})
-	service.recordPriced(session, pricedGoods{productID: "trim-9", quantity: 1, quotedAt: quoted})
+	service.recordPriced(session, pricedGoods{productID: "trim-9", quantity: 1, bundledPaise: 39920, quotedAt: quoted})
 
 	// What the negotiating agent hands back: no quote time, because it cannot write
 	// one, and no product or count either for the same reason.
@@ -634,6 +634,13 @@ func TestANegotiatedOutcomeStillCarriesWhenTheShopQuoted(t *testing.T) {
 	}
 	if !result.QuotedAt.Equal(quoted) {
 		t.Fatalf("quoted at %v, want the %v the run recorded when the shop priced this basket: a zero time leaves the gate unable to refuse a stale price", result.QuotedAt, quoted)
+	}
+	// The attached partner travels the same way and for the same reason. It is fenced
+	// out of the agent's shape, so the run's own record of the basket is the only
+	// place it can come from, and the recorded sale subtracts it before calling the
+	// rest uplift.
+	if result.BundledPaise != 39920 {
+		t.Fatalf("bundled %d, want the 39920 the shop attached: zero here reports the partner as merchant margin", result.BundledPaise)
 	}
 
 	// A stage that writes its own time keeps it, so this is a fallback and not an

@@ -16,11 +16,11 @@ import (
 func TestNewApprovalRequestGeneratesResumeToken(t *testing.T) {
 	account := Account{ID: "account"}
 	product := catalog.Product{ID: "product", PricePaise: 100}
-	first, err := NewApprovalRequest(account, 10, product, 1, 100, 140, "purchase-1", "human approval required")
+	first, err := NewApprovalRequest(account, 10, product, 1, 100, 140, 0, "purchase-1", "human approval required")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewApprovalRequest(account, 10, product, 1, 100, 140, "purchase-2", "human approval required")
+	second, err := NewApprovalRequest(account, 10, product, 1, 100, 140, 0, "purchase-2", "human approval required")
 	if err != nil {
 		t.Fatal(err)
 	}

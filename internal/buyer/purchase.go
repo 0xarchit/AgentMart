@@ -43,8 +43,13 @@ type PurchaseRequest struct {
 	Quantity         int
 	BaseAmountPaise  int64
 	FinalAmountPaise int64
-	IdempotencyKey   string
-	HumanApproved    bool
+	// BundledPaise is the part of FinalAmountPaise that is goods attached to the
+	// product named above. The gate never sees it, because the amount it checks is
+	// the whole settled figure either way; it is carried so the recorded sale can say
+	// which part of the premium was an attached partner rather than margin.
+	BundledPaise   int64
+	IdempotencyKey string
+	HumanApproved  bool
 	// PriceObservedAt is when the quote being spent against was received. Left
 	// zero, the gate treats the price as observed now, which is right for a
 	// purchase priced straight from the catalog and wrong for a negotiated quote.
@@ -188,7 +193,7 @@ func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) 
 	}
 	if !decision.Approved {
 		if decision.Reason == "human_approval_required" && s.approvals != nil {
-			approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.IdempotencyKey, decision.Reason)
+			approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.BundledPaise, request.IdempotencyKey, decision.Reason)
 			if err != nil {
 				return PurchaseResult{}, err
 			}
@@ -200,7 +205,7 @@ func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) 
 		}
 		return PurchaseResult{Reason: decision.Reason, AmountPaise: finalAmount}, nil
 	}
-	settled, err := s.settle.Settle(ctx, SettleRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, IdempotencyKey: request.IdempotencyKey, HumanApproved: request.HumanApproved})
+	settled, err := s.settle.Settle(ctx, SettleRequest{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, BundledPaise: request.BundledPaise, IdempotencyKey: request.IdempotencyKey, HumanApproved: request.HumanApproved})
 	if err != nil {
 		return PurchaseResult{}, err
 	}
@@ -255,7 +260,7 @@ func (s *PurchaseService) requestApproval(ctx context.Context, request PurchaseR
 	if baseAmount != amount || finalAmount <= 0 {
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
-	approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.IdempotencyKey, reason)
+	approvalRequest, err := NewApprovalRequest(account, request.TelegramID, product, request.Quantity, baseAmount, finalAmount, request.BundledPaise, request.IdempotencyKey, reason)
 	if err != nil {
 		return PurchaseResult{}, err
 	}
@@ -284,5 +289,5 @@ func (s *PurchaseService) ResolveApproval(ctx context.Context, telegramID int64,
 	if !resolution.Approved {
 		return PurchaseResult{Reason: "human approval rejected"}, nil
 	}
-	return s.Purchase(ctx, PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: resolution.IdempotencyKey, HumanApproved: true})
+	return s.Purchase(ctx, PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, BundledPaise: resolution.BundledPaise, IdempotencyKey: resolution.IdempotencyKey, HumanApproved: true})
 }

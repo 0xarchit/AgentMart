@@ -151,6 +151,16 @@ func TestAFundedDiscountIsAShareOfEverythingBeingBought(t *testing.T) {
 	if session.BundledPaise != 20_000 {
 		t.Fatalf("bundled = %d, want the half price partner carried on the session", session.BundledPaise)
 	}
+
+	// The buyer settles from this response and records the sale from it, and the
+	// premium it stores is the settled amount less everything it received. So the
+	// partner has to be on the wire: left off, the buyer's own revenue row reports
+	// the whole 20000 as margin the shop earned. This is the only session in the
+	// suite that has a partner attached, which is why the check lives here.
+	settled := ask(t, `{"type":"accept","session_id":"`+sessionID+`","account_id":"account-1"}`)
+	if settled["bundled_amount_paise"] != float64(20_000) {
+		t.Fatalf("resolve reported bundled = %v, want 20000: the buyer cannot subtract a partner it is never told about", settled["bundled_amount_paise"])
+	}
 }
 
 // TestResolvingASessionReportsWhenItWasQuoted pins the field the buyer's gate

@@ -19,8 +19,12 @@ type SettleRequest struct {
 	Quantity         int
 	BaseAmountPaise  int64
 	FinalAmountPaise int64
-	IdempotencyKey   string
-	HumanApproved    bool
+	// BundledPaise is the part of FinalAmountPaise that is goods attached to the
+	// named product. It moves no money of its own and is carried so the settled row
+	// records which basket was priced.
+	BundledPaise   int64
+	IdempotencyKey string
+	HumanApproved  bool
 }
 
 // SettleResult is what a settled purchase leaves behind: the order row it wrote,
@@ -63,7 +67,7 @@ func (w *WalletSettlement) Settle(ctx context.Context, request SettleRequest) (S
 	if err != nil {
 		return SettleResult{}, err
 	}
-	orderID, err := w.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: request.AccountID, ProductID: request.ProductID, Quantity: request.Quantity, BaseAmountPaise: request.BaseAmountPaise, FinalAmountPaise: request.FinalAmountPaise, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
+	orderID, err := w.wallet.Fulfill(ctx, wallet.FulfillRequest{AccountID: request.AccountID, ProductID: request.ProductID, Quantity: request.Quantity, BaseAmountPaise: request.BaseAmountPaise, FinalAmountPaise: request.FinalAmountPaise, BundledPaise: request.BundledPaise, RazorpayOrderID: artifact.ID, IdempotencyKey: request.IdempotencyKey, RefundWindowMinutes: 60})
 	if err != nil {
 		return SettleResult{}, err
 	}

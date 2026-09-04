@@ -274,3 +274,89 @@ func TestNothingSettlesWhenTheGateRefuses(t *testing.T) {
 		t.Fatalf("result = %+v, settlement calls = %d", result, settlement.calls)
 	}
 }
+
+// A bundled sale settles above the named product's list total, and the difference
+// is the partner the shop attached rather than margin the merchant earned. The
+// figure has to reach the settlement, because the recorded sale subtracts it before
+// calling anything uplift.
+func TestABundledPurchasePassesTheAttachedGoodsToTheSettlement(t *testing.T) {
+	artifacts := &fakeArtifacts{}
+	walletService := &fakeWallet{}
+	service := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, artifacts, walletService)
+	result, err := service.Purchase(t.Context(), PurchaseRequest{
+		TelegramID: 1, ProductID: "product", Quantity: 1,
+		BaseAmountPaise: 100, FinalAmountPaise: 140, BundledPaise: 38, IdempotencyKey: "key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Fulfilled || result.AmountPaise != 140 {
+		t.Fatalf("result = %+v", result)
+	}
+	// 140 settled, 100 the named product, 38 the attached partner, so 2 is the real
+	// premium. A zero here makes the recorded row claim 40, twenty times the truth.
+	if walletService.request.BundledPaise != 38 {
+		t.Fatalf("settlement recorded %d of attached goods, want 38: uplift is recorded as final minus base minus this, so zero reports the partner as margin", walletService.request.BundledPaise)
+	}
+	if walletService.request.BaseAmountPaise != 100 || walletService.request.FinalAmountPaise != 140 {
+		t.Fatalf("fulfillment = %+v, want both amounts untouched", walletService.request)
+	}
+}
+
+// The approval rail settles from the stored row rather than from the run that
+// priced the basket, so the attached goods have to survive the round trip through
+// the database. Without that, a bundled sale that needed a person's decision
+// records the partner as margin again, and those are exactly the larger sales.
+func TestAnApprovedBundledPurchaseKeepsTheAttachedGoods(t *testing.T) {
+	var pending ApprovalRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/v1/rpc/create_human_approval":
+			if err := json.NewDecoder(r.Body).Decode(&pending); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(ApprovalResult{Approved: true, Token: pending.Token})
+		case "/rest/v1/rpc/resolve_human_approval":
+			// What the stored row gives back, which is all the settlement has.
+			_ = json.NewEncoder(w).Encode(ApprovalResolution{
+				Resolved: true, Approved: true, AccountID: pending.AccountID,
+				ProductID: pending.ProductID, Quantity: pending.Quantity,
+				BaseAmountPaise: pending.BaseAmountPaise, FinalAmountPaise: pending.FinalAmountPaise,
+				BundledPaise: pending.BundledPaise, IdempotencyKey: pending.IdempotencyKey,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	db, err := supabase.NewClient(server.URL, "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewApprovalStore(db)
+	asked := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{}, &fakeArtifacts{}, &fakeWallet{}, store)
+	askedResult, err := asked.Purchase(t.Context(), PurchaseRequest{
+		TelegramID: 1, ProductID: "product", Quantity: 1,
+		BaseAmountPaise: 100, FinalAmountPaise: 140, BundledPaise: 38, IdempotencyKey: "bundled-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !askedResult.ApprovalRequired || askedResult.ApprovalToken == "" {
+		t.Fatalf("result = %+v, want a decision to be waiting", askedResult)
+	}
+	if pending.BundledPaise != 38 {
+		t.Fatalf("the stored decision locked %d of attached goods, want 38", pending.BundledPaise)
+	}
+
+	walletService := &fakeWallet{}
+	settled := NewPurchaseService(fakeCatalog{}, fakeAccounts{}, fakeGate{approved: true}, &fakeArtifacts{}, walletService, store)
+	done, err := settled.ResolveApproval(t.Context(), 1, askedResult.ApprovalToken, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !done.Fulfilled || walletService.request.BundledPaise != 38 {
+		t.Fatalf("settled %+v with %d of attached goods, want 38 carried from the decision", done, walletService.request.BundledPaise)
+	}
+}

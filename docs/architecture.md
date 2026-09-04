@@ -98,7 +98,7 @@ before it is sent.
 | `offer_priced` | merchant | every strategist counter with its strategy, rails, guard note and margin |
 | gate decision | gate layer | approved or refused, with the reason |
 | wallet ledger + receipt | wallet layer | the atomic money movement, returning the order id |
-| merchant revenue | fulfilment function | base, final, and the generated uplift per order |
+| merchant revenue | fulfilment function | base, final, attached goods, and the uplift generated from all three |
 | exported `.txt` | user agent | the conversation as the person can read it |
 
 Audit is fail closed on both sides. An offer that cannot be explained is not
