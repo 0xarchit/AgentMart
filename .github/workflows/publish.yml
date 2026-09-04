@@ -1,4 +1,4 @@
-# Everything a version produces, in one run: the binaries on the release and the four
+# Everything a version produces, in one run: the binaries on the release and the five
 # images in the registry, both from the same commit and both behind the same gate.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -107,9 +107,11 @@ jobs:
               --title "$version" --notes-file dist/NOTES.md
           fi
 
-  # Four images: one per service, and one that runs all three with only the dashboard
-  # exposed. amd64 only. A Node build under emulation is slow enough to be worth adding
-  # on purpose rather than by default, and nothing is deployed to arm yet.
+  # Five images: one per service, one that runs all three with only the dashboard
+  # exposed, and one with both agents and only the buyer exposed, which is the shape a
+  # managed host with a single public port wants. amd64 only. A Node build under
+  # emulation is slow enough to be worth adding on purpose rather than by default, and
+  # nothing is deployed to arm yet.
   images:
     needs: gate
     runs-on: ubuntu-latest
@@ -132,6 +134,9 @@ jobs:
           - image: aio_agentmart
             file: deploy/Containerfile.aio
             origin: "true"
+          - image: agents_agentmart
+            file: deploy/Containerfile.agents
+            origin: "false"
     steps:
       - uses: actions/checkout@v5
 

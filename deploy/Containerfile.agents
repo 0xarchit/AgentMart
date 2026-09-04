@@ -1,0 +1,51 @@
+# Both agents in one container, with the buyer published. This is the shape a host
+# that gives one service one public port needs: the buyer has to be reachable so
+# Telegram can post updates to it, and the merchant does not have to be reachable
+# at all.
+#
+#   podman build -f deploy/Containerfile.agents -t agents_agentmart .
+#   podman run --rm --env-file .env -p 8082:8082 -v agentmart-data:/data agents_agentmart
+#
+# The dashboard is deliberately not here: it is deployed on its own, and it talks to
+# the same database rather than to these two.
+
+FROM docker.io/library/golang:1.26-alpine AS go-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/market ./cmd/market \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/user ./cmd/user
+
+FROM docker.io/library/alpine:3 AS run
+COPY --from=go-build /out/market /usr/local/bin/market
+COPY --from=go-build /out/user /usr/local/bin/user
+COPY deploy/agents-entrypoint.sh /usr/local/bin/agents-entrypoint.sh
+
+# Certificates for Telegram, the database and the gateway. A named account rather
+# than root. /data is where the buyer keeps its Telegram offset, so the account that
+# runs it has to own it. wget is busybox's, already here, and the start order uses it.
+RUN apk add --no-cache ca-certificates \
+ && chmod +x /usr/local/bin/agents-entrypoint.sh \
+ && adduser -D -u 10001 agentmart \
+ && mkdir -p /data \
+ && chown agentmart:agentmart /data
+
+# The merchant stays on loopback: inside this container it is the only caller that
+# ever reaches it. PORT is what a managed host hands you, and the entrypoint turns
+# it into the buyer's address.
+ENV MARKET_PORT=8081 \
+    MARKET_ADDR=:8081 \
+    MARKET_AGENT_CARD_URL=http://127.0.0.1:8081/a2a/ \
+    USER_MARKET_MCP_ENDPOINT=http://127.0.0.1:8081/mcp \
+    USER_MARKET_A2A_ENDPOINT=http://127.0.0.1:8081/a2a/.well-known/agent-card.json \
+    TELEGRAM_OFFSET_FILE=/data/telegram-offset.json \
+    PORT=8082
+
+VOLUME /data
+EXPOSE 8082
+USER agentmart
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -q -O- "http://127.0.0.1:${PORT:-8082}/health" >/dev/null 2>&1 || exit 1
+ENTRYPOINT ["/usr/local/bin/agents-entrypoint.sh"]
