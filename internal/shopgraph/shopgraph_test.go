@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agentmart/internal/catalog"
 	"agentmart/internal/llmchat"
@@ -602,5 +603,50 @@ func TestASettledOutcomeDescribesTheBasketTheShopPriced(t *testing.T) {
 	}
 	if fallback.ProductID != "oil-1" || fallback.Quantity != 9 {
 		t.Fatalf("without a priced basket the outcome is all there is: %+v", fallback)
+	}
+}
+
+// TestANegotiatedOutcomeStillCarriesWhenTheShopQuoted covers the one route where
+// the quote time could not travel on the Outcome. Accept, escalate and decline all
+// build their Outcome in Go and copy the offer's time onto it. The negotiating
+// stage's Outcome is written by a model, and QuotedAt is fenced out of that shape
+// so a model can never claim a price is fresher than it is, which also means the
+// field comes back as the zero time. Left there, the gate has nothing to age a
+// negotiated price against and every stale price passes.
+func TestANegotiatedOutcomeStillCarriesWhenTheShopQuoted(t *testing.T) {
+	service, err := New(t.Context(), Config{Model: "stub", APIKey: "key", BaseURL: "http://localhost:0"}, fakeGraphTools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const session = "run-quote"
+	quoted := time.Now().UTC().Add(-90 * time.Second)
+	service.begin(session, Wallet{BalancePaise: 500000, SpendLimitPaise: 500000}, nil, Conversation{})
+	service.recordPriced(session, pricedGoods{productID: "trim-9", quantity: 1, quotedAt: quoted})
+
+	// What the negotiating agent hands back: no quote time, because it cannot write
+	// one, and no product or count either for the same reason.
+	result, err := service.resultFrom(session, nil, Outcome{
+		Action: string(ActionBuy), ProductName: "Trimmer", FinalPaise: 181339,
+		Rationale: "settled at the shop's number", SessionID: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.QuotedAt.Equal(quoted) {
+		t.Fatalf("quoted at %v, want the %v the run recorded when the shop priced this basket: a zero time leaves the gate unable to refuse a stale price", result.QuotedAt, quoted)
+	}
+
+	// A stage that writes its own time keeps it, so this is a fallback and not an
+	// override of the merchant's own statement.
+	own := time.Now().UTC().Add(-5 * time.Second)
+	settled, err := service.resultFrom(session, nil, Outcome{
+		Action: string(ActionBuy), ProductName: "Trimmer", FinalPaise: 181339,
+		Rationale: "accepted", SessionID: session, QuotedAt: own,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settled.QuotedAt.Equal(own) {
+		t.Fatalf("quoted at %v, want the stage's own %v", settled.QuotedAt, own)
 	}
 }

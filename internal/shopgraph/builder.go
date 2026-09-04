@@ -88,6 +88,12 @@ type pricedGoods struct {
 	productID    string
 	quantity     int
 	bundledPaise int64
+	// quotedAt is when this side received the price. It is recorded here with the
+	// basket because the negotiating stage answers with an Outcome the model wrote,
+	// and QuotedAt is fenced out of that shape on purpose, so the model's copy comes
+	// back as the zero time. Reading it from the run instead is what lets the gate
+	// age a negotiated price at all.
+	quotedAt time.Time
 }
 
 // PriorOption is one item the shop showed earlier, kept so a follow up such as
@@ -536,6 +542,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 			// invent attached goods that would flatter the premium band.
 			s.recordPriced(ctx.SessionID(), pricedGoods{
 				productID: offer.ProductID, quantity: offer.Quantity, bundledPaise: offer.BundledPaise,
+				quotedAt: offer.QuotedAt,
 			})
 			premium, pct := premiumOver(offer.FinalPaise, offer.BasePaise+offer.BundledPaise)
 			view := OfferView{
@@ -682,7 +689,7 @@ func (s *Service) buildGraph() (agent.Agent, error) {
 				Quantity: qty, FinalPaise: finalPaise, Rationale: outcome.Rationale,
 				Steps: outcome.Steps, SessionID: outcome.SessionID, Transcript: outcome.Transcript,
 				Accepted: outcome.Accepted, NeedsApproval: needsApproval,
-				QuotedAt: outcome.QuotedAt,
+				QuotedAt: quotedAt(outcome, goods),
 			}, nil
 		}, workflow.NodeConfig{Timeout: nodeTimeout})
 
@@ -804,7 +811,10 @@ func (s *Service) settledGoods(sessionID string, outcome Outcome) pricedGoods {
 	if priced := s.pricedFor(sessionID); priced.productID != "" {
 		return priced
 	}
-	return pricedGoods{productID: outcome.ProductID, quantity: outcome.Quantity, bundledPaise: outcome.BundledPaise}
+	return pricedGoods{
+		productID: outcome.ProductID, quantity: outcome.Quantity,
+		bundledPaise: outcome.BundledPaise, quotedAt: outcome.QuotedAt,
+	}
 }
 
 // resultFrom turns what the graph finished holding into a result. A settled
@@ -823,7 +833,7 @@ func (s *Service) resultFrom(sessionID string, lastResult *Result, lastOutput an
 			Steps: outcome.Steps, SessionID: outcome.SessionID,
 			Transcript: outcome.Transcript, Accepted: outcome.Accepted,
 			NeedsApproval: Action(outcome.Action) == ActionAskHuman,
-			QuotedAt:      outcome.QuotedAt,
+			QuotedAt:      quotedAt(outcome, goods),
 		}), nil
 	}
 	// The quote is in hand but nothing settled it. Losing the negotiation is not
@@ -895,6 +905,18 @@ func outcomeFromAny(raw any) (Outcome, bool) {
 		}
 	}
 	return Outcome{}, false
+}
+
+// quotedAt is when the shop's price was received. The accept, escalate and decline
+// stages carry it on the Outcome they build; the negotiating stage cannot, because
+// its Outcome is written by a model and the field is fenced out of that shape, so
+// the run's own record of the offer answers instead. Zero here would leave the
+// gate unable to tell a fresh price from an hour old one.
+func quotedAt(outcome Outcome, goods pricedGoods) time.Time {
+	if !outcome.QuotedAt.IsZero() {
+		return outcome.QuotedAt
+	}
+	return goods.quotedAt
 }
 
 // outcomeFrom projects a merchant resolution onto the stage contract.
