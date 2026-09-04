@@ -320,7 +320,6 @@ not a redesign.
 | the uplift bounds are chosen, not measured | `negotiation/conditions.go` | the amounts inside them are argued from observations, but the ceilings are judgement |
 | no drawable mandate on this account | `internal/buyer/settlement.go` | the approval path settles from the allowance, not from a payment object, and the route that would charge a mandate is withheld per account rather than by test mode |
 | the buyer's account id is self asserted | `negotiation/http.go`, one shared token for all callers | a caller can claim another account's loyalty tier and write trail rows against it |
-| cost is enforced on the merchant side only | `internal/gate` has no cost knowledge | "never below cost" is proven where the price is set, not at both ends |
 | the gateway sales view reads one page | `internal/razorpay/sales.go:41`, `count=100` with no paging | the refund rate behind an opening quote is computed from the first hundred payments and refunds in the window rather than from all of them |
 
 Every row above was verified against the code, with a file and a line, rather
@@ -335,6 +334,7 @@ asserting it.
 
 | Was | Closed by | Proved by |
 | --- | --- | --- |
+| "never below cost" was proven only where the price is set, so the one layer that cannot be bypassed took the merchant's word for it | the fulfilment function floors every discount at `cost_paise * qty` before it settles, migration `20260903000300`, and `cost_paise < price_paise` is a table constraint rather than a property of the rows that happened to be seeded, migration `20260903000800` | the two migrations together: a list total is above cost by constraint, and anything below a list total is refused below cost at settlement. The gate still has no cost knowledge, which is deliberate: it never sees the merchant's floor |
 | a bundle was measured against the main product alone, and an out of stock partner was attached and charged for anyway | the run records the basket it priced and settlement reads the partner back from it, `shopgraph/builder.go` and migration `20260904000200`, and the opening offer attaches a partner only when the shelf can cover the count, `negotiation/policy.go` | `shopgraph_test.go`, where a negotiated result carries the attached amount the run recorded rather than the zero a model can write, and `orchestrator_test.go`, where an empty shelf partner is not attached at all |
 | one shared negotiation slot for all callers | the in flight input is keyed by the graph pass that stored it, `marketgraph/nodes.go:275`, and deleted on the way out | structure rather than a test: `nodes.go:38-42` is a `sync.Map` keyed per pass, so there is no shared cell left to cross |
 | the price freshness rail could not fire | the instant a quote was observed travels with the request instead of being read as now, `buyer/purchase.go:174` | `stale_price_test.go:39` refuses a quote older than the window, `:49` still buys inside it, and `:56` treats no observation as priced now |
