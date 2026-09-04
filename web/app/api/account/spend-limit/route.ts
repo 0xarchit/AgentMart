@@ -27,13 +27,19 @@ export async function PATCH(request: Request) {
   const { data: before, error: beforeError } = await supabase.from("accounts").select("spend_limit_paise").eq("id", user.id).single();
   if (beforeError) return NextResponse.json({ error: serverFault("spend limit read", beforeError) }, { status: 502 });
   const previous = before.spend_limit_paise as number;
-  const { data, error } = await supabase.from("accounts").update({ spend_limit_paise: value }).eq("id", user.id).select("id,spend_limit_paise").single();
+  // The write goes through the service role, after the caller's own session read
+  // above proved who they are. A session could otherwise PATCH this column
+  // directly through the REST gateway, which skips the maximum enforced here and
+  // the audit row written below, and this column is what decides whether a person
+  // has to approve a purchase.
+  const trusted = createAdminClient();
+  const { data, error } = await trusted.from("accounts").update({ spend_limit_paise: value }).eq("id", user.id).select("id,spend_limit_paise").single();
   if (error) return NextResponse.json({ error: serverFault("spend limit update", error) }, { status: 502 });
   // This ceiling is what the agents may spend without asking, so moving it is a
   // change of authority and belongs on the trail beside the purchases it governs.
   // audit_log grants no insert to a signed-in caller, so the row goes through the
   // service role, after the caller's own session proved who they are.
-  const { error: trailError } = await createAdminClient().from("audit_log").insert({
+  const { error: trailError } = await trusted.from("audit_log").insert({
     account_id: user.id,
     actor: "account_owner",
     action: spendLimitAction(previous, value),
@@ -44,7 +50,7 @@ export async function PATCH(request: Request) {
     // Fail closed, as every other money boundary here does: an unrecorded change
     // to spending authority is put back rather than kept. If putting it back also
     // fails, say so plainly instead of reporting a clean update.
-    const { error: revertError } = await supabase.from("accounts").update({ spend_limit_paise: previous }).eq("id", user.id);
+    const { error: revertError } = await trusted.from("accounts").update({ spend_limit_paise: previous }).eq("id", user.id);
     if (revertError) {
       serverFault("spend limit revert", revertError);
       return NextResponse.json({ error: "The limit was changed but could not be recorded, and could not be put back. Check the dashboard before shopping." }, { status: 502 });

@@ -166,8 +166,13 @@ Row level security is on every table with own-row policies. The money functions
 are revoked from anonymous and signed-in roles and granted to the service role
 only, so the browser cannot reach them even with a valid session.
 
-Migrations live in `supabase/migrations/`, twenty nine of them, applied in
-filename order.
+Migrations live in `supabase/migrations/`, thirty of them, applied in filename
+order. The last one, `20260904000100_close_privilege_gaps.sql`, tightens three
+privileges rather than adding anything: it makes the account type trigger
+`security invoker` so it can see who is asking, moves the spend ceiling write to
+the service role, and stops the merchant's cost column being selectable by a
+signed-in or anonymous caller. Until it is applied, a session can widen its own
+spending ceiling and read every product's cost basis through the REST gateway.
 
 ## Configuration
 
