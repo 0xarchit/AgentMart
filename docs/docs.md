@@ -20,10 +20,17 @@ machine.
 Telegram updates reach the buyer one of two ways, decided by whether
 `TELEGRAM_WEBHOOK_URL` is set. With it, the buyer registers that URL with Telegram
 at startup and each update arrives as a `POST /telegram/webhook`; without it, the
-buyer long polls `getUpdates`. Both feed the same handler, one update at a time and
-in order, and both advance the same stored offset, which is what catches a delivery
-sent twice. A token is either polled or posted to, never both: Telegram refuses
-`getUpdates` while a webhook is registered, and allows one poller per token.
+buyer long polls `getUpdates`. Both feed the same handler and both advance the same
+stored offset, which is what catches a delivery sent twice. A token is either polled
+or posted to, never both: Telegram refuses `getUpdates` while a webhook is
+registered, and allows one poller per token.
+
+Where the two differ is concurrency. A delivery is handed to one worker per person,
+so several people are shopped for at once while one person's own messages stay in
+arrival order, which they must: two runs for one person would read the same wallet
+balance twice and answer the same open decision twice. Polling stays strictly
+sequential, because there the offset is also the fetch cursor and advancing it out
+of order would skip an update.
 
 ## Merchant surface
 
@@ -51,8 +58,10 @@ linked person and spend that person's allowance.
 
 The handler answers Telegram as soon as it has taken the update, not when the
 shopping run finishes, because a run can take minutes and Telegram will not wait
-that long. When the queue is full it answers 503 rather than 200, so Telegram
-retries and the message is delayed instead of dropped.
+that long. When the intake queue is full it answers 503 rather than 200, so Telegram
+retries and the message is delayed instead of dropped. Behind that, each person has
+a queue of their own, and a person who fills theirs is told to wait: that message
+was already accepted, so Telegram will not send it again and silence would lose it.
 
 ## Web surface
 
@@ -336,6 +345,7 @@ Notable tests, because they encode contracts rather than behaviour:
 | `TestAFlappingModelIsAskedAgainRatherThanAbandoned` | a chain does not shrink the retry budget |
 | `clampToRails` tests | no strategy can price below the cost floor |
 | `TestWebhookRefusesADeliveryWithTheWrongSecret`, `TestWebhookIsServedOutsideTheBearerWall` | only Telegram's own secret opens the webhook, and opening it does not open the agent |
+| `TestTwoPeopleAreShoppedForAtTheSameTime`, `TestOnePersonsMessagesRunInOrderAndNeverOverlap` | people are served in parallel, one person strictly in sequence |
 
 ## Failure behaviour
 

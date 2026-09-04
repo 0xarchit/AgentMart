@@ -38,15 +38,6 @@ identity or a gate outcome. Everything a model writes is clamped by
 deterministic code before it can touch money, and the fields that must never
 reach a model are fenced out of its schema in the type itself.
 
-| ❖ | At a glance | |
-| --- | --- | --- |
-| ⊚ | The person talks to | a Telegram bot, in plain words |
-| ◈ | The shop is represented by | its own selling agent, with pricing rails |
-| ∿ | Money comes from | a real captured test-mode payment, credited once per payment id |
-| ☍ | Every amount passes | nine ordered checks that re-derive it from the catalog |
-| ⌕ | Every conversation carries | one run identifier, tying the words to the money rows |
-| § | Amounts are | `int64` paise in Go, `bigint` in Postgres, no float in the path |
-
 ---
 
 ## ✦ Features
@@ -57,7 +48,7 @@ reach a model are fenced out of its schema in the type itself.
 | ⊚ | **A gate no model can talk past** | Nine ordered checks re-derive every amount from the catalog before anything is charged, and each returns a named reason. Charge-creating tools are kept out of every tool set, and that exclusion is a test rather than a promise |
 | ◈ | **Negotiation with a floor** | The shop may concede, attach a partner product, or price for cover, handling and scarcity, and never below cost. The buyer counters once and judges what comes back |
 | ∿ | **A funded allowance** | A genuine captured test-mode payment credits the wallet, verified by signature and credited exactly once per payment id |
-| ∿ | **Two ways in, one handler** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs. Without one the buyer polls. Either way the updates are handled one at a time, in order |
+| ∿ | **Two ways in** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs; without one the buyer polls. On the webhook there is one worker per person, so several people are shopped for at once while one person's own messages stay in arrival order |
 | ☍ | **A standing spend limit** | Anything above it is refused with a token and handed to the person. Nothing is spent while that answer is outstanding, and approval settles the exact amount that was quoted |
 | ⌕ | **One run identifier** | The conversation on the left, the money it caused on the right, in one view at `/dashboard/runs` |
 | ۞ | **Row level security** | Every table is behind RLS. A buyer reads its own rows and no others |
@@ -523,11 +514,3 @@ to [Releases](https://github.com/0xarchit/AgentMart/releases).
 **⬢ Every money action explainable, bounded and gated. ⬢**
 
 </div>
-
-
-
-
-
-
-
-

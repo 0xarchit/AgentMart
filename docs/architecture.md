@@ -21,8 +21,9 @@ One purchase, end to end. Every arrow is a real call.
 
 The person's words reach the buyer over Telegram, posted to the buyer's webhook
 when a public URL is configured and fetched by long polling when it is not.
-Everything below is the same either way: both paths hand the update to one
-handler, one at a time and in order.
+Everything below is the same either way. On the webhook the flow runs per person,
+so several people can be at different steps of it at once, while one person's own
+messages run in the order they arrived.
 
 ```text
 person  "buy me a good trimmer"
@@ -433,9 +434,12 @@ gate that did its job is not scored as a lost sale.
 Also since then: the buyer takes Telegram updates by webhook when a public URL is
 configured, which is what lets it live on a host that sleeps between requests,
 since the delivery is the traffic that wakes it. Polling remains for a machine
-with no public URL. Both paths reach one handler, one update at a time and in
-order, and the offset that catches a delivery Telegram sends twice is the same one
-polling advanced. The two agents also ship as a single container with only the
+with no public URL. Both paths reach one handler and share the offset that catches a
+delivery Telegram sends twice. A delivery is then handed to one worker per person:
+several people are shopped for at once, one person's own messages stay in arrival
+order because two runs for one person would read the same balance twice, and a
+person who outruns their own queue is told to wait rather than dropped in silence.
+The two agents also ship as a single container with only the
 buyer's port published, because the merchant is reached over loopback by the buyer
 alone and needs no public address at all.
 
