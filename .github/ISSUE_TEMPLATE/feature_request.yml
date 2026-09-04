@@ -1,0 +1,80 @@
+name: ✦ Feature or change request
+description: Propose something this should do that it does not do yet
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The bar here is not "would this be nice". It is "what breaks today
+        without it". A request that names the situation it unblocks gets a real
+        answer faster than one that names a feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What does not work today
+      description: >
+        The situation, not the solution. What did you try to do, and where did it
+        stop?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part would change
+      options:
+        - Buyer agent, cmd/user
+        - Merchant agent, cmd/market
+        - Gate or money rails
+        - Storefront, dashboard or run view, web
+        - Database, migrations or RLS
+        - Payment gateway or settlement
+        - Containers, release or CI
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: money
+    attributes:
+      label: Would this let a model decide an amount, a basket, an identity, or a gate outcome
+      description: >
+        A model may propose any of those. It may never decide one. If the answer
+        is yes, say how deterministic code would clamp it before it reaches
+        money, and the proposal is judged on that answer.
+      options:
+        - "No"
+        - "Yes, and the clamp is described below"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you already considered and rejected
+      description: >
+        Including doing nothing. Several existing choices here are deliberate
+        reductions rather than gaps, and docs/architecture.md says which.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: >
+            I read the known limitations in the README and this is not already
+            recorded there as a deliberate decision
+          required: true
+        - label: I searched existing issues and this is not one of them
+          required: true

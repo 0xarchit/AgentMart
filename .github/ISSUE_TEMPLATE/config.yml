@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ۞ Report a security issue privately
+    url: https://github.com/0xarchit/AgentMart/security/advisories/new
+    about: >
+      Anything that moves money past the gate, reads or writes another account's
+      rows, or leaks a key. Never open a public issue for these.
+  - name: § Ask a question
+    url: https://github.com/0xarchit/AgentMart/discussions
+    about: >
+      Usage, setup and design questions. Read docs/architecture.md and docs/docs.md
+      first, they answer most of them.

@@ -1,0 +1,106 @@
+name: ⌕ Bug report
+description: Something behaves differently from what the code or the docs claim
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a way to move money past the gate, or to read or write another
+        account's rows, do not file it here. Report it privately through the
+        Security tab. See [SECURITY.md](../blob/main/.github/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, in plain words.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected instead
+      description: >
+        If a doc, a README claim, or a comment says otherwise, quote it. A gap
+        between the claim and the behaviour is the bug, whichever side is wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The smallest sequence that shows it.
+      placeholder: |
+        1. Send the bot "buy me a trimmer under 2500"
+        2. Approve the quote
+        3. The wallet is debited twice
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Buyer agent, cmd/user
+        - Merchant agent, cmd/market
+        - Gate or money rails
+        - Storefront, dashboard or run view, web
+        - Database, migrations or RLS
+        - Payment gateway, test mode
+        - Containers, release or CI
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: trail
+    attributes:
+      label: Run identifier or audit rows
+      description: >
+        Every conversation carries one run identifier that ties it to the money
+        rows it caused. Paste it if you have it, plus the refusal reason if one
+        was shown. Redact keys and tokens; reference secrets by name only.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: A release tag, an image tag, or a commit sha.
+      placeholder: v0.1.0, or sha-5ff9f8b45c04
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: How you ran it
+      placeholder: |
+        aio_agentmart container on Podman 5, Windows 11
+        or: from source, Go 1.26.5, Node 24, Postgres on Supabase
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output only. Redact keys, tokens and bot tokens.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues and this is not one of them
+          required: true
+        - label: >
+            All migrations in supabase/migrations/ are applied in filename order
+            on the database I ran against
+          required: true
+        - label: There is only one buyer process against this bot token
+          required: false
