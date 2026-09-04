@@ -397,18 +397,27 @@ func main() {
 		return nil
 	}
 	if deliveries != nil {
+		// One worker per person, so a run that takes minutes for one person does not
+		// hold up anybody else. One person's own messages still run in arrival order.
+		workers := newPersonWorkers(handle)
+		defer workers.wait(workerRetireGrace)
+		router := &webhookRouter{
+			workers:     workers,
+			checkpoints: checkpoints,
+			logger:      logger,
+			offset:      offset,
+			busy: func(replyCtx context.Context, message *telegram.Message) {
+				if sendErr := client.SendMessage(replyCtx, message.Chat.ID, "Still working on your last message. I will come back to this one straight after."); sendErr != nil {
+					logger.Error("busy reply failed", "error", sendErr)
+				}
+			},
+		}
 		for {
 			select {
 			case <-pollContext.Done():
 				return
 			case update := <-deliveries:
-				// One at a time, exactly as polling ran them. The stored offset is also
-				// the guard against a delivery Telegram sends twice, and it is only sound
-				// to advance it from a single goroutine.
-				offset, err = processUpdates(pollContext, []telegram.Update{update}, offset, checkpoints, handle)
-				if err != nil {
-					logger.Error("telegram update processing failed", "error", err)
-				}
+				router.route(pollContext, update)
 			}
 		}
 	}

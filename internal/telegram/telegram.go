@@ -100,9 +100,11 @@ func (c *Client) Poll(ctx context.Context, offset int) ([]Update, error) {
 // is the only way Telegram can prove a request came from it.
 //
 // One connection at a time is deliberate. Telegram will otherwise deliver
-// concurrently, and out of order arrivals would let a later update advance the
-// stored offset past an earlier one that has not been handled yet. The buyer
-// handles one message at a time anyway, so nothing is lost by the limit.
+// concurrently, and out of order arrivals would let a later update be recorded as
+// the high water mark before an earlier one has been taken, which is what makes a
+// repeat detectable. Nothing is lost by the limit: the buyer answers a delivery as
+// soon as it has taken it, and the work behind that answer runs per person in
+// parallel.
 func (c *Client) SetWebhook(ctx context.Context, endpoint, secret string) error {
 	if strings.TrimSpace(endpoint) == "" {
 		return fmt.Errorf("telegram webhook endpoint is required")
