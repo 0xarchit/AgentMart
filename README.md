@@ -6,7 +6,7 @@
 
 [![Status](https://img.shields.io/badge/Status-MVP%20Deployed-000000.svg?style=for-the-badge&logo=rocket&logoColor=white&labelColor=000000&color=000000)](https://github.com/0xarchit/AgentMart/pulse)
 [![License](https://img.shields.io/badge/License-MIT-000000.svg?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=000000&color=000000)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v0.1.0-000000.svg?style=for-the-badge&logo=github&logoColor=white&labelColor=000000&color=000000)](https://github.com/0xarchit/AgentMart/releases/tag/v0.1.0)
+[![Release](https://img.shields.io/github/v/tag/0xarchit/AgentMart?sort=semver&style=for-the-badge&logo=github&logoColor=white&label=Release&labelColor=000000&color=000000)](https://github.com/0xarchit/AgentMart/releases/latest)
 
 [![Go](https://img.shields.io/badge/Go-1.26+-000000.svg?style=for-the-badge&logo=go&logoColor=white&labelColor=000000&color=000000)](https://go.dev)
 [![NextJs](https://img.shields.io/badge/NextJs-16+-000000.svg?style=for-the-badge&logo=nextdotjs&logoColor=white&labelColor=000000&color=000000)](https://nextjs.org)
