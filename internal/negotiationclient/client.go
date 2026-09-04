@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"agentmart/internal/negotiation"
 	"agentmart/internal/runid"
@@ -104,6 +105,10 @@ type Resolution struct {
 	FinalAmountPaise int64              `json:"final_amount_paise"`
 	UpliftPaise      int64              `json:"uplift_paise"`
 	Transcript       []negotiation.Turn `json:"transcript,omitempty"`
+	// QuotedAt is when the shop says this amount became its standing ask. It is
+	// carried so a purchase built from a stored session can be dated: the gate
+	// refuses a negotiated amount it cannot age.
+	QuotedAt time.Time `json:"quoted_at"`
 }
 
 // withRun names the run this message belongs to, so the shop's trail rows join

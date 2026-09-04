@@ -31,6 +31,12 @@ type Proposal struct {
 type Counter struct {
 	FinalAmountPaise int64
 	Reason           string
+	// QuotedAt is when this amount became the standing ask. The session stamps it
+	// rather than taking it from a caller, and it is reported to the buyer on
+	// resolve, because a buyer accepting a stored quote from a command has no other
+	// way to know how old the price is: the free-text path stamps receipt itself,
+	// but /negotiate and /accept are separate messages with nothing between them.
+	QuotedAt time.Time
 }
 
 // MaxRounds caps merchant counters after the opening offer.
@@ -85,6 +91,7 @@ func (s *Session) CounterOffer(counter Counter) error {
 	if err := validateCounter(s, counter); err != nil {
 		return err
 	}
+	counter.QuotedAt = time.Now().UTC()
 	s.Counter = counter
 	s.Status = StatusCountered
 	s.Round = 1
@@ -104,6 +111,7 @@ func (s *Session) Renegotiate(counter Counter) error {
 	if err := validateCounter(s, counter); err != nil {
 		return err
 	}
+	counter.QuotedAt = time.Now().UTC()
 	s.Counter = counter
 	s.Round++
 	s.appendTurn("merchant", fmt.Sprintf("Counter INR %.2f: %s", float64(counter.FinalAmountPaise)/100, counter.Reason))

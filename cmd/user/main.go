@@ -991,7 +991,11 @@ func responseForCommandWithServices(ctx context.Context, linker linkRedeemer, pu
 		if command[0] == "/decline" {
 			return "Merchant counter offer declined.", nil
 		}
-		result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:negotiation:%d:%s", telegramID, resolution.SessionID)})
+		// The quote's age travels with it. Without this the gate was handed the clock
+		// at purchase time, so the five minute freshness window could never fire on a
+		// negotiated premium, and the shop's own session lifetime was the only bound
+		// on how old an accepted price could be.
+		result, err := purchases.Purchase(ctx, buyer.PurchaseRequest{TelegramID: telegramID, ProductID: resolution.ProductID, Quantity: resolution.Quantity, BaseAmountPaise: resolution.BaseAmountPaise, FinalAmountPaise: resolution.FinalAmountPaise, IdempotencyKey: fmt.Sprintf("telegram:negotiation:%d:%s", telegramID, resolution.SessionID), PriceObservedAt: resolution.QuotedAt})
 		if err != nil {
 			return "Negotiated purchase could not be completed.", nil
 		}

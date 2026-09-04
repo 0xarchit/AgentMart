@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"agentmart/internal/catalog"
 )
@@ -149,5 +150,47 @@ func TestAFundedDiscountIsAShareOfEverythingBeingBought(t *testing.T) {
 	}
 	if session.BundledPaise != 20_000 {
 		t.Fatalf("bundled = %d, want the half price partner carried on the session", session.BundledPaise)
+	}
+}
+
+// TestResolvingASessionReportsWhenItWasQuoted pins the field the buyer's gate
+// needs to date a stored quote. /negotiate and /accept are separate messages with
+// nothing between them, so the buyer has no memory of when the price arrived and
+// the shop is the only place the time exists.
+func TestResolvingASessionReportsWhenItWasQuoted(t *testing.T) {
+	handler := NewCatalogServer(func(_ context.Context, id string) (catalog.Product, error) {
+		return catalog.Product{ID: id, Name: "Trimmer", PricePaise: 100_000, Stock: 10, TrustScore: 80}, nil
+	}).Handler()
+	call := func(t *testing.T, body string) map[string]any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/negotiation", bytes.NewBufferString(body)))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+
+	before := time.Now().UTC().Add(-time.Second)
+	opened := call(t, `{"type":"propose","product_id":"trim-9","qty":1}`)
+	sessionID, _ := opened["session_id"].(string)
+	if sessionID == "" {
+		t.Fatalf("no session came back: %v", opened)
+	}
+	settled := call(t, `{"type":"accept","session_id":"`+sessionID+`"}`)
+	quoted, ok := settled["quoted_at"].(string)
+	if !ok || quoted == "" {
+		t.Fatalf("resolve reported no quote time: %v. The buyer cannot age a price it is never told the age of.", settled)
+	}
+	at, err := time.Parse(time.RFC3339Nano, quoted)
+	if err != nil {
+		t.Fatalf("quoted_at = %q: %v", quoted, err)
+	}
+	if at.Before(before) || at.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("quoted_at = %v, want the moment this session was quoted", at)
 	}
 }

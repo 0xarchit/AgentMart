@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"agentmart/internal/buyer"
 	"agentmart/internal/negotiationclient"
@@ -409,4 +410,61 @@ func TestResolvingAnApprovalWithoutAResolverErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("a purchaser that cannot resolve approvals returned no error")
 	}
+}
+
+// datedNegotiator answers /accept with a quote that was priced a while ago, which
+// is the situation the gate's freshness window exists for.
+type datedNegotiator struct {
+	fakeNegotiator
+	quotedAt time.Time
+}
+
+func (d datedNegotiator) Accept(context.Context, string) (negotiationclient.Resolution, error) {
+	return negotiationclient.Resolution{
+		SessionID: "session", ProductID: "product", Quantity: 1,
+		BaseAmountPaise: 100, FinalAmountPaise: 140, Status: "accepted", QuotedAt: d.quotedAt,
+	}, nil
+}
+
+// TestAcceptingAStoredQuoteCarriesItsAge pins the wire that makes the gate's
+// stale_price rail reachable from a command. /negotiate and /accept are separate
+// messages, so the buyer has no memory of when the price arrived and the shop
+// reports it on resolve. Left off, the purchase layer stamped the observation as
+// now and a quote of any age was spent as freshly seen.
+func TestAcceptingAStoredQuoteCarriesItsAge(t *testing.T) {
+	quoted := time.Now().UTC().Add(-40 * time.Minute)
+	purchases := &requestCapturingPurchaser{result: buyer.PurchaseResult{Fulfilled: true, AmountPaise: 140, OrderID: "order-1"}}
+
+	if _, err := responseForCommand(t.Context(), fakeLinker{}, purchases, fakeRefunder{}, 7, 1,
+		[]string{"/accept", "session"}, datedNegotiator{quotedAt: quoted}); err != nil {
+		t.Fatal(err)
+	}
+	if len(purchases.seen) != 1 {
+		t.Fatalf("sent %d purchases, want exactly one", len(purchases.seen))
+	}
+	got := purchases.seen[0].PriceObservedAt
+	if !got.Equal(quoted) {
+		t.Fatalf("the gate is told the price was seen at %v, want the %v the shop reported. Anything else makes a stale negotiated price unspendable to detect.", got, quoted)
+	}
+}
+
+// requestCapturingPurchaser keeps the requests it was handed.
+type requestCapturingPurchaser struct {
+	result buyer.PurchaseResult
+	err    error
+	seen   []buyer.PurchaseRequest
+}
+
+func (p *requestCapturingPurchaser) Purchase(_ context.Context, request buyer.PurchaseRequest) (buyer.PurchaseResult, error) {
+	p.seen = append(p.seen, request)
+	return p.result, p.err
+}
+
+func (p *requestCapturingPurchaser) RequestApproval(_ context.Context, request buyer.PurchaseRequest, _ string) (buyer.PurchaseResult, error) {
+	p.seen = append(p.seen, request)
+	return buyer.PurchaseResult{ApprovalRequired: true, ApprovalToken: "token", AmountPaise: p.result.AmountPaise}, p.err
+}
+
+func (p *requestCapturingPurchaser) ResolveApproval(context.Context, int64, string, string) (buyer.PurchaseResult, error) {
+	return p.result, p.err
 }

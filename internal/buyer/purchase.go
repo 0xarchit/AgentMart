@@ -169,10 +169,17 @@ func (s *PurchaseService) attempt(ctx context.Context, request PurchaseRequest) 
 		return PurchaseResult{}, fmt.Errorf("negotiated amount is invalid")
 	}
 	now := s.now()
-	// A quote carries when it was seen. Without one the price is being read from
-	// the catalog in this call, so now is the honest observation time.
+	// A quote carries when it was seen. Without one, now is the honest observation
+	// time only while the amount is the list total: the base was just re-derived
+	// from the catalog above, so a final equal to it carries nothing that could have
+	// gone stale. A final that differs carries a negotiated premium or a funded
+	// discount, agreed somewhere else at some earlier time, and nothing else in this
+	// path re-checks it. Stamping that as seen now told the gate a negotiated price
+	// of any age was fresh, which is the whole of what the freshness window exists
+	// to catch. Left zero instead, so the gate refuses it rather than approving it,
+	// unless a person has already approved this amount by hand.
 	observed := request.PriceObservedAt
-	if observed.IsZero() {
+	if observed.IsZero() && finalAmount == baseAmount {
 		observed = now
 	}
 	decision, err := s.gate.Evaluate(ctx, gate.Request{AccountID: account.ID, ProductID: product.ID, Quantity: request.Quantity, UnitPricePaise: product.PricePaise, BaseAmountPaise: baseAmount, FinalAmountPaise: finalAmount, WalletBalancePaise: account.WalletBalancePaise, SpendLimitPaise: account.SpendLimitPaise, HumanApproved: request.HumanApproved, Stock: product.Stock, PriceObservedAt: observed, Now: now})

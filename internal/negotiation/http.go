@@ -489,7 +489,7 @@ func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[s
 	if err := s.store.Put(ctx, request.SessionID, session); err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	response := map[string]any{
 		"session_id":         request.SessionID,
 		"status":             session.Status,
 		"product_id":         session.Proposal.ProductID,
@@ -498,7 +498,14 @@ func (s *Server) resolve(ctx context.Context, request negotiationRequest) (map[s
 		"base_amount_paise":  session.Proposal.BaseAmountPaise,
 		"final_amount_paise": session.Counter.FinalAmountPaise,
 		"transcript":         session.Transcript,
-	}, nil
+	}
+	// The buyer's gate refuses a quote it cannot date, so the shop says when this
+	// price became its ask. Omitted rather than sent as a zero time when there is
+	// nothing to report, so the buyer sees an absence instead of the epoch.
+	if !session.Counter.QuotedAt.IsZero() {
+		response["quoted_at"] = session.Counter.QuotedAt
+	}
+	return response, nil
 }
 
 // buyerAccountFor prefers the identity recorded when the session was proposed,
