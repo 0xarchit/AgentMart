@@ -267,6 +267,7 @@ func (s *Server) propose(ctx context.Context, request negotiationRequest) (map[s
 	if err := session.CounterOffer(counter); err != nil {
 		return nil, err
 	}
+	session.BundledPaise = offer.BundledPaise
 	// Record the buyer's identity once so later rounds can personalise
 	// campaign offers without re-sending it on every negotiation message.
 	session.BuyerAccountID = strings.TrimSpace(request.AccountID)
@@ -336,7 +337,7 @@ func (s *Server) counter(ctx context.Context, request negotiationRequest) (map[s
 	// buyer is already entitled to, and never below cost. With no entitlement the
 	// floor is the list total, which is what the fulfillment contract assumed for
 	// everyone before.
-	floorPaise = EntitledFloor(floorPaise, session.Proposal.BaseAmountPaise, s.entitlementFor(ctx, session.BuyerAccountID))
+	floorPaise = EntitledFloor(floorPaise, session.Proposal.BaseAmountPaise+session.BundledPaise, s.entitlementFor(ctx, session.BuyerAccountID))
 	// The session enforces its own floor from here on, so a recorded counter can
 	// go below list exactly as far as this buyer is funded for and no further.
 	session.FloorPaise = floorPaise

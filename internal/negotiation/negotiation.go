@@ -59,6 +59,14 @@ type Session struct {
 	// for. It is written by the caller that computed it, because the floor needs
 	// the product's cost and the buyer's campaign and the session knows neither.
 	FloorPaise int64 `json:"floor_amount_paise,omitempty"`
+	// BundledPaise is what the opening offer charged for goods attached to the
+	// product the buyer named. It sits beside the proposal rather than inside it
+	// because the proposal's base amount has to stay the main product alone: the
+	// gate re-derives that from the unit price and the quantity, and a base that
+	// included a partner would fail its own arithmetic check. The funded discount
+	// needs the other figure, the list total of everything being bought, or a
+	// bundled deal concedes further than the campaign funds.
+	BundledPaise int64 `json:"bundled_amount_paise,omitempty"`
 }
 
 // New creates a proposed negotiation session.

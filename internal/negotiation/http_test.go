@@ -74,3 +74,80 @@ func TestNegotiationHTTPFlow(t *testing.T) {
 		t.Fatalf("unexpected accepted session: %+v", result)
 	}
 }
+
+// TestAFundedDiscountIsAShareOfEverythingBeingBought pins the base the entitled
+// floor is measured against. A campaign funds a percentage off what the buyer is
+// asked to pay, and on a combo the ask includes the partner product. Measuring
+// the discount against the main product alone let the shop concede far past what
+// the campaign funded, all the way down to blended cost, on exactly the deals
+// where it had the most to give away.
+func TestAFundedDiscountIsAShareOfEverythingBeingBought(t *testing.T) {
+	partnerID := "cream-1"
+	stock := map[string]catalog.Product{
+		// Trust sits at the threshold and nothing else is observed, so the opening
+		// ask carries no uplift and the arithmetic below is only list and bundle.
+		"trim-9":  {ID: "trim-9", Name: "TrimPro", PricePaise: 100_000, Stock: 5, TrustScore: 80, ComboWith: &partnerID, ComboDiscountPct: 50},
+		"cream-1": {ID: "cream-1", Name: "CalmSkin", PricePaise: 40_000, Stock: 5, TrustScore: 80},
+	}
+	costs := map[string]int64{"trim-9": 10_000, "cream-1": 4_000}
+	getProduct := func(_ context.Context, id string) (catalog.Product, error) {
+		product, ok := stock[id]
+		if !ok {
+			return catalog.Product{}, errProductNotFound
+		}
+		return product, nil
+	}
+	getPriced := func(ctx context.Context, id string) (catalog.Product, int64, error) {
+		product, err := getProduct(ctx, id)
+		return product, costs[id], err
+	}
+
+	store := NewMemorySessionStore()
+	server, err := NewOrchestratedServer(getProduct, getPriced, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.WithEntitlement(func(context.Context, string) (int, error) { return 20, nil })
+	handler := server.Handler()
+
+	ask := func(t *testing.T, body string) map[string]any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/negotiation", bytes.NewBufferString(body)))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+
+	opened := ask(t, `{"type":"propose","product_id":"trim-9","qty":1,"account_id":"account-1"}`)
+	sessionID, _ := opened["session_id"].(string)
+	if sessionID == "" {
+		t.Fatalf("no session came back: %v", opened)
+	}
+	// The trimmer at 100000 plus the cream at half of 40000.
+	if opened["final_amount_paise"] != float64(120_000) {
+		t.Fatalf("opening ask = %v, want the list total and the half price partner", opened["final_amount_paise"])
+	}
+
+	ask(t, `{"type":"counter","session_id":"`+sessionID+`","account_id":"account-1","counter_amount_paise":85000}`)
+
+	session, ok, err := store.Get(t.Context(), sessionID)
+	if err != nil || !ok {
+		t.Fatalf("session missing after the counter: %v", err)
+	}
+	// 20% of the 120000 the buyer is actually asked for is 24000. Off the trimmer
+	// alone the floor would sit at 80000, which funds a 40000 concession from a
+	// campaign that pays for 24000. Blended cost is 12000 here, so nothing else is
+	// holding the line.
+	if session.FloorPaise != 96_000 {
+		t.Fatalf("floor = %d, want 96000: the funded share of everything being bought, not of the trimmer alone", session.FloorPaise)
+	}
+	if session.BundledPaise != 20_000 {
+		t.Fatalf("bundled = %d, want the half price partner carried on the session", session.BundledPaise)
+	}
+}

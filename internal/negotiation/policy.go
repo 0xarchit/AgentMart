@@ -35,6 +35,12 @@ type Offer struct {
 	FinalPaise int64 // asking amount
 	Reason     string
 	Bundle     *BundleItem
+	// BundledPaise is the discounted partner total already inside FinalPaise.
+	// Derived here rather than by each caller multiplying the per-unit bundle
+	// price again, because a funded buyer's floor is a share of the list total of
+	// everything being bought and getting that arithmetic twice invites the two
+	// answers to drift.
+	BundledPaise int64
 }
 
 // Priced pairs a public product with its merchant-private cost basis.
@@ -81,7 +87,8 @@ func OpeningOffer(main Priced, partner *Priced, quantity int, conditions Trading
 		if bundleUnit > math.MaxInt64-final {
 			return Offer{}, ErrInvalidProposal
 		}
-		final += bundleUnit * int64(quantity)
+		offer.BundledPaise = bundleUnit * int64(quantity)
+		final += offer.BundledPaise
 		offer.FinalPaise = final
 		offer.Kind = KindCombo
 		offer.Bundle = &BundleItem{ID: partner.Product.ID, Name: partner.Product.Name, PricePaise: bundleUnit, DiscountPct: pct}
