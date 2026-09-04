@@ -30,6 +30,8 @@ COPY web ./
 ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
+# The run stage copies .next/standalone, which is only produced when this is set.
+ENV NEXT_OUTPUT_STANDALONE=1
 RUN npm run build
 
 FROM docker.io/library/node:24-alpine AS run
