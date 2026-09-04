@@ -163,37 +163,6 @@ func queryWatcher(t *testing.T, body string) (*Store, <-chan url.Values) {
 	return NewStore(db), asked
 }
 
-// TestTheFundingPaymentReadIsScopedToOneAccount pins the filter that decides whose
-// card a cancellation refunds. FundingPayments produces the exact list of captured
-// payments the reversal spends against, and nothing downstream re-checks ownership:
-// the drawdown takes each payment id straight to the gateway, and the landed-leg
-// check matches on the order in the notes, not on whose payment it is. Every
-// reversal test hands the drawdown a canned slice, so none of them would notice
-// this read losing its account.
-func TestTheFundingPaymentReadIsScopedToOneAccount(t *testing.T) {
-	store, asked := queryWatcher(t, `[{"razorpay_payment_id":"pay_1","amount_paise":50000}]`)
-
-	payments, err := store.FundingPayments(t.Context(), "account-3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(payments) != 1 || payments[0].PaymentID != "pay_1" || payments[0].AmountPaise != 50000 {
-		t.Fatalf("payments = %+v", payments)
-	}
-	query := <-asked
-	if query.Get("account_id") != "eq.account-3" {
-		t.Fatalf("account filter = %q, want eq.account-3. Without it a cancellation refunds whichever account's top-up comes back first.", query.Get("account_id"))
-	}
-	if query.Get("entry_type") != "eq.topup" || query.Get("razorpay_payment_id") != "not.is.null" {
-		t.Fatalf("query = %v, want only captured top-ups, which are the only rows that can be reversed", query)
-	}
-	// Oldest first, so a reversal drains the money in the order it arrived rather
-	// than stranding capacity on whichever payment the database returns first.
-	if query.Get("order") != "created_at.asc" {
-		t.Fatalf("order = %q, want created_at.asc", query.Get("order"))
-	}
-}
-
 // TestTheResumedReversalLookupIsScopedToOneAccount pins the filter its own comment
 // names: "so a person cannot resume somebody else's refund by naming their order".
 // The table is service-role only, so row level security never applies here, and

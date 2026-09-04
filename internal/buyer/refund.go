@@ -34,16 +34,15 @@ type RefundRequest struct {
 	Reason     string
 }
 
-// RefundResult reports the wallet refund outcome, plus what the gateway confirmed
-// when a reversal path is configured.
+// RefundResult reports the wallet refund outcome, plus the gateway record left for
+// it when a reversal path is configured.
 type RefundResult struct {
-	Approved       bool
-	Duplicate      bool
-	OrderID        string
-	AmountPaise    int64
-	Reason         string
-	RefundIDs      []string
-	ShortfallPaise int64
+	Approved    bool
+	Duplicate   bool
+	OrderID     string
+	AmountPaise int64
+	Reason      string
+	RefundIDs   []string
 }
 
 // RefundService coordinates account lookup, the internal credit, and the gateway
@@ -60,8 +59,9 @@ func NewRefundService(accounts accountReader, walletService walletRefunder) *Ref
 	return &RefundService{accounts: accounts, wallet: walletService}
 }
 
-// UseReversal attaches the gateway reversal and the trail it writes to. Without it
-// the allowance credit is the whole refund, which is how this behaved before.
+// UseReversal attaches the gateway reversal and the trail it writes to. The
+// allowance credit is the whole refund either way: what this adds is the record of
+// it outside our own tables, and the refusal rows that go with it.
 func (s *RefundService) UseReversal(reversal Reversal, recorder refundRecorder) {
 	s.reversal = reversal
 	s.recorder = recorder
@@ -129,26 +129,25 @@ func (s *RefundService) Refund(ctx context.Context, request RefundRequest) (Refu
 	}
 
 	// The allowance is already credited, so a gateway refusal must not fail the
-	// refund the person was promised. It is recorded and the credit stands.
+	// refund the person was promised. It is recorded and the credit stands. Nothing
+	// is owed to them at the gateway: this leg is the record, not the money.
 	reversed, reverseErr := s.reversal.Reverse(ctx, reverse)
 	if reverseErr != nil && s.recorder != nil {
 		if err := s.recorder.RecordReversalFailure(ctx, account.ID, reverse.OrderID, reverseErr); err != nil {
 			return outcome, err
 		}
 	}
-	if len(reversed.RefundIDs) > 0 || reversed.ShortfallPaise > 0 {
+	if len(reversed.RefundIDs) > 0 {
 		if s.recorder != nil {
 			if err := s.recorder.RecordReversal(ctx, account.ID, reverse.OrderID, reversed); err != nil {
 				return outcome, err
 			}
 		}
 		outcome.RefundIDs = reversed.RefundIDs
-		outcome.ShortfallPaise = reversed.ShortfallPaise
 	}
 	if reverseErr == nil && s.recorder != nil {
-		// The gateway has answered for all of it. A shortfall is an answer too:
-		// the funding payments have nothing left to give, so asking again would
-		// reverse nothing and the trail already says so.
+		// The gateway has recorded it, so nothing about this cancellation is still
+		// owed and a later attempt has no reason to record it twice.
 		if err := s.recorder.SettleReversal(ctx, reverse.OrderID); err != nil {
 			return outcome, err
 		}

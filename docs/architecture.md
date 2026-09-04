@@ -242,12 +242,14 @@ What exists today, stated without flattery.
 | funding the allowance | hosted checkout, verified from the webhook and from the browser callback alike, credited once by key | a real captured payment |
 | agent purchase | order artifact created, then an atomic wallet debit | an order, no payment |
 | human approval | approval row plus a token, resumed through the gate, settled through a swappable adapter | none yet |
-| cancellation | wallet credit against the order id | none |
+| cancellation | wallet credit against the order id, recorded at the gateway | an order, no payment |
 
 The allowance model is the right shape for a delegated agent: the person funds a
 bounded balance with a spend limit, and the agent operates inside it. The gap is
-that only the funding step produces a payment object, so two of the four money
-moments have nothing an outside party can verify.
+that only the funding step produces a payment object. A purchase and a
+cancellation each leave an order a stranger can read, but no money moves at the
+gateway on either, and an approval leaves nothing at all until it settles as one
+of those two.
 
 What has been built toward closing it. Settlement is now one interface behind the
 gate, `internal/buyer/settlement.go`, swapped at a single call, so what moves the
@@ -343,10 +345,10 @@ asserting it.
 | a loyalty tier was farmable by buying and refunding in a loop, and the tier is not decoration: it is the entitlement that sets the floor a price may settle to | the tier counts only the orders whose money stayed, migration `20260903000500` | structure rather than a test, since nothing here runs SQL: `refund_wallet_order` moves a reversed order to `refunded_via_wallet` (`20260823000500_refund_contract.sql:66`) and the tier now counts `fulfilled_via_wallet` alone, so a reversal leaves the counted set, which is the rule `product_trading` already applied to the selling rate |
 | four rupee formatters that disagreed on the same amount, one rounding the paise away and one printing a single digit after the point, on the pages where a settled price is read back | one `money` in `web/lib/money.ts`, and the other three deleted rather than left beside it as alternatives | `money.test.ts`, which fails on a rounded amount, on one digit where there should be two, and on a lakh grouped the western way |
 | a failed read answered the browser in the database's own words, naming the table and the constraint to anyone who could provoke one | every route hands the fault to `serverFault` in `web/lib/errors.ts`, which logs it whole and answers with one sentence that carries none of it | `errors.test.ts`, which fails if any of the fault text survives into the response, and if the log receives one field instead of the whole error |
-| one retry key for every leg of a reversal that spans several funding payments, so the second leg is refused as a different request under a used key after the first has already sent money back | the key is derived per payment and amount where every caller passes through, `razorpay/refunds.go:131` | `refunds_test.go`, which fails if two legs of one reversal share a key, if retrying one leg does not reproduce its own, or if two separate reversals of equal amounts collide |
+| a cancellation returned the same money twice: the allowance was credited and the captured top-ups that funded it were refunded at the gateway, with nothing debiting the allowance afterwards, so the shop shipped goods for money it had already sent back | the gateway leg records the cancellation as an unpaid order and moves no money, `buyer/reversal.go`, and migration `20260904000300` restates what the three columns behind it hold | `reversal_test.go`, which fails if a cancellation reaches the gateway more than once, if the record does not name the cancelled order and the run that cancelled it, or if a gateway refusal is reported as a completed record |
 | the gateway refund rate counted refund objects against captured payments, so four one rupee test refunds read as a shop where nearly everything comes back, and that figure is what prices cover into a quote | refunded paise against captured paise, under its own divisor guard, `razorpay/sales.go:114` | `sales_test.go:67`, where one refund of 45,000 paise against 1,200,000 taken is three percent and not fifty |
 | the gateway sales view had no caller | `cmd/market/main.go:68` hands the gateway to the trading provider, which reads it per five minute window at `trading/trading.go:112` and feeds the refund rate into the conditions the shop prices from | the row above it in the open table, which is the narrower defect that remains once the view is reached: it reads only the first page |
-| an interrupted reversal was never resumed, so a gateway leg that failed or a process that stopped after the allowance was credited left the credit standing with no gateway evidence behind it, and the next refund returned before retrying it | the three things a resumed leg cannot reconstruct, the amount, the wording of the reason and the run, are written down beside the credit in the same transaction, migration `20260903000600`, and read back at `buyer/refund.go:185` instead of being rebuilt from the request in front of us | `refund_test.go`, where a second refund the wallet refuses still finishes the first attempt's reversal under that attempt's key, amount, reason and run rather than this one's, and `reversal_test.go`, where a leg the gateway already holds is counted and not sent again |
+| an interrupted reversal was never resumed, so a gateway leg that failed or a process that stopped after the allowance was credited left the credit standing with no gateway evidence behind it, and the next refund returned before retrying it | the three things a resumed leg cannot reconstruct, the amount, the wording of the reason and the run, are written down beside the credit in the same transaction, migration `20260903000600`, and read back at `buyer/refund.go:185` instead of being rebuilt from the request in front of us | `refund_test.go`, where a second refund the wallet refuses still finishes the first attempt's reversal under that attempt's key, amount, reason and run rather than this one's, and `reversal_test.go`, where a gateway refusal is reported rather than swallowed, so the attempt stays owed |
 | a run was one shot, so a follow up message started over instead of continuing | what the shop showed is harvested out of the run and kept per chat under `agentmart:chat:{id}` for two hours, written before the failure check rather than after it, and the next message is asked against it at `shopgraph/builder.go:413` | `shopgraph_test.go:284` fails if the follow up does not lead the brief or if the earlier shortlist is missing from it; `cmd/user/conversation_test.go:205` drives a run that breaks after the shop has answered and fails if the shortlist was lost with it; `:160` drives a real graph against a remembered shortlist and then requires a settled purchase to clear it, so a bought shortlist is never refined |
 
 Deferred with the reason stated, and on the merits rather than for time. The self
@@ -357,13 +359,14 @@ down here rather than left for someone to find. The bundled goods carry stays as
 already sequenced in a later phase. The mandate is not deferred by
 us at all: the route that charges one is withheld at the account level, which
 section 5 now evidences, so that deferral belongs to the gateway. Resuming an
-interrupted reversal is no longer deferred and is the last closed row above. The
-shortcut of putting the current run id into the retry key was rejected on the way
-there: a key the gateway has not seen makes a new refund rather than replaying the
-one already made, so it would have given up a guard against a second refund to buy
-replay. Writing the first attempt's inputs down buys the same replay and keeps the
-guard, and the two guards that stood in front of it, the wallet ledger's own key
-and the payment's remaining refundable amount, are untouched.
+interrupted reversal is no longer deferred and is the second closed row above.
+The shortcut of putting the current run id into the retry key was rejected on the
+way there, and the reason survives the reversal becoming a record: the run in the
+notes is what says which conversation cancelled the order, so a resumed leg that
+substitutes the run replaying it describes the wrong one. The guard that stood in
+front of all of it, the wallet ledger's own idempotency key, is untouched and is
+now the only thing that has to hold, because no leg of a cancellation moves money
+any more.
 
 One change is not in that table because it was never on the defect list, and it
 matters more than most of what was: a price could not settle below the list total,

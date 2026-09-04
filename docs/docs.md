@@ -121,9 +121,10 @@ never below cost. See the known limitation about where cost is enforced.
 5. A settlement creates a gateway order object and moves the allowance in one
    atomic database call, under an advisory lock keyed on the idempotency key.
 6. A cancellation inside the refund window credits the allowance back, restocks
-   the product, and reverses the funding payments at the gateway. A gateway leg
-   that does not complete leaves what it owes recorded, and the next attempt
-   finishes that one instead of sending a second refund.
+   the product, and records the cancellation at the gateway. The record moves no
+   money: the allowance is the only channel, and the credit has already returned
+   the amount to where the person can spend it. A gateway leg that does not
+   complete leaves what it owes recorded, and the next attempt finishes that one.
 
 Every row written in steps 2 through 6 carries the same run identifier, which is
 stamped once per inbound message and threaded through both processes.
@@ -139,12 +140,11 @@ operator view. A browser session cannot change it: the column privilege is revok
 from signed in users and a trigger refuses the change regardless, so the one
 column that decides what an account can see is the one it cannot set for itself.
 
-`reversal_attempts` holds one row per refunded order while the gateway side of it
-is still owed, carrying the amount, the reason, the idempotency key and the run the
-credit was made under. Those are the inputs the gateway hashes into a refund
-request, so a reversal interrupted after the credit is resumed from this row rather
-than rebuilt from whatever the next message says, which is what makes the resumed
-leg a replay instead of a second refund.
+`reversal_attempts` holds one row per refunded order while the gateway record is
+still owed, carrying the amount, the reason, the idempotency key and the run the
+credit was made under. A reversal interrupted after the credit is resumed from this
+row rather than rebuilt from whatever the next message says, so the record names
+the conversation that cancelled the order rather than the one that replayed it.
 
 Views: `run_summary`, `run_timeline` and `product_trading`, all with
 `security_invoker` on, so a reader sees only their own rows. `product_trading`
@@ -157,7 +157,7 @@ Database functions, which is where money actually moves:
 | --- | --- |
 | `credit_wallet_topup` | credits a verified captured payment, once per payment id |
 | `fulfill_wallet_order` | the atomic purchase: debit, order, revenue, trail |
-| `refund_wallet_order` | the reversal, with restock, recording what the gateway still owes |
+| `refund_wallet_order` | the credit, with restock, recording what the gateway record still owes |
 | `create_human_approval`, `resolve_human_approval` | the handover and its answer |
 | `redeem_telegram_link` | links a chat account to a database account |
 | `campaign_for_account` | the loyalty tier for a known buyer |

@@ -172,9 +172,11 @@ func main() {
 	// the trail is silent.
 	purchaseService.UseFailureTrail(store)
 	refundService := buyer.NewRefundService(store, wallet.NewService(db))
-	// A cancellation credits the allowance and then reverses the captured payments
-	// that funded it, so the failure path leaves evidence outside our own tables.
-	refundService.UseReversal(buyer.NewGatewayReversal(store, artifactClient), store)
+	// A cancellation credits the allowance and records that at the gateway, so the
+	// money path leaves evidence outside our own tables. It records rather than pays:
+	// the allowance is the one channel here, and the credit has already returned the
+	// money to where the person can spend it.
+	refundService.UseReversal(buyer.NewGatewayReversal(artifactClient), store)
 	buyerModel := modelconfig.FromEnv("USER")
 	var negotiationService negotiator
 	negotiationEndpoint := strings.TrimSpace(os.Getenv("USER_MARKET_A2A_ENDPOINT"))
