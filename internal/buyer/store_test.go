@@ -3,6 +3,7 @@ package buyer
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"agentmart/internal/failure"
 	"agentmart/internal/gate"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/runid"
@@ -213,5 +215,39 @@ func TestTheResumedReversalLookupIsScopedToOneAccount(t *testing.T) {
 	}
 	if query.Get("order_id") != "eq.order-7" || query.Get("settled_at") != "is.null" {
 		t.Fatalf("query = %v, want the named order and only an unsettled attempt", query)
+	}
+}
+
+// TestAnUnlinkedIdentityIsToldApartFromAFailedRead pins the sentinel two callers
+// depend on. Both used to match on words: the health probe whitelisted "not found"
+// and so reported the records layer down on a working system, and the shopping path
+// answered every failure with "link your account first", sending people whose
+// accounts were already linked off to do the one thing that cannot fix a database.
+func TestAnUnlinkedIdentityIsToldApartFromAFailedRead(t *testing.T) {
+	// No link row: the identity is genuinely not linked.
+	store, _ := queryWatcher(t, `[]`)
+	if _, err := store.AccountForTelegram(t.Context(), 0); !errors.Is(err, ErrNotLinked) {
+		t.Fatalf("err = %v, want ErrNotLinked so a caller can tell this from a broken read", err)
+	}
+
+	// A refused read is not an unlinked identity, and it names the layer that broke
+	// so the person is told what actually happened.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"permission denied"}`, http.StatusForbidden)
+	}))
+	defer server.Close()
+	db, err := supabase.NewClient(server.URL, "test-key", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := NewStore(db).AccountForTelegram(t.Context(), 42)
+	if readErr == nil {
+		t.Fatal("a refused read came back as a success")
+	}
+	if errors.Is(readErr, ErrNotLinked) {
+		t.Fatalf("a refused read reads as an unlinked identity: %v", readErr)
+	}
+	if layer, ok := failure.LayerOf(readErr); !ok || layer != failure.LayerRecords {
+		t.Fatalf("layer = %v (attributed %v), want the records database named", layer, ok)
 	}
 }

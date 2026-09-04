@@ -281,8 +281,13 @@ func main() {
 	layerReport := func(probeCtx context.Context) string {
 		return health.Format(health.Run(probeCtx, []health.Probe{
 			{Name: "records database", Layer: failure.LayerRecords, Check: func(ctx context.Context) error {
+				// Telegram ids are positive, so id 0 is never linked and a healthy
+				// database answers this probe with the sentinel. Matching on the words
+				// "not found" instead meant the healthy answer, "Telegram account is not
+				// linked", was reported as a failure: the layer was never really checked
+				// and /diag called it down on a working system.
 				_, probeErr := store.AccountForTelegram(ctx, 0)
-				if probeErr != nil && strings.Contains(strings.ToLower(probeErr.Error()), "not found") {
+				if errors.Is(probeErr, buyer.ErrNotLinked) {
 					return nil
 				}
 				return probeErr
@@ -521,9 +526,15 @@ func conversationalBuy(ctx context.Context, client *telegram.Client, purchases p
 		}
 	}
 	account, accountErr := services.accounts.AccountForTelegram(ctx, message.From.ID)
-	if accountErr != nil {
-		log.Printf("agent loop account lookup failed: %v", accountErr)
+	if errors.Is(accountErr, buyer.ErrNotLinked) {
 		return sendReply(ctx, client, message.Chat.ID, "Link your account first: generate a token on the dashboard website, then send /link TOKEN.", nil)
+	}
+	if accountErr != nil {
+		// Anything other than a missing link is a failure to read, and telling
+		// somebody already linked to go and link again sends them off to do the one
+		// thing that cannot help. The layer that broke is named instead.
+		log.Printf("agent loop account lookup failed: %v", accountErr)
+		return sendReply(ctx, client, message.Chat.ID, failure.Explain(accountErr), nil)
 	}
 	working(ctx, client, message.Chat.ID)
 	if err := sendReply(ctx, client, message.Chat.ID, fmt.Sprintf("Working on it: %q", strings.TrimSpace(message.Text)), nil); err != nil {

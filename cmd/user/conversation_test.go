@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"agentmart/internal/buyer"
+	"agentmart/internal/failure"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/shopgraph"
 	"agentmart/internal/telegram"
@@ -396,5 +397,59 @@ func TestTheGateIsToldWhenTheShopQuoted(t *testing.T) {
 	}
 	if age := time.Since(quoted); age < held {
 		t.Fatalf("the observed price is %s old, want at least %s. The gate is being handed the clock at purchase time rather than when the shop quoted, which makes a stale price impossible to detect.", age, held)
+	}
+}
+
+// brokenAccounts fails the way a database does, not the way a missing link does.
+type brokenAccounts struct{}
+
+func (brokenAccounts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
+	return buyer.Account{}, failure.Records(errors.New("supabase returned 503"))
+}
+
+// unlinkedAccounts reports the one case where re-linking is the right advice.
+type unlinkedAccounts struct{}
+
+func (unlinkedAccounts) AccountForTelegram(context.Context, int64) (buyer.Account, error) {
+	return buyer.Account{}, buyer.ErrNotLinked
+}
+
+// TestAFailedAccountReadIsNotBlamedOnTheLink pins which of two very different
+// failures the person is told about. Every error from the account read used to be
+// answered with "link your account first", so an outage read as a setup mistake:
+// the person went off to generate a dashboard token, which cannot fix a database,
+// and the real cause existed only in the process log.
+func TestAFailedAccountReadIsNotBlamedOnTheLink(t *testing.T) {
+	buyerService, _ := shoppingSystem(t)
+	ask := func(t *testing.T, accounts accountFactsReader) string {
+		t.Helper()
+		client, record := recordingBot(t)
+		err := conversationalBuy(t.Context(), client, fakePurchaser{},
+			commandServices{
+				loop: buyerService, accounts: accounts, catalog: stockCatalog{},
+				negotiations: fakeNegotiator{},
+			},
+			&telegram.Message{MessageID: 9, Chat: telegram.Chat{ID: 10}, From: telegram.User{ID: 77}, Text: "buy me a trimmer"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(record.messages) == 0 {
+			t.Fatal("the person was told nothing at all")
+		}
+		return strings.Join(record.messages, "\n")
+	}
+
+	broken := ask(t, brokenAccounts{})
+	if strings.Contains(strings.ToLower(broken), "/link") {
+		t.Fatalf("a failed read was blamed on the link: %s", broken)
+	}
+	if !strings.Contains(strings.ToLower(broken), "records") {
+		t.Fatalf("the reply does not name the layer that broke: %s", broken)
+	}
+
+	// The one case where re-linking is the answer still gives it.
+	unlinked := ask(t, unlinkedAccounts{})
+	if !strings.Contains(strings.ToLower(unlinked), "/link") {
+		t.Fatalf("an unlinked person was not told how to link: %s", unlinked)
 	}
 }

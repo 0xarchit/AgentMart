@@ -3,10 +3,12 @@ package buyer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 
+	"agentmart/internal/failure"
 	"agentmart/internal/gate"
 	"agentmart/internal/negotiation"
 	"agentmart/internal/runid"
@@ -27,6 +29,13 @@ type telegramLink struct {
 // Store reads trusted buyer state and persists Gate decisions.
 type Store struct{ db *supabase.Client }
 
+// ErrNotLinked reports that no Telegram identity is joined to a wallet account.
+// A sentinel rather than a message, because two callers have to tell this apart
+// from a failed read and both were matching on words: the health probe treated
+// every state as a failure, and the shopping path told people whose accounts were
+// already linked to go and link them while the database was the thing that broke.
+var ErrNotLinked = errors.New("Telegram account is not linked")
+
 // NewStore constructs a buyer state store.
 func NewStore(db *supabase.Client) *Store { return &Store{db: db} }
 
@@ -35,18 +44,21 @@ func (s *Store) AccountForTelegram(ctx context.Context, telegramID int64) (Accou
 	linksQuery := url.Values{"select": {"account_id"}, "telegram_id": {"eq." + strconv.FormatInt(telegramID, 10)}, "limit": {"1"}}
 	var links []telegramLink
 	if err := s.db.Get(ctx, "telegram_links", linksQuery, &links); err != nil {
-		return Account{}, err
+		return Account{}, failure.Records(err)
 	}
 	if len(links) == 0 {
-		return Account{}, fmt.Errorf("Telegram account is not linked")
+		return Account{}, ErrNotLinked
 	}
 	accountQuery := url.Values{"select": {"id,wallet_balance_paise,spend_limit_paise"}, "id": {"eq." + links[0].AccountID}, "limit": {"1"}}
 	var accounts []Account
 	if err := s.db.Get(ctx, "accounts", accountQuery, &accounts); err != nil {
-		return Account{}, err
+		return Account{}, failure.Records(err)
 	}
 	if len(accounts) == 0 {
-		return Account{}, fmt.Errorf("linked wallet account not found")
+		// Not ErrNotLinked: the link exists and points at an account row that does
+		// not. Re-linking cannot fix that, so it must not be answered with a request
+		// to re-link.
+		return Account{}, failure.Records(fmt.Errorf("linked wallet account not found"))
 	}
 	return accounts[0], nil
 }
