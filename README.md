@@ -42,19 +42,19 @@ reach a model are fenced out of its schema in the type itself.
 
 ## ✦ Features
 
-| | Feature | What it actually means |
-| --- | --- | --- |
-| ❖ | **Two live agents** | Both graphs reason against a real provider. There is no scripted decision path in either: when the provider fails, the failure surfaces and names the layer it came from rather than degrading into branches that look like judgement |
-| ⊚ | **A gate no model can talk past** | Nine ordered checks re-derive every amount from the catalog before anything is charged, and each returns a named reason. Charge-creating tools are kept out of every tool set, and that exclusion is a test rather than a promise |
-| ◈ | **Negotiation with a floor** | The shop may concede, attach a partner product, or price for cover, handling and scarcity, and never below cost. The buyer counters once and judges what comes back |
-| ∿ | **A funded allowance** | A genuine captured test-mode payment credits the wallet, verified by signature and credited exactly once per payment id |
-| ∿ | **Two ways in** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs; without one the buyer polls. On the webhook there is one worker per person, so several people are shopped for at once while one person's own messages stay in arrival order |
-| ☍ | **A standing spend limit** | Anything above it is refused with a token and handed to the person. Nothing is spent while that answer is outstanding, and approval settles the exact amount that was quoted |
-| ⌕ | **One run identifier** | The conversation on the left, the money it caused on the right, in one view at `/dashboard/runs` |
-| ۞ | **Row level security** | Every table is behind RLS. A buyer reads its own rows and no others |
-| § | **Integers all the way down** | `int64` paise in Go, `bigint` in Postgres, one atomic debit per purchase, one purchase per idempotency key |
-| ℡ | **Tested numbers on screen** | Every displayed figure is produced by a tested function rather than assembled inside a page |
-| ✧ | **One container demo** | `aio_agentmart` runs the merchant, the buyer and the dashboard together, with only the dashboard's port exposed |
+| Feature | What it actually means |
+| --- | --- |
+| **Two live agents** | Both graphs reason against a real provider. There is no scripted decision path in either: when the provider fails, the failure surfaces and names the layer it came from rather than degrading into branches that look like judgement |
+| **A gate no model can talk past** | Nine ordered checks re-derive every amount from the catalog before anything is charged, and each returns a named reason. Charge-creating tools are kept out of every tool set, and that exclusion is a test rather than a promise |
+| **Negotiation with a floor** | The shop may concede, attach a partner product, or price for cover, handling and scarcity, and never below cost. The buyer counters once and judges what comes back |
+| **A funded allowance** | A genuine captured test-mode payment credits the wallet, verified by signature and credited exactly once per payment id |
+| **Two ways in** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs; without one the buyer polls. On the webhook there is one worker per person, so several people are shopped for at once while one person's own messages stay in arrival order |
+| **A standing spend limit** | Anything above it is refused with a token and handed to the person. Nothing is spent while that answer is outstanding, and approval settles the exact amount that was quoted |
+| **One run identifier** | The conversation on the left, the money it caused on the right, in one view at `/dashboard/runs` |
+| **Row level security** | Every table is behind RLS. A buyer reads its own rows and no others |
+| **Integers all the way down** | `int64` paise in Go, `bigint` in Postgres, one atomic debit per purchase, one purchase per idempotency key |
+| **Tested numbers on screen** | Every displayed figure is produced by a tested function rather than assembled inside a page |
+| **One container demo** | `aio_agentmart` runs the merchant, the buyer and the dashboard together, with only the dashboard's port exposed |
 
 ---
 
