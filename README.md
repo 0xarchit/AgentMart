@@ -6,7 +6,7 @@
 
 **A shopping agent that buys from a merchant's own selling agent, over chat, with every rupee bounded by code.**
 
-**[Visualise](https://agentmart-flow.surge.sh/) · [Live Demo](https://agentmart-pearl.vercel.app) · [Backend](https://agents-agentmart-v0-3-0.onrender.com/health)**
+**[Visualise](https://agentmart-flow.surge.sh/) · [Live Demo](https://agentmart-pearl.vercel.app) · [Telegram Bot](https://t.me/agentmart_robot) · [Backend](https://agents-agentmart-v0-3-0.onrender.com/health)**
 
 [![Status](https://img.shields.io/badge/Status-MVP%20Deployed-000000.svg?style=for-the-badge&logo=rocket&logoColor=white&labelColor=000000&color=000000)](https://github.com/0xarchit/AgentMart/pulse)
 [![License](https://img.shields.io/badge/License-MIT-000000.svg?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=000000&color=000000)](LICENSE)
@@ -19,7 +19,7 @@
 
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres-000000.svg?style=for-the-badge&logo=supabase&logoColor=white&labelColor=000000&color=000000)](https://supabase.com)
 [![Razorpay](https://img.shields.io/badge/Razorpay-Test%20Mode-000000.svg?style=for-the-badge&logo=razorpay&logoColor=white&labelColor=000000&color=000000)](https://razorpay.com)
-[![Telegram](https://img.shields.io/badge/Telegram-Bot%20API-000000.svg?style=for-the-badge&logo=telegram&logoColor=white&labelColor=000000&color=000000)](https://core.telegram.org/bots/api)
+[![Telegram](https://img.shields.io/badge/Telegram-%40agentmart__robot-000000.svg?style=for-the-badge&logo=telegram&logoColor=white&labelColor=000000&color=000000)](https://t.me/agentmart_robot)
 [![Containers](https://img.shields.io/badge/Containers-GHCR-000000.svg?style=for-the-badge&logo=podman&logoColor=white&labelColor=000000&color=000000)](https://github.com/0xarchit?tab=packages&repo_name=AgentMart)
 
 <a href="https://youtu.be/O1AvlyDyv54">
