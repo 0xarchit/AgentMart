@@ -2,6 +2,7 @@
 // Server-component safe: no hooks, no client state, no chart dependency.
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { plainWords } from "@/lib/words";
 
 /** Card is a titled panel. The source line names the rows a figure came from. */
 export function Card({
@@ -47,6 +48,30 @@ export function Stat({
       <p className={`mt-3 text-3xl font-semibold ${colour}`}>{value}</p>
       {basis ? <p className="mt-2 text-xs text-ink/70">{basis}</p> : null}
     </div>
+  );
+}
+
+/**
+ * Outcome is one run's result, worded and coloured the same way everywhere it is
+ * listed. Mint is money that moved as asked, coral is a run that did not get what
+ * it went for, and plain ink is everything that settled without a purchase.
+ *
+ * The values compared here are run_summary's own, which are lower case. Three
+ * pages rendered this chip themselves: one matched upper case names that never
+ * arrive and so painted every completed purchase in the refusal colour, and the
+ * other two printed the raw column in green whatever it said.
+ */
+export function Outcome({ outcome }: { outcome: string | null }) {
+  const tone =
+    outcome === "buy"
+      ? "bg-mint text-moss"
+      : outcome === null || outcome === "ask_human" || outcome === "refunded"
+        ? "bg-ink/5 text-ink/70"
+        : "bg-coral/10 text-coral";
+  return (
+    <span className={`px-2 py-1 text-xs font-semibold ${tone}`}>
+      {outcome === null ? "no outcome recorded" : plainWords(outcome)}
+    </span>
   );
 }
 

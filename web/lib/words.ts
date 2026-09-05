@@ -17,6 +17,20 @@ export const ledgerEntryTypes = [
   "purchase_refund",
 ] as const;
 
+// Every outcome run_summary can settle on. The first three are the shopping pass's
+// own words; the rest are what that view reads back off a cancellation or a run
+// that broke before it could decide. Listed here for the same reason as the two
+// above: a new one added and left unworded fails a test rather than reaching a
+// person as snake case.
+export const runOutcomes = [
+  "buy",
+  "ask_human",
+  "declined",
+  "refunded",
+  "refund_refused",
+  "failed",
+] as const;
+
 const wording: Record<string, string> = {
   pending: "waiting",
   fulfilled_via_wallet: "paid from your balance",
@@ -25,6 +39,10 @@ const wording: Record<string, string> = {
   topup: "money added",
   purchase_debit: "paid for an order",
   purchase_refund: "refunded to you",
+  buy: "bought",
+  ask_human: "waiting for your tap",
+  declined: "did not buy",
+  refunded: "refunded to your balance",
 };
 
 /** plainWords renders one stored value for a person to read. */
