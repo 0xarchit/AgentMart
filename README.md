@@ -1,6 +1,8 @@
 <div align="center">
 
-# ⬢ AgentMart
+<img src="web/app/icon.svg" alt="AgentMart" width="92" height="92">
+
+# AgentMart
 
 **A shopping agent that buys from a merchant's own selling agent, over chat, with every rupee bounded by code.**
 

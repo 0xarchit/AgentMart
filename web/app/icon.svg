@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-labelledby="agentmart-logo">
+  <title id="agentmart-logo">AgentMart</title>
+  <!-- One hexagon cut in two: the person's agent on one side, the shop's on the
+       other, with a boundary between them that neither can reach across. The two
+       bars are the only channel money crosses on, which is the whole product. -->
+  <rect width="64" height="64" rx="13" fill="#15201b"/>
+  <path d="M29 8.7 L10.3 19.5 L10.3 44.5 L29 55.3 Z" fill="#f7f7f2"/>
+  <path d="M35 8.7 L53.7 19.5 L53.7 44.5 L35 55.3 Z" fill="#f7f7f2"/>
+  <rect x="22" y="25.5" width="20" height="4" fill="#c9654a"/>
+  <rect x="22" y="34.5" width="20" height="4" fill="#c9654a"/>
+</svg>
