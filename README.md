@@ -62,6 +62,70 @@ reach a model are fenced out of its schema in the type itself.
 
 ---
 
+## ⌾ Judged against the bar
+
+Every money action explainable, bounded and gated, with a visible audit trail and one
+failure handled cleanly. Each phrase, what proves it, and the command that runs the proof.
+
+| Bar phrase | What proves it | Run it |
+| --- | --- | --- |
+| **Explainable** | Nine ordered checks, each returning a named reason from a closed vocabulary, recorded on the row and shown to the person in those words | `go test -short -run TestEvaluatePolicies ./internal/gate/` |
+| **Bounded** | Never below blended cost, never above the standing ask, and every amount re-derived from the catalog at the moment of charge rather than trusted from upstream | `go test -short ./internal/negotiation/` |
+| **Gated** | An ask above the standing limit is refused with a token, nothing is spent while the answer is outstanding, and approval settles the exact amount that was quoted | `go test -short -run TestAnAskAboveTheLimitIsRefusedThenSettledOnlyAfterApproval ./internal/buyer/` |
+| **No model can spend** | Charge-creating tools are absent from every tool set, and the absence is asserted by CI rather than promised in prose | `go test -short -run TestNoMoneyMovingToolReachesAReasoningLayer ./internal/shopgraph/` |
+| **Audit trail** | The decision is written **before** it is returned, so a failure to record fails the purchase rather than the record | `go test -short -run TestEvaluateFailsClosedWhenAuditFails ./internal/gate/` |
+| **One failure, cleanly** | The over-limit handover, pinned to behave identically on a second run | `go test -short -run TestTheStagedSequenceRunsTheSameWayTwice ./internal/buyer/` |
+
+### The measured result
+
+A paired A/B at commit `d9a1e40`: the negotiating shop against a fixed price list, run
+scenario by scenario in alternation so both passes meet the same provider conditions within
+a couple of minutes of each other. **The finding is the gate turning a sale into an approval
+request.** Scenario 11 buys at INR 1813.39 against the fixed list and is handed to a person
+against the negotiating shop, because the partner product raised the ask to INR 2828.00 and
+that crossed the buyer's own rails.
+
+| Measure | Negotiating | Fixed price list |
+| --- | --- | --- |
+| Settled plus value pending a person | **INR 9282.78** | INR 7253.56 |
+| Revenue settled | INR 3626.78 | INR 5440.17 |
+| Bundle attach rate | 40% | 0% |
+
+Total value **+27%**, collected revenue **-33%**, and neither difference is a price
+difference: the two columns settled identically to the paise wherever they both settled, so
+what moves the totals is composition. Value waiting on a person is reported on its own line
+and never folded into revenue, because counting it as revenue would claim income nobody
+collected, and hiding it would score a gate that did its job as a lost sale.
+
+`n = 5` paired scenarios, which is not enough to be reliable.
+[`docs/benchmark.md`](docs/benchmark.md) carries the methodology, the scenarios excluded and
+why, a variance section where an earlier run of the same harness lands on -11% instead of
+-33% purely from which scenario dropped out, and the reason the *priced below cost* row is
+worthless as evidence: no counter was ever answered, so nothing approached the floor.
+
+The gate those numbers ran against is the gate on `main` today, byte for byte:
+
+```bash
+git diff d9a1e40..HEAD -- internal/gate    # no output
+```
+
+The pricing path is not. Eleven commits after `d9a1e40` touch `internal/negotiation`,
+`internal/shopgraph` or `internal/marketgraph`, among them the fix that stops a partner
+product being bundled when it has no stock:
+
+```bash
+git log --oneline d9a1e40..HEAD -- internal/negotiation internal/shopgraph internal/marketgraph
+```
+
+The revenue figures therefore describe the tree that commit pins rather than today's
+pricing, which is the reason it is pinned.
+
+> Front-loaded on 6 September 2026, the day after the 5 September submission. Nothing here
+> is new work: every claim names code and tests that were already in the tree, and the
+> commands run against them unchanged.
+
+---
+
 ## ✦ Features
 
 | Feature | What it actually means |

@@ -6,9 +6,12 @@ Measured at commit d9a1e40, which was the tip of main when the run started.
 Every number here comes from that single run against that tree, not from a live
 measurement, and a re-run will not necessarily reproduce these figures: the
 variance section at the end shows how far one earlier run moved. The harness
-itself is not tracked in git, so the commit pins the agents and the rails rather
-than the runner, and the funded discount and the scenario table described below
-cannot be checked against this repository.
+itself is not tracked in git: it is a live test that reasons against a paid
+provider for half an hour of wall clock, kept out of the tracked suite for the
+same reason `-short` exists, and it sits under a directory this repository
+ignores by decision rather than by accident. So the commit pins the agents and
+the rails rather than the runner, and the funded discount and the scenario table
+described below cannot be checked against this repository.
 
 ## Methodology
 
