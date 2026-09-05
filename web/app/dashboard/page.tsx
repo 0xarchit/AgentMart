@@ -7,7 +7,7 @@ import { TopUpButton } from "@/app/dashboard/topup-button";
 import { LinkTelegram } from "@/app/dashboard/link-telegram";
 import { SpendLimitEditor } from "@/app/dashboard/spend-limit-editor";
 import { AuditTimeline, type AuditEvent } from "@/app/dashboard/audit-timeline";
-import { Card, Rows, Stat, TopNav } from "@/app/ui";
+import { Card, Outcome, Rows, Stat, TopNav } from "@/app/ui";
 import { ledgerMoney, money } from "@/lib/money";
 import { plainWords } from "@/lib/words";
 
@@ -40,14 +40,6 @@ type Run = {
   started_at: string;
 };
 
-type Revenue = {
-  order_id: string;
-  base_amount_paise: number;
-  final_amount_paise: number;
-  uplift_paise: number;
-  credited_at: string;
-};
-
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(
     new Date(value),
@@ -65,7 +57,6 @@ export default async function DashboardPage() {
     ordersResult,
     orderCountResult,
     ledgerResult,
-    revenueResult,
     auditResult,
     runsResult,
   ] = await Promise.all([
@@ -74,16 +65,12 @@ export default async function DashboardPage() {
       .select("wallet_balance_paise,spend_limit_paise")
       .eq("id", user.id)
       .maybeSingle(),
-    // Read wide enough to classify the credited rows below, then show only the
-    // newest few. A refunded order's revenue row is never reversed, so the uplift
-    // figures have to know which orders came back, and five rows could not tell
-    // them about a hundred credited rows.
     supabase
       .from("orders")
       .select("id,amount_paise,status,created_at")
       .eq("account_id", user.id)
       .order("created_at", { ascending: false })
-      .limit(100),
+      .limit(5),
     // Counted separately from the list above. Reading the length of a five row
     // page reports "5" forever once an account has bought six things.
     supabase
@@ -96,13 +83,6 @@ export default async function DashboardPage() {
       .eq("account_id", user.id)
       .order("created_at", { ascending: false })
       .limit(5),
-    supabase
-      .from("merchant_revenue")
-      .select(
-        "order_id,base_amount_paise,final_amount_paise,uplift_paise,credited_at",
-      )
-      .order("credited_at", { ascending: false })
-      .limit(100),
     supabase
       .from("audit_log")
       .select("id,order_id,actor,action,reason,created_at")
@@ -125,29 +105,8 @@ export default async function DashboardPage() {
   const orders = (ordersResult.data ?? []) as Order[];
   const orderCount = orderCountResult.count ?? orders.length;
   const ledger = (ledgerResult.data ?? []) as LedgerEntry[];
-  const revenue = (revenueResult.data ?? []) as Revenue[];
   const auditEvents = (auditResult.data ?? []) as AuditEvent[];
   const runs = (runsResult.data ?? []) as Run[];
-  // A cancelled order keeps its credited row: the wallet is credited back and the
-  // order moves to refunded_via_wallet, and nothing reverses the revenue. Counting
-  // those rows showed uplift on money that had already gone back.
-  const refunded = new Set(
-    orders
-      .filter((row) => row.status.startsWith("refunded"))
-      .map((row) => row.id),
-  );
-  const credited = revenue.filter((row) => !refunded.has(row.order_id));
-  const recentOrders = orders.slice(0, 5);
-  // Reported separately rather than netted, so a funded discount cannot cancel an
-  // upsell and leave one figure that says nothing.
-  const upliftEarned = credited.reduce(
-    (sum, row) => sum + Math.max(row.uplift_paise, 0),
-    0,
-  );
-  const discountGiven = credited.reduce(
-    (sum, row) => sum + Math.max(-row.uplift_paise, 0),
-    0,
-  );
   return (
     <main className="min-h-screen bg-paper px-6 py-10">
       <div className="mx-auto max-w-5xl">
@@ -168,7 +127,7 @@ export default async function DashboardPage() {
           <h1 className="text-3xl font-semibold">Your account</h1>
           <p className="mt-2 text-sm text-ink/70">Signed in as {user.email}</p>
         </div>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-8 grid gap-4 md:grid-cols-2">
           <Stat
             label="Wallet balance"
             value={
@@ -187,18 +146,6 @@ export default async function DashboardPage() {
             label="Orders placed"
             value={String(orderCount)}
             basis="Only ever your own account"
-          />
-          <Stat
-            label="Uplift earned"
-            value={money(upliftEarned)}
-            basis={`${credited.length} credited row(s) read, refunded excluded`}
-            tone="moss"
-          />
-          <Stat
-            label="Discount given"
-            value={money(discountGiven)}
-            basis="Funded from loyalty entitlement"
-            tone={discountGiven > 0 ? "coral" : "moss"}
           />
         </div>
 
@@ -243,15 +190,13 @@ export default async function DashboardPage() {
                     className="hover:underline"
                     href={`/dashboard/runs?run=${run.run_id}`}
                   >
-                    {run.request ?? "request not recorded"}
+                    {run.request ?? "Nothing was asked for in words"}
                     {run.product_name ? ` (${run.product_name})` : ""}
                   </Link>
                 ),
                 right: (
                   <>
-                    <span className="font-semibold text-moss">
-                      {run.outcome ?? "open"}
-                    </span>
+                    <Outcome outcome={run.outcome} />
                     {run.final_amount_paise ? (
                       <span className="ml-2">
                         {money(run.final_amount_paise)}
@@ -267,10 +212,10 @@ export default async function DashboardPage() {
           <section className="border border-ink/10 bg-white p-5">
             <h2 className="text-lg font-semibold">Recent orders</h2>
             <div className="mt-4 divide-y divide-ink/10">
-              {recentOrders.length === 0 ? (
+              {orders.length === 0 ? (
                 <p className="py-4 text-sm text-ink/70">No orders yet.</p>
               ) : (
-                recentOrders.map((order) => (
+                orders.map((order) => (
                   <div
                     key={order.id}
                     className="flex items-center justify-between gap-4 py-3 text-sm"
@@ -323,41 +268,6 @@ export default async function DashboardPage() {
                         Balance {money(entry.balance_after_paise)}
                       </p>
                     </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-          <section className="border border-ink/10 bg-white p-5">
-            <h2 className="text-lg font-semibold">Merchant revenue</h2>
-            <div className="mt-4 divide-y divide-ink/10">
-              {revenue.length === 0 ? (
-                <p className="py-4 text-sm text-ink/70">
-                  No fulfilled revenue yet.
-                </p>
-              ) : (
-                revenue.slice(0, 5).map((row) => (
-                  <div key={row.order_id} className="py-3 text-sm">
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <p className="font-medium">
-                          Order {row.order_id.slice(0, 8)}
-                        </p>
-                        <p className="text-xs text-ink/70">
-                          {formatDate(row.credited_at)}
-                        </p>
-                      </div>
-                      <p
-                        className={`font-semibold ${row.uplift_paise < 0 ? "text-coral" : "text-moss"}`}
-                      >
-                        {row.uplift_paise < 0 ? "" : "+"}
-                        {money(row.uplift_paise)}
-                      </p>
-                    </div>
-                    <p className="mt-1 text-xs text-ink/70">
-                      Base {money(row.base_amount_paise)} to final{" "}
-                      {money(row.final_amount_paise)}
-                    </p>
                   </div>
                 ))
               )}
