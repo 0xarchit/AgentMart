@@ -4,6 +4,7 @@ import {
   ledgerEntryTypes,
   orderStatuses,
   plainWords,
+  runOutcomes,
   spendLimitAction,
 } from "./words";
 
@@ -11,7 +12,11 @@ describe("plainWords", () => {
   it("words every value the schema allows", () => {
     // A value added to the database and left unworded would otherwise reach a
     // person as snake case, which is what this is here to stop.
-    for (const value of [...orderStatuses, ...ledgerEntryTypes]) {
+    for (const value of [
+      ...orderStatuses,
+      ...ledgerEntryTypes,
+      ...runOutcomes,
+    ]) {
       const worded = plainWords(value);
       expect(worded).not.toContain("_");
       expect(worded).not.toBe(value);
@@ -22,6 +27,15 @@ describe("plainWords", () => {
     expect(plainWords("fulfilled_via_wallet")).toBe("paid from your balance");
     expect(plainWords("refunded_via_wallet")).toBe("refunded to your balance");
     expect(plainWords("topup")).toBe("money added");
+  });
+
+  it("words a finished run as what it did, not as a state machine label", () => {
+    // These reach a person on their own dashboard. A cancellation that read back as
+    // "in progress" is what put this list here, so the settled ones are pinned.
+    expect(plainWords("buy")).toBe("bought");
+    expect(plainWords("refunded")).toBe("refunded to your balance");
+    expect(plainWords("ask_human")).toBe("waiting for your tap");
+    expect(plainWords("declined")).toBe("did not buy");
   });
 
   it("degrades to readable text for anything unmapped", () => {

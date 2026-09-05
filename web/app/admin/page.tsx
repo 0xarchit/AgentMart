@@ -5,7 +5,7 @@ import { currentIdentity } from "@/lib/roles";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { money } from "@/lib/money";
-import { Bars, Card, Empty, Rows, Stat, TopNav } from "../ui";
+import { Bars, Card, Empty, Outcome, Rows, Stat, TopNav } from "../ui";
 import {
   summarize,
   type LedgerRow,
@@ -262,15 +262,13 @@ export default async function AdminPage() {
                       className="hover:underline"
                       href={`/dashboard/runs?run=${run.run_id}`}
                     >
-                      {run.request ?? "request not recorded"}
+                      {run.request ?? "Nothing was asked for in words"}
                       {run.product_name ? ` (${run.product_name})` : ""}
                     </Link>
                   ),
                   right: (
                     <>
-                      <span className="font-semibold text-moss">
-                        {run.outcome ?? "open"}
-                      </span>
+                      <Outcome outcome={run.outcome} />
                       {run.final_amount_paise ? (
                         <span className="ml-2">
                           {money(run.final_amount_paise)}
