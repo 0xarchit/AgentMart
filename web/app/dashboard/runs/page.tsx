@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { TopNav } from "@/app/ui";
+import { TopNav, Outcome } from "@/app/ui";
 
 type RunSummary = {
   run_id: string;
@@ -18,6 +18,7 @@ type RunSummary = {
   outcome: string | null;
   outcome_reason: string | null;
   final_amount_paise: number | null;
+  returned_amount_paise: number | null;
 };
 
 type Turn = {
@@ -45,12 +46,6 @@ function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
-function outcomeTone(outcome: string | null): string {
-  if (outcome === "BUY") return "bg-mint text-moss";
-  if (outcome === "ASK_HUMAN") return "bg-ink/5 text-ink/70";
-  return "bg-coral/10 text-coral";
-}
-
 export default async function RunsPage({
   searchParams,
 }: {
@@ -72,7 +67,7 @@ export default async function RunsPage({
     supabase
       .from("run_summary")
       .select(
-        "run_id,started_at,last_at,events,request,product_name,outcome,outcome_reason,final_amount_paise",
+        "run_id,started_at,last_at,events,request,product_name,outcome,outcome_reason,final_amount_paise,returned_amount_paise",
       )
       .order("started_at", { ascending: false })
       .limit(25),
@@ -90,6 +85,15 @@ export default async function RunsPage({
   const runs = (summaryResult.data ?? []) as RunSummary[];
   const timeline = (timelineResult.data ?? []) as TimelineRow[];
   const current = runs.find((run) => run.run_id === selected);
+  // One pair, so the label can never name a different figure than the one printed
+  // under it. A cancellation settled nothing and returned something; a purchase is
+  // the other way round.
+  const settled =
+    current?.final_amount_paise != null
+      ? { label: "Settled at", value: money(current.final_amount_paise) }
+      : current?.returned_amount_paise != null
+        ? { label: "Returned", value: money(current.returned_amount_paise) }
+        : { label: "Settled at", value: "Nothing spent" };
   const conversation: Turn[] =
     timeline.flatMap((row) => row.payload?.run?.transcript ?? []) ?? [];
 
@@ -124,24 +128,23 @@ export default async function RunsPage({
                     className={`block px-4 py-3 text-sm hover:bg-ink/5 ${run.run_id === selected ? "bg-ink/5" : ""}`}
                   >
                     <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={`px-2 py-1 text-xs font-semibold ${outcomeTone(run.outcome)}`}
-                      >
-                        {run.outcome ?? "in progress"}
-                      </span>
+                      <Outcome outcome={run.outcome} />
                       <span className="text-xs text-ink/70">
                         {formatTime(run.started_at)}
                       </span>
                     </span>
                     <span className="mt-2 block truncate text-ink/70">
-                      {run.request ?? "No request recorded"}
+                      {run.request ?? "Nothing was asked for in words"}
                     </span>
-                    {run.final_amount_paise !== null && (
+                    {run.final_amount_paise !== null ? (
                       <span className="mt-1 block text-xs text-ink/70">
-                        {run.product_name} at{" "}
-                        {money(run.final_amount_paise)}
+                        {run.product_name} at {money(run.final_amount_paise)}
                       </span>
-                    )}
+                    ) : run.returned_amount_paise !== null ? (
+                      <span className="mt-1 block text-xs text-ink/70">
+                        {money(run.returned_amount_paise)} back to the wallet
+                      </span>
+                    ) : null}
                   </Link>
                 </li>
               ))}
@@ -160,24 +163,22 @@ export default async function RunsPage({
                 {current?.product_name ?? "Run"}
               </h2>
               <p className="mt-1 text-sm text-ink/60">
-                {current?.request ?? "No request recorded"}
+                {current?.request ?? "Nothing was asked for in words"}
               </p>
               <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-4">
                 <div>
                   <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
                     Outcome
                   </dt>
-                  <dd className="mt-1">{current?.outcome ?? "in progress"}</dd>
+                  <dd className="mt-1">
+                    <Outcome outcome={current?.outcome ?? null} />
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
-                    Settled at
+                    {settled.label}
                   </dt>
-                  <dd className="mt-1">
-                    {current?.final_amount_paise != null
-                      ? money(current.final_amount_paise)
-                      : "Nothing spent"}
-                  </dd>
+                  <dd className="mt-1">{settled.value}</dd>
                 </div>
                 <div>
                   <dt className="text-xs uppercase tracking-[0.12em] text-ink/70">
