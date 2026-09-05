@@ -33,6 +33,18 @@
 
 ## ⬢ Overview
 
+An agent that shops for you today has to click through a checkout built for a
+person, on a shop with no way to talk to a machine buyer at all. **AgentMart gives
+both sides their own agent and lets them deal with each other directly:** you say
+what you want in chat, your agent negotiates with the shop's agent, and it settles
+on a price and buys.
+
+What makes it safe to let it do that: you set a ceiling, no model ever writes an
+amount, anything outside your band stops and asks before it spends, a double tap
+or a retried webhook cannot spend twice, every run is readable back as the
+conversation next to the money it moved, and a customer can never read the shop's
+books because that separation lives in Postgres rather than on the screen.
+
 Two agents negotiate. One represents a person and spends from a funded allowance
 with a standing limit. The other represents the shop and prices from a real
 catalog. **Neither can move money:** charge creation lives in Go, behind a gate
@@ -55,13 +67,15 @@ reach a model are fenced out of its schema in the type itself.
 | Feature | What it actually means |
 | --- | --- |
 | **Two live agents** | Both graphs reason against a real provider. There is no scripted decision path in either: when the provider fails, the failure surfaces and names the layer it came from rather than degrading into branches that look like judgement |
+| **A streaming catalog channel** | The buyer holds one long lived server sent event stream open to the merchant's tool server and reads stock over it rather than polling, so the shop stays the only owner of its own prices and stock |
+| **Two services, only one reachable** | The buyer takes the single published port, because Telegram has to be able to post to it. The merchant listens on loopback inside the container and is never exposed, so the only way to reach the shop is through its own agent |
 | **A gate no model can talk past** | Nine ordered checks re-derive every amount from the catalog before anything is charged, and each returns a named reason. Charge-creating tools are kept out of every tool set, and that exclusion is a test rather than a promise |
 | **Negotiation with a floor** | The shop may concede, attach a partner product, or price for cover, handling and scarcity, and never below cost. The buyer counters once and judges what comes back |
 | **A funded allowance** | A genuine captured test-mode payment credits the wallet, verified by signature and credited exactly once per payment id |
-| **Two ways in** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs; without one the buyer polls. On the webhook there is one worker per person, so several people are shopped for at once while one person's own messages stay in arrival order |
+| **Two ways in** | A public HTTPS url and Telegram posts each update to the buyer, which is what a host that sleeps between requests needs; without one the buyer polls. On the webhook there is one worker per person, so several people are shopped for at once while one person's own messages stay in arrival order. The endpoint compares Telegram's secret token in constant time, caps the body, and refuses to start at all without a secret rather than serving an open door |
 | **A standing spend limit** | Anything above it is refused with a token and handed to the person. Nothing is spent while that answer is outstanding, and approval settles the exact amount that was quoted |
 | **One run identifier** | The conversation on the left, the money it caused on the right, in one view at `/dashboard/runs` |
-| **Row level security** | Every table is behind RLS. A buyer reads its own rows and no others |
+| **Role separation in two layers** | The dashboard reads the signed-in account's type and resolves every failure to customer, so a missing row or a refused read can never open the merchant view. Underneath that, RLS scopes orders, wallet movements, revenue and the trail to the caller, so the separation still holds if the app layer is wrong |
 | **Integers all the way down** | `int64` paise in Go, `bigint` in Postgres, one atomic debit per purchase, one purchase per idempotency key |
 | **Tested numbers on screen** | Every displayed figure is produced by a tested function rather than assembled inside a page |
 | **One container demo** | `aio_agentmart` runs the merchant, the buyer and the dashboard together, with only the dashboard's port exposed |
@@ -204,9 +218,23 @@ flowchart TD
 | 8 | `insufficient_wallet_balance` | The funded allowance. **No approval overrides this one** | no |
 | 9 | `stale_price` | A quote cannot be settled against a price nobody has looked at recently | yes |
 
-Two properties hold across the whole ladder. The decision is written before it is
-returned, so an audit failure fails the purchase rather than the record. And a
-purchase carries an idempotency key, so a retry settles once.
+Three properties hold across the whole ladder. The decision is written before it is
+returned, so an audit failure fails the purchase rather than the record. Every money
+path carries an idempotency key derived from the message that asked for it, so a
+second tap on the same button settles once and says it was already applied, and that
+holds for a purchase, a top-up and a refund alike. And this ladder is not the only
+one: the fulfilment function in Postgres re-checks the balance, the catalog, the
+stock, the discount entitlement and the key itself and refuses on its own terms, so
+an agent that got past the Go gate still cannot talk the money out of the database.
+
+Cancelling runs the same rails in reverse. The credit back into the allowance **is**
+the refund, and the payment gateway is then handed a record of it rather than a
+second payout, because money here enters as one captured top-up and leaves as goods,
+and paying the card back as well would return the same amount twice. If that record
+fails after the credit, the person is already paid back: the attempt is stored as
+unsettled and finished later using the exact inputs the first attempt used, because
+the gateway hashes those inputs into the request and a reworded retry would arrive
+as a new request under a key already spent.
 
 ---
 
@@ -462,6 +490,40 @@ a message that names the real problem, restore it, watch it pass. A test that
 passes both ways proves nothing. The same gate runs on every push and pull
 request in [`.github/workflows/gate.yml`](.github/workflows/gate.yml), and a
 version tag additionally builds the binaries and the four images.
+
+---
+
+## ⌗ What broke, and what fixed it
+
+Distinct from the limitations below: these were wrong, and are not any more.
+
+- **Agent initiated card charges turned out not to be reachable at all.** The
+  intent was for the buyer to charge a card under a mandate. Probing the gateway's
+  recurring surface in test mode showed the registration half creates fine while
+  the subsequent-charge endpoint is not on the key, Subscriptions and Plans are
+  gated at the product level rather than the credential, and no chargeable token is
+  ever issued. The funded allowance is the answer to that rather than a shortcut
+  past it: money enters as one captured top-up and leaves as goods, and a
+  cancellation credits the allowance instead of paying anyone out. The recurring
+  path is written and swaps in when an account has the capability.
+- **A trail column was a `uuid` while every database function took the run id as
+  `text`.** Postgres has no assignment-level cast between the two, so the insert
+  failed to plan whatever the value was, null included. It passed every test
+  because the Go tests run against a fake REST server and ordinary writes go
+  through a layer that casts per column, so only the stored procedures broke, and
+  only in production.
+- **One message loop served everybody.** A single slow run blocked every other
+  person queued behind it. Each person now gets their own goroutine and their own
+  queue, so several are shopped for at once while one person's own messages stay in
+  arrival order.
+- **A bundle could be sold and not delivered.** The stock check downstream only
+  looked at the product the buyer named, so an attached partner with none left was
+  quoted, paid for and never allocated. The bundle is only attached when the
+  partner has stock at quote time, which is where the limitation below picks up.
+- **A finished refund read back as still running.** The run summary described a run
+  from the row only a shopping pass writes, and a cancellation writes different
+  rows, so the deal room reported a completed refund as in progress with nothing
+  spent. It now reads the refund rows it already had.
 
 ---
 
