@@ -24,8 +24,16 @@ export function LinkTelegram() {
       <h2 className="text-lg font-semibold">Link Telegram</h2>
       <p className="mt-1 text-sm text-ink/60">
         Generate a one-time token, then send it as{" "}
-        <code className="bg-mint px-1">/link &lt;token&gt;</code> to the bot.
-        Token expires in 10 minutes.
+        <code className="bg-mint px-1">/link &lt;token&gt;</code> to{" "}
+        <a
+          className="font-semibold text-moss hover:underline"
+          href="https://t.me/agentmart_robot"
+          target="_blank"
+          rel="noreferrer"
+        >
+          @agentmart_robot
+        </a>
+        . Token expires in 10 minutes.
       </p>
       <button
         type="button"
@@ -47,6 +55,14 @@ export function LinkTelegram() {
           >
             Copy token
           </button>
+          <a
+            className="mt-2 ml-2 inline-block bg-moss px-3 py-1 text-xs font-semibold text-paper"
+            href="https://t.me/agentmart_robot"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open the bot
+          </a>
         </div>
       ) : null}
       {message ? <p className="mt-3 text-sm text-coral">{message}</p> : null}

@@ -212,6 +212,14 @@ export function TopNav({
         {link("/dashboard", "Your account", "dashboard")}
         {link("/dashboard/runs", "Deal room", "runs")}
         {link("/admin", "Merchant", "admin")}
+        <a
+          className="text-ink/70 hover:text-moss"
+          href="https://t.me/agentmart_robot"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Telegram bot
+        </a>
         {action}
       </div>
     </nav>
